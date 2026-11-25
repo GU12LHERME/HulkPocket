@@ -35,7 +35,12 @@ class BuildNativeEngineTests(unittest.TestCase):
             upstream = r / "thunderclap"
             snap, ndk, sdl, ff = r / "snapshots", r / "ndk", r / "sdl-app", r / "ffmpeg"
             (snap / "snap").mkdir(parents=True)
-            (snap / "snap/manifest.json").write_text('{"test": true}')
+            for dname in ("src/game", "include", "repo-include", "data/src"):
+                (snap / "snap" / dname).mkdir(parents=True, exist_ok=True)
+            (snap / "snap/src/game/test.cpp").write_text("int main_test = 0;")
+            (snap / "snap/data/src/example.cpp").write_text("int example_data = 0;")
+            manifest = '{"tus": [{"path": "src/game/test.cpp"}]}'
+            (snap / "snap/manifest.json").write_text(manifest)
             for p in [
                 upstream / "tools/native_elf.py",
                 upstream / "tools/android_apk.py",
@@ -60,7 +65,13 @@ class BuildNativeEngineTests(unittest.TestCase):
                 upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
             )
             self.assertFalse(checks["generated_snapshot"])
-            (snap / "snap/manifest.json").write_text('{"test": true}')
+            (snap / "snap/manifest.json").write_text(manifest)
+            (snap / "snap/src/game/test.cpp").unlink()
+            checks, _, _, _, _ = mod.make_plan(
+                upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
+            )
+            self.assertFalse(checks["generated_snapshot"])
+            (snap / "snap/src/game/test.cpp").write_text("int main_test = 0;")
             bindings.write_text("{}")
             checks, _, _, _, _ = mod.make_plan(
                 upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
