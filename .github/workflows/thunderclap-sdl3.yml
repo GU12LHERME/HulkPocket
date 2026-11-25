@@ -1,0 +1,41 @@
+name: Thunderclap Android SDL3 dependency smoke
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/thunderclap-sdl3.yml'
+permissions:
+  contents: read
+
+jobs:
+  sdl3-app:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install Android ARM64 build tools
+        run: sdkmanager 'ndk;28.2.13676358' 'cmake;3.22.1'
+      - name: Install host build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y ninja-build cmake
+      - name: Check out upstream for isolated dependency build
+        run: |
+          git clone --depth 1 https://github.com/matthewfcarlson/thunderclap.git "$RUNNER_TEMP/thunderclap"
+          git -C "$RUNNER_TEMP/thunderclap" rev-parse HEAD
+      - name: Fetch pinned SDL3 sources
+        working-directory: ${{ runner.temp }}/thunderclap
+        run: python3 tools/wine_sdl.py fetch
+      - name: Compile SDL3 Android ARM64 app backend
+        working-directory: ${{ runner.temp }}/thunderclap
+        env:
+          HULK_NDK: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+        run: |
+          export HULK_NDK="$ANDROID_HOME/ndk/28.2.13676358"
+          python3 tools/native_android_sdl.py --config app --jobs 2
+          test -s build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
+          test -f build/third_party/out/sdl-android-arm64-app/include/SDL3/SDL.h
+          sha256sum build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
+          echo 'SDL3 Android ARM64 app library compiled successfully.' >> "$GITHUB_STEP_SUMMARY"
+      # No upstream/game-derived binaries are published as public artifacts.
