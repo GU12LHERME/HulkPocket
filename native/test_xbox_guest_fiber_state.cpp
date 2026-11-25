@@ -23,7 +23,7 @@ int main() {
     const std::array<std::uint32_t, 7> bframe = {
         0x5555, 0x1001, 0x1002, 0x1003, 0x1004, ret_b, 0xDEAD
     };
-    for (unsigned i = 0; i < bframe.size(); ++i) write(stack_b + i*4, bframe[i]);
+    for (std::size_t i = 0; i < bframe.size(); ++i) write(stack_b + i*4, bframe[i]);
     write(b + 0x0C, stack_b);
     write(fs, 0x7777);
     hulkpocket::XboxGuestFiberRegs ctx{};
