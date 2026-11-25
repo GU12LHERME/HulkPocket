@@ -167,6 +167,19 @@ jobs:
             grep -q 'x86_icall(X86Context'
           echo "Portable XboxXBERecomp x86_icall ARM64 ELF shared library linked with Android NDK; synthetic game entry only." >> "$GITHUB_STEP_SUMMARY"
           echo "Tested the actual upstream X86Context guest state with real native AArch64 fiber stack switching." >> "$GITHUB_STEP_SUMMARY"
+      - name: Compile actual XboxXBERecomp static recompiler for Linux host
+        run: |
+          set -euo pipefail
+          cmake -S tools/xbe-recompiler-host \
+            -B "$RUNNER_TEMP/xbe-recompiler-build" -G Ninja \
+            -DXBE_SDK_DIR="$RUNNER_TEMP/xbe-sdk" \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/xbe-recompiler-build" \
+            --target xbe_recomp_host --parallel 2
+          test -x "$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host"
+          info=$("$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host" 2>&1 || :)
+          printf '%s\n' "$info" | grep -F 'usage: xbe_recomp'
+          echo "Built the actual upstream Xbox XBE-to-C++ recompiler on Linux; no game image processed." >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare SDK-generated Xbox C++ for Android ELF and verify exports
         run: |
           set -euo pipefail
