@@ -55,5 +55,27 @@ jobs:
           test -s build/third_party/out/LICENSES-FFMPEG.txt
           "$llvm_readelf" -d "$prefix/libavcodec.so" | grep -q SONAME
           "$llvm_readelf" -h "$prefix/libavcodec.so" | tee "$RUNNER_TEMP/ffmpeg-elf.txt"
+          # Verify the game-facing multimedia APIs link into an Android ARM64
+          # shared object, not only that separate .so files have ELF headers.
+          cat > "$RUNNER_TEMP/ffmpeg-link-smoke.c" <<'C'
+          #include <libavcodec/avcodec.h>
+          #include <libavformat/avformat.h>
+          #include <libavutil/avutil.h>
+          #include <libswresample/swresample.h>
+          unsigned hulkpocket_media_link_smoke(void) {
+              const AVCodec *codec = avcodec_find_decoder_by_name("bink");
+              return (codec != 0) + avcodec_version() +
+                     avformat_version() + avutil_version() + swresample_version();
+          }
+          C
+          ndkbin="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          "$ndkbin/aarch64-linux-android29-clang" \
+            -fPIC -shared -Wl,-z,defs -Wl,-z,max-page-size=16384 \
+            -I build/third_party/out/ffmpeg-android-arm64/install/include \
+            "$RUNNER_TEMP/ffmpeg-link-smoke.c" -L "$prefix" \
+            -lavformat -lavcodec -lavutil -lswresample \
+            -o "$RUNNER_TEMP/libhulkpocket-media-smoke.so"
+          "$llvm_readelf" -h "$RUNNER_TEMP/libhulkpocket-media-smoke.so" | grep -q AArch64
+          "$llvm_readelf" -d "$RUNNER_TEMP/libhulkpocket-media-smoke.so" | grep -q NEEDED
           printf 'FFmpeg and dav1d Android ARM64 shared libraries compiled and inspected.\n' >> "$GITHUB_STEP_SUMMARY"
       # Never upload game code, game data, or upstream binaries to public artifacts.
