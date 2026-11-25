@@ -89,11 +89,9 @@ int main(){
        !t.bootstrap.UnexpectedReturn(b) || !t.scheduler.Finished(b) ||
        t.scheduler.Finished(a) || t.Read(tls+0x10)!=b)
         return 1;
-    // A remained suspended when B's guest trampoline returned.
-    // A can resume from its own unchanged native C++ stack.
-    t.scheduler.Run(a);
-    if(t.trace!=std::vector<int>({1,2,3,4,5}) || !t.scheduler.Finished(a))
-        return 2;
-    std::puts("Hulk lazy Xbox bootstrap -> SDK guest-call callback -> native A-B-A-B: passed");
+    // Do NOT resume A here: the guest TLS and X86Context currently
+    // belong to B, whose bootstrap incorrectly returned. Production
+    // must trap/stop this guest thread rather than resume A with B state.
+    std::puts("Hulk lazy Xbox bootstrap -> SDK guest-call callback -> ARM64 switching; unexpected return flagged: passed");
     return 0;
 }
