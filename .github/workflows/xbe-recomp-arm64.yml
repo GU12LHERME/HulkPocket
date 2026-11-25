@@ -4,6 +4,9 @@ on:
   push:
     paths:
       - '.github/workflows/xbe-recomp-arm64.yml'
+      - 'native/**'
+      - 'tools/xbe_info.py'
+      - 'tools/test_xbe_info.py'
 permissions:
   contents: read
 
