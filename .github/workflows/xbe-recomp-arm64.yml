@@ -227,6 +227,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -m unittest discover -s tools -p 'test_prepare_xbe_elf.py' -v
+          python3 -m unittest discover -s tools -p 'test_audit_xbe_elf.py' -v
           # Artificial generated code uses real SDK headers/export conventions.
           # NO game image or actual Hulk executable is included.
           gen="$RUNNER_TEMP/xbe-generated"
@@ -299,7 +300,9 @@ jobs:
             --sdk "$RUNNER_TEMP/xbe-sdk" \
             --generated "$gen" \
             --ndk-bin "$bin" \
+            --audit-output "$RUNNER_TEMP/hulk-undefined-imports.json" \
             --output "$RUNNER_TEMP/libprepared-xbe-code-local-build.so"
+          python3 -m json.tool "$RUNNER_TEMP/hulk-undefined-imports.json" > /dev/null
           "$bin/llvm-nm" -D "$RUNNER_TEMP/libprepared-xbe-code-local-build.so" |
             grep 'X86EntryPoint'
           echo "Verified generated-style C++ as an exported Android ARM64 ELF module (synthetic game code)." >> "$GITHUB_STEP_SUMMARY"
