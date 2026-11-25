@@ -330,3 +330,26 @@ conversion on its current kernel thread, callback binding to the
 recompiled game's `x86_icall`, kernel boot and Xbox resource
 services, graphics and audio rendering. The test added in
 commit `c00cfc8` is not yet verified on GitHub Actions.
+
+## x86_icall symbol boundary (test double, not game code)
+
+The upstream SDK's `runtime/cpu/dispatch.cpp` implements:
+`void x86_icall(X86Context&, uint8_t*, uint32_t)`. That file
+is Windows-only: it loads the recompiled PE DLL through
+`LoadLibraryW`/`GetProcAddress`, uses other Win32 services,
+then dispatches through a generated Xbox function mapping.
+
+`native/xbe_sdk_icall_binding.h` now binds the new-fiber trampoline
+to **this exact C++ function symbol/signature**. The matching
+`native/test_xbe_sdk_icall_binding.cpp` provides a **test double**
+for `x86_icall` with that signature and verifies that a lazily
+created native ARM64 fiber invokes it, that its guest continuation
+switches to another ARM64 stack, and that the resumed function sees
+the expected Xbox state. Linux ARM64 testing runs on QEMU, and
+Android NDK checks compile the integration test.
+
+**This does not execute the SDK's real `dispatch.cpp`** or any
+copyrighted Xbox binary. The actual Android dispatch implementation
+must replace the Windows DLL loading/function-mapping code, and a
+real game hook must supply guest memory, kernel-thread ownership,
+and root-fiber handling. CI verification is pending.
