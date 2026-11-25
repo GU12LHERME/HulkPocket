@@ -68,8 +68,17 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
     if checks["generated_bindings"]:
         try:
             data = json.loads(bindings.read_text())
-            checks["generated_bindings"] = isinstance(data, (dict, list)) and bool(data)
-        except (ValueError, OSError):
+            entries = data.get("bindings") if isinstance(data, dict) else None
+            checks["generated_bindings"] = (
+                isinstance(entries, dict) and bool(entries)
+                and all(
+                    isinstance(symbol, str) and isinstance(value, dict)
+                    and isinstance(value.get("addr"), str)
+                    and isinstance(value.get("how"), (str, list))
+                    for symbol, value in entries.items()
+                )
+            )
+        except (ValueError, OSError, TypeError):
             checks["generated_bindings"] = False
 
     env = os.environ.copy()
