@@ -4,7 +4,7 @@ import tempfile
 import tomllib
 import unittest
 
-from create_synthetic_xbe_recompile import BASE, ENTRY, THUNK, create
+from create_synthetic_xbe_recompile import BASE, ENTRY, THUNK, create, create_memory_case
 
 class SyntheticXbeRecompileTests(unittest.TestCase):
     def test_real_original_xbox_header_layout_and_code_bytes(self):
@@ -25,6 +25,19 @@ class SyntheticXbeRecompileTests(unittest.TestCase):
             self.assertEqual(cfg["xbe"]["entry"],ENTRY)
             self.assertIn(".text",cfg["xbe"]["code_sections"])
             self.assertEqual(cfg["xbe"]["partitions"],1)
+
+    def test_original_memory_instruction_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            xbe,config=create_memory_case(pathlib.Path(directory))
+            data=xbe.read_bytes()
+            self.assertEqual(
+                data[0x600:0x60e],
+                bytes.fromhex("A1 80 00 20 00 83 C0 07 A3 84 00 20 00 C3"),
+            )
+            self.assertEqual(struct.unpack_from("<I",data,0x680)[0],0x12345670)
+            with config.open("rb") as stream:
+                configuration=tomllib.load(stream)
+            self.assertEqual(configuration["xbe"]["entry"], ENTRY)
 
 if __name__=="__main__":
     unittest.main()
