@@ -284,6 +284,32 @@ jobs:
           info=$("$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host" 2>&1 || :)
           printf '%s\n' "$info" | grep -F 'usage: xbe_recomp'
           echo "Built the actual upstream Xbox XBE-to-C++ recompiler on Linux; no game image processed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Recompile actual x86 machine code from synthetic Xbox XBE into ARM64
+        run: |
+          set -euo pipefail
+          python3 tools/create_synthetic_xbe_recompile.py \
+            --output-dir "$RUNNER_TEMP/xbe-original-machine-code"
+          "$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host" \
+            "$RUNNER_TEMP/xbe-original-machine-code/synthetic.toml" \
+            "$RUNNER_TEMP/xbe-original-machine-code/synthetic.xbe" \
+            "$RUNNER_TEMP/xbe-original-machine-code/generated"
+          test -s "$RUNNER_TEMP/xbe-original-machine-code/generated/x86_func_mapping.cpp"
+          test -s "$RUNNER_TEMP/xbe-original-machine-code/generated/x86_recomp.0.cpp"
+          # These are generated from genuine IA-32 instructions by
+          # the official tool, not handwritten SDK-style function mocks.
+          python3 tools/prepare_xbe_elf.py \
+            --sdk "$RUNNER_TEMP/xbe-sdk" \
+            --generated "$RUNNER_TEMP/xbe-original-machine-code/generated" \
+            --output "$RUNNER_TEMP/xbe-recompiled-real-opcodes"
+          ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          python3 tools/build_xbe_android.py \
+            --sdk "$RUNNER_TEMP/xbe-sdk" \
+            --generated "$RUNNER_TEMP/xbe-original-machine-code/generated" \
+            --ndk-bin "$ndk" \
+            --audit-output "$RUNNER_TEMP/actual-recompiler-imports.json" \
+            --output "$RUNNER_TEMP/libsynthetic-recompiled-opcodes-android.so"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libsynthetic-recompiled-opcodes-android.so" | grep -q AArch64
+          echo "Official XBE compiler decoded real synthetic x86 instructions and linked generated C++ into Android ARM64 ELF." >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare SDK-generated Xbox C++ for Android ELF and verify exports
         run: |
           set -euo pipefail
