@@ -49,6 +49,8 @@ jobs:
             "$llvm_readelf" -h "$prefix/$lib" | grep -q AArch64
             "$llvm_readelf" -h "$prefix/$lib" | grep -q ELF64
           done
+          # Android build generates dav1d notice; invoke the shared FFmpeg notice helper explicitly.
+          "$RUNNER_TEMP/ffmpeg-venv/bin/python" -c 'import sys; sys.path.insert(0, "tools"); import wine_ffmpeg; wine_ffmpeg.write_license_notice()'
           test -s build/third_party/out/LICENSES-DAV1D.txt
           test -s build/third_party/out/LICENSES-FFMPEG.txt
           "$llvm_readelf" -d "$prefix/libavcodec.so" | grep -q SONAME
