@@ -1,0 +1,35 @@
+name: Android native dependencies
+on:
+  workflow_dispatch:
+jobs:
+  dependencies:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: matthewfcarlson/thunderclap
+          path: upstream
+          persist-credentials: false
+      - name: Install host tools
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build nasm pkg-config
+      - name: Install Android NDK
+        run: |
+          curl --fail --retry 3 -L https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -o /tmp/ndk.zip
+          unzip -q /tmp/ndk.zip -d "$RUNNER_TEMP"
+          echo "HULK_NDK=$RUNNER_TEMP/android-ndk-r28c" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$RUNNER_TEMP/android-ndk-r28c" >> "$GITHUB_ENV"
+      - name: Build SDL3
+        working-directory: upstream
+        run: python3 tools/native_android_sdl.py --config app
+      - name: Build FFmpeg
+        working-directory: upstream
+        run: python3 tools/wine_ffmpeg.py build --target android-arm64
+      - name: Validate ARM64 dependencies
+        working-directory: upstream
+        run: |
+          test -n "$(find build/third_party/out/sdl-android-arm64-app -name libSDL3.a -print -quit)"
+          lib=$(find build/third_party/out/ffmpeg-android-arm64/install -name libavcodec.so -print -quit)
+          test -n "$lib"
+          readelf -h "$lib" | grep AArch64
+          git rev-parse HEAD
