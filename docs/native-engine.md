@@ -279,3 +279,17 @@ the ordinary dry-run deliberately only validates the input engine and FFmpeg
 files, so it remains usable without Android SDK installed.
 
 The real native game image and device gameplay remain unvalidated.
+
+## Strict snapshot layout validation
+
+The engine preflight now follows Thunderclap's actual
+`tools/clang_probe.py::snapshot` output: the
+`snap/manifest.json` must include a nonempty `tus` array of objects
+with paths to existing translated files; `snap/src`, `snap/include`,
+`snap/repo-include`, and `snap/data/src` must exist, with at least one
+generated data `.cpp` file. Missing files, malformed manifests, and
+path-traversing entries are rejected before compilation begins.
+
+These checks ensure expected build inputs are structurally present,
+not that their game version or the bindings map matches the player's XBE.
+No snapshot or game-derived code is uploaded into GitHub Actions.
