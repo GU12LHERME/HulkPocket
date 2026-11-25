@@ -11,6 +11,8 @@ jobs:
       - uses: actions/checkout@v5
       - name: Test XISO extraction
         run: python3 -m unittest discover -s tools -p 'test_xiso.py' -v
+      - name: Test native engine packaging gate
+        run: python3 -m unittest discover -s tools -p 'test_package_engine_apk.py' -v
       - name: Install NDK
         run: |
           set -eu
