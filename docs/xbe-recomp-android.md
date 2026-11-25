@@ -389,3 +389,18 @@ guest-memory/kernel services, and implement the existing Direct3D
 and XAudio2 frontends in Android-supported backends. The `.so`
 is solely a native runtime component for further porting; it is
 not an APK and cannot display or execute Hulk on its own.
+
+## Xbox kernel import ordinal dispatch
+
+The portable dispatcher now recognizes the XboxXBERecomp SDK
+`0xFE000000 + ordinal * 4` kernel thunk range (400 ordinals)
+and routes valid entries through an optional native
+`KernelCall(X86Context&, uint8_t*, uint32_t)` callback. It
+records the last guest target in `ctx.last_icall` like the
+upstream dispatcher, and rejects unaligned or unavailable
+thunks without falling through into unrelated game code.
+The ARM64 regression exercises ordinal 17 and failure cases.
+
+This is an **invocation boundary**, not a port of all 400
+Xbox kernel services. Kernel memory, threads, filesystem,
+audio and GPU services remain to be implemented or replaced.
