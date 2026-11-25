@@ -57,6 +57,11 @@ jobs:
             native/xbox_guest_address_space.cpp \
             -o "$RUNNER_TEMP/hulk-guest-address-space-arm64"
           qemu-aarch64 "$RUNNER_TEMP/hulk-guest-address-space-arm64"
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -static \
+            -I native native/test_xbe_image_memory_loader.cpp \
+            native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
+            -o "$RUNNER_TEMP/hulk-xbe-image-loader-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/hulk-xbe-image-loader-arm64"
           ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           "$ndk/aarch64-linux-android29-clang++" -fPIC -shared \
             -Wl,-z,defs -Wl,-z,max-page-size=16384 \
@@ -166,7 +171,8 @@ jobs:
             -Wall -Wextra -Werror -Wl,-z,defs -Wl,-z,max-page-size=16384 \
             -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             native/portable_xbe_dispatch.cpp native/portable_xbe_image.cpp \
-            native/xbox_guest_address_space.cpp native/xbox_fiber_scheduler.cpp \
+            native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp \
+            native/xbox_fiber_scheduler.cpp \
             native/native_fiber.cpp native/aarch64_context.S -ldl \
             -o "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" | grep -q AArch64
