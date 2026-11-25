@@ -90,12 +90,23 @@ jobs:
             native/native_fiber.cpp native/aarch64_context.S \
             -o "$RUNNER_TEMP/xbe-sdk-fiber-test-arm64"
           qemu-aarch64 "$RUNNER_TEMP/xbe-sdk-fiber-test-arm64"
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread -static \
+            -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            native/test_hulk_xdk_fiber_hook.cpp native/xbox_fiber_scheduler.cpp \
+            native/native_fiber.cpp native/aarch64_context.S \
+            -o "$RUNNER_TEMP/hulk-xdk-switch-hook-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/hulk-xdk-switch-hook-arm64"
           ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             -c native/test_xbe_sdk_fiber_adapter.cpp \
             -o "$RUNNER_TEMP/xbe-sdk-fiber-test-android.o"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/xbe-sdk-fiber-test-android.o" | grep -q AArch64
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
+            -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            -c native/test_hulk_xdk_fiber_hook.cpp \
+            -o "$RUNNER_TEMP/hulk-xdk-switch-hook-android.o"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xdk-switch-hook-android.o" | grep -q AArch64
           echo "Tested the actual upstream X86Context guest state with real native AArch64 fiber stack switching." >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout playable Windows port as build input
         run: |
