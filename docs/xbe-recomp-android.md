@@ -492,3 +492,20 @@ public GitHub repository, this integration uses synthetic generated
 C++. Actual instruction translation, hooking, exception behavior and
 guest kernel requirements still need extensive validation. The
 updated CI run should be checked before considering this passed.
+
+## Verified SDK-generated-style ELF module build (2026-11-25)
+
+[GitHub Actions run 45718168101](https://github.com/GU12LHERME/HulkPocket/actions/runs/45718168101)
+**passed**, including the new `Prepare SDK-generated Xbox C++ for
+Android ELF and verify exports` CI step. It created an asset-free
+XboxXBERecomp-style C++ mapping and instruction partition, used
+the upstream SDK's actual `runtime/cpu/x86_ops.h`, applied
+`tools/prepare_xbe_elf.py`, linked the resulting module as
+Linux ELF for a real `dlopen` / native function-call check,
+and compiled the same prepared sources into an Android ARM64
+ELF library with the expected exported `X86FuncMappings`.
+
+The generated C++ and code addresses in this test are synthetic.
+Actual Hulk XBE recompiled instructions, asset loading and
+gameplay remain entirely untested. This is a source compatibility
+checkpoint rather than a playable build.
