@@ -54,11 +54,30 @@ def create(directory: Path) -> tuple[Path,Path]:
     )
     return xbe_path,config_path
 
+def create_memory_case(directory: Path) -> tuple[Path, Path]:
+    """Generate an original IA-32 memory-move/add/store executable test."""
+    xbe_path, config_path = create(directory)
+    data = bytearray(xbe_path.read_bytes())
+    # mov eax,[0x200080]; add eax,7; mov [0x200084],eax; ret
+    code = bytes.fromhex(
+        "A1 80 00 20 00"
+        " 83 C0 07"
+        " A3 84 00 20 00"
+        " C3"
+    )
+    data[0x600:0x600 + len(code)] = code
+    struct.pack_into("<I", data, 0x680, 0x12345670)
+    xbe_path.write_bytes(data)
+    return xbe_path, config_path
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output-dir",type=Path,required=True)
+    p.add_argument("--profile",choices=("simple","memory"),default="simple")
     args=p.parse_args()
-    xbe,cfg=create(args.output_dir)
+    xbe,cfg=(create_memory_case(args.output_dir)
+             if args.profile=="memory" else create(args.output_dir))
     print(f"Generated original test XBE: {xbe}")
     print(f"Generated recompiler config: {cfg}")
 
