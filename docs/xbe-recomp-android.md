@@ -178,8 +178,10 @@ it also rejects duplicate IDs and starting a completed fiber.
 GitHub Actions cross-compiles the dispatcher as a real Android ARM64
 shared library and executes its Linux ARM64 test under QEMU.
 
-**Verification pending:** a workflow run is required to confirm that
-these new tests build and pass. This is a host-side foundation, not an
+**Validated:** GitHub Actions run
+[45713686889](https://github.com/GU12LHERME/HulkPocket/actions/runs/45713686889)
+completed successfully, including the AArch64 QEMU guest-fiber dispatcher
+test and Android ARM64 shared-object link. This is a host-side foundation, not an
 Xbox XBE execution engine. It does not yet manipulate the original
 guest TLS, XBE fiber records, Xbox register save/restore, or
 XboxXBE-Recomp's Win32 fiber hooks. Graphics, kernel services,
