@@ -22,26 +22,24 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ninja-build cmake
       - name: Check out upstream for isolated dependency build
         run: |
+          set -euo pipefail
           git clone --depth 1 https://github.com/matthewfcarlson/thunderclap.git "$RUNNER_TEMP/thunderclap"
           git -C "$RUNNER_TEMP/thunderclap" rev-parse HEAD
       - name: Fetch pinned SDL3 sources
         working-directory: ${{ runner.temp }}/thunderclap
         run: python3 tools/wine_sdl.py fetch
-      - name: Compile SDL3 Android ARM64 app backend
+      - name: Compile and validate SDL3 Android ARM64 app backend
         working-directory: ${{ runner.temp }}/thunderclap
-        env:
-          HULK_NDK: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
         run: |
+          set -euo pipefail
           export HULK_NDK="$ANDROID_HOME/ndk/28.2.13676358"
           python3 tools/native_android_sdl.py --config app --jobs 2
-          test -s build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
-          test -f build/third_party/out/sdl-android-arm64-app/include/SDL3/SDL.h
           lib=build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
+          test -s "$lib"
+          test -f build/third_party/out/sdl-android-arm64-app/include/SDL3/SDL.h
           ar="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-          "$ar" t "$lib" | grep -q '\.o
-          echo 'SDL3 Android ARM64 app library compiled successfully.' >> "$GITHUB_STEP_SUMMARY"
-      # No upstream/game-derived binaries are published as public artifacts.
-
+          "$ar" t "$lib" > "$RUNNER_TEMP/sdl-objects.txt"
+          grep -Eq '\\.o$' "$RUNNER_TEMP/sdl-objects.txt"
           sha256sum "$lib"
-          echo 'SDL3 Android ARM64 app library compiled successfully.' >> "$GITHUB_STEP_SUMMARY"
-      # No upstream/game-derived binaries are published as public artifacts.
+          echo 'SDL3 Android ARM64 app archive built and checked.' >> "$GITHUB_STEP_SUMMARY"
+      # No copyrighted game files or compiled binaries uploaded.
