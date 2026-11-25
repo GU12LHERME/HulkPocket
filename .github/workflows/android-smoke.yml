@@ -6,15 +6,19 @@ permissions:
   contents: read
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install NDK
-        run: sdkmanager 'ndk;28.2.13676358'
+        run: |
+          set -eu
+          curl --fail --location --retry 3 https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -o "$RUNNER_TEMP/ndk.zip"
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+          test -x "$RUNNER_TEMP/android-ndk-r28c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
       - name: Compile and inspect ARM64 ELF
         run: |
           set -eu
-          TOOL="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          TOOL="$RUNNER_TEMP/android-ndk-r28c/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p build
           "$TOOL/aarch64-linux-android24-clang++" -std=c++17 -O2 -Wall -Wextra -Werror native/smoke.cpp -o build/hulkpocket-smoke
           "$TOOL/llvm-readelf" -h build/hulkpocket-smoke | tee build/elf.txt
