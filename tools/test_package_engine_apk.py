@@ -15,7 +15,7 @@ SPEC.loader.exec_module(mod)
 def arm64_elf(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     h = bytearray(120)  # ELF64 header and a minimal program header
-    h[:4] = b"\\x7fELF"
+    h[:4] = b"\x7fELF"
     h[4:7] = bytes([2, 1, 1])
     struct.pack_into("<HHI", h, 16, 3, 183, 1)
     struct.pack_into("<Q", h, 32, 64)
