@@ -58,7 +58,7 @@ def build(
             report = audit(nm, objects)
             audit_output.parent.mkdir(parents=True, exist_ok=True)
             audit_output.write_text(
-                json.dumps(report, indent=2, ensure_ascii=False) + "\\n",
+                json.dumps(report, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
         # The generated code often imports SDK services such as
