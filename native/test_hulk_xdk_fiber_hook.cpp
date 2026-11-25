@@ -38,6 +38,20 @@ struct Fixture {
 void A(void* raw) {
     auto& t=*static_cast<Fixture*>(raw);
     t.trace.push_back(1);
+    // A new XDK fiber cannot be entered until a native x86_icall
+    // trampoline exists. Confirm we fail safely *before* mutating
+    // the x86 context, TLS or current native stack.
+    constexpr std::uint32_t fresh = 0x1400;
+    t.Write(fresh+0x0C,0xA000);
+    t.Write(0xA000+20,t.layout.bootstrap_va);
+    const auto old_esp=t.ctx.esp;
+    const auto old_ebx=t.ctx.ebx;
+    bool rejected=false;
+    try { t.Switch(fresh); }
+    catch (const std::logic_error&) { rejected=true; }
+    if(!rejected || t.ctx.esp!=old_esp || t.ctx.ebx!=old_ebx ||
+       t.Read(tls+0x10)!=a || t.scheduler.CurrentId()!=a)
+        std::abort();
     t.Switch(b);
     t.trace.push_back(3);
     if(t.Read(tls+0x10)!=a || t.ctx.ebx!=0x2001 ||
