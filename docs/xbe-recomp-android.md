@@ -610,3 +610,34 @@ the experimental runtime library and
 The standalone Android executable has **not yet been run on an
 actual RP6**, so 4 GiB virtual reservation compatibility
 remains unverified on the device.
+
+## First genuine x86-instruction recompiler → ARM64 execution milestone
+
+[CI 45722953441](https://github.com/GU12LHERME/HulkPocket/actions/runs/45722953441)
+**passed** the complete asset-free executable path. The
+`create_synthetic_xbe_recompile.py` test builds a minimal,
+valid original Xbox XBE containing original synthetic IA-32
+instructions `mov eax, 0x12345678; ret` (no copyrighted game
+code). The **real upstream** `xbe_recomp_host` decoded its
+2 instructions into C++, and `prepare_xbe_elf.py` prepared
+them for ELF linkage. Then:
+
+- Android NDK generated a valid AArch64 ELF module;
+- Linux x86-64 ELF execution through the portable `x86_icall`
+  called the recompiled guest function and validated `eax`;
+- `aarch64-linux-gnu-g++` compiled the generated function
+  into a *native AArch64* static binary; QEMU executed the
+  generated function using actual 4 GiB Xbox guest virtual
+  memory and checked its result;
+- Android NDK built a standalone native ARM64 executable for
+  optional Retroid Pocket 6 hardware testing.
+
+The GitHub artifact
+[hulkpocket-genuine-x86-opcodes-arm64-smoke](https://github.com/GU12LHERME/HulkPocket/actions/runs/45722953441/artifacts/15073351090)
+contains the Android CLI and synthetic XBE test data (not
+an APK or copyrighted game). This verifies a real x86-to-ARM64
+recompilation path **for a simple 2-instruction synthetic
+executable**; it does *not* verify Hulk's enormous real image,
+kernel services, Direct3D, audio, timing or actual gameplay.
+The synthetic CLI must still be executed on the real RP6 to
+validate the device's kernel and virtual memory behavior.
