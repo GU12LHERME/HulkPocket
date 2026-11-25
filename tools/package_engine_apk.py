@@ -10,17 +10,39 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import sys
 
 
 def is_elf64_aarch64(path: Path) -> bool:
-    if not path.is_file():
+    """Check ELF64 little-endian AArch64 shared-object structure.
+
+    Rejects truncated files, non-shared ELF executables, absent program headers,
+    and offsets that point beyond the file. Does not replace full loader testing.
+    """
+    if not path.is_file() or path.is_symlink():
         return False
-    with path.open("rb") as f:
-        h = f.read(20)
-    return (len(h) == 20 and h[:4] == b"\x7fELF"
-            and h[4] == 2 and h[5] == 1
-            and int.from_bytes(h[18:20], "little") == 183)
+    try:
+        with path.open("rb") as f:
+            header = f.read(64)
+        size = path.stat().st_size
+        if len(header) != 64 or size < 64:
+            return False
+        if header[:4] != b"\\x7fELF" or header[4] != 2 or header[5] != 1 or header[6] != 1:
+            return False
+        kind, arch = struct.unpack_from("<HH", header, 16)
+        if kind != 3 or arch != 183:   # ET_DYN, EM_AARCH64
+            return False
+        ehsize = struct.unpack_from("<H", header, 52)[0]
+        phentsize, phnum = struct.unpack_from("<HH", header, 54)
+        phoff = struct.unpack_from("<Q", header, 32)[0]
+        if ehsize != 64 or phentsize != 56 or not phnum:
+            return False
+        if phoff < 64 or phoff + phentsize * phnum > size:
+            return False
+        return True
+    except OSError:
+        return False
 
 
 def requirements(upstream: Path, engine: Path, ffmpeg: Path):
