@@ -87,3 +87,17 @@ rendering engine or an Android gameplay APK. Passing this test would
 show the selected logic ports to the Android NDK without Windows APIs.
 At publication, the new workflow has not yet been independently
 confirmed as successful.
+
+## Next real-game portability probe
+
+The Android ARM64 workflow now also includes upstream
+`src/common/actor_owner_guard.h`, the original-Xbox instruction
+decoder used by the playable Windows port's Lightning Strike crash fix.
+A small test checks the actual owner-field read instruction sequence,
+guest registers, and crash-guard decision. The same probe is executed
+on the Linux host using `ctypes` and separately compiled into the
+Android ARM64 `.so`.
+
+This tests portable game logic and crash-handling helpers only;
+**native Xbox execution, graphics and gameplay are not implemented**.
+The new commit must pass GitHub Actions before it is called validated.
