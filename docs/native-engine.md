@@ -227,3 +227,18 @@ synthetic ELF fixtures, never game code.
 The GitHub connector currently cannot enumerate recent workflow runs for
 this repository, so the dependency workflows and these new tests remain
 unverified until their specific run results are inspected.
+
+## Android native host C++ compile test
+
+`.github/workflows/thunderclap-host.yml` tests one more **real**
+Thunderclap build stage using the upstream `native_elf.py host` command.
+It clones the upstream repository in a temporary GitHub runner directory,
+installs the Android NDK, compiles the host glue C++ objects for
+`android-arm64`, and checks that the generated objects are AArch64.
+
+This host glue stage does not require the player's XBE or generated data
+translation units. It does **not** compile game functions, resolve the
+native unbound symbols, link `libmain.so`, or provide an APK. It is a
+separate dependency smoke test to detect Android compiler and host glue
+integration regressions. The result requires an actual GitHub Actions
+success before it can be considered validated.
