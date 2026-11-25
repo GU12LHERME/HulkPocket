@@ -353,3 +353,39 @@ copyrighted Xbox binary. The actual Android dispatch implementation
 must replace the Windows DLL loading/function-mapping code, and a
 real game hook must supply guest memory, kernel-thread ownership,
 and root-fiber handling. CI verification is pending.
+
+## Portable ARM64 Xbox function dispatcher (actual implementation)
+
+`native/portable_xbe_dispatch.h/.cpp` implements an Android-compatible
+replacement for **the function-map lookup and call subset** of
+XboxXBERecomp `runtime/cpu/dispatch.cpp`:
+
+- Uses the SDK's real `X86FuncMapping` type with guest function VA
+  and `X86Func*` host function pointer.
+- Compiles a sorted guest-address mapping with duplicate, null and
+  out-of-bounds validation; unmapped guest calls fail clearly.
+- Implements `x86_icall(X86Context&, uint8_t*, uint32_t)` with the
+  exact C++ signature called by the SDK and the new fiber bootstrap.
+- Uses thread-local scoped dispatch ownership to keep guest kernel
+  threads distinct and keeps suspended native fiber continuations
+  bound to the correct owning host thread.
+- Links the dispatcher, native ARM64 fiber scheduler, guarded stacks
+  and AArch64 assembly into a single 16-KiB-page-compatible Android
+  ELF shared library `libhulkpocket-portable-xbe-dispatch.so`.
+
+`native/test_portable_xbe_dispatch.cpp` tests the **real portable
+x86_icall implementation**, not a mock `x86_icall`, against
+SDK-format test mappings and a lazily created ARM64 fiber that calls
+a test guest function. It checks register/TLS restoration, unmapped
+entry rejection, duplicate address validation and teardown of the
+scoped runtime binding. The new GitHub Actions build publishes the
+experimental `.so` only after all tests succeed.
+
+**This library is not yet a game port.** Mappings currently come from
+test functions, not Hulk's recompilation. The Windows recompiler
+outputs a PE/DLL-oriented code module; a production Android
+pipeline must generate/link ELF ARM64 guest code, provide the full
+guest-memory/kernel services, and implement the existing Direct3D
+and XAudio2 frontends in Android-supported backends. The `.so`
+is solely a native runtime component for further porting; it is
+not an APK and cannot display or execute Hulk on its own.
