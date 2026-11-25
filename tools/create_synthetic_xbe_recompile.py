@@ -71,13 +71,31 @@ def create_memory_case(directory: Path) -> tuple[Path, Path]:
     return xbe_path, config_path
 
 
+def create_call_case(directory: Path) -> tuple[Path, Path]:
+    """Original IA-32 caller and callee, exercising direct calls/stack."""
+    xbe_path, config_path = create(directory)
+    data = bytearray(xbe_path.read_bytes())
+    # mov eax,5; call 0x20000B; ret; add eax,7; ret
+    # E8 uses signed displacement +1 relative to the next instruction.
+    code = bytes.fromhex(
+        "B8 05 00 00 00"
+        " E8 01 00 00 00"
+        " C3"
+        " 83 C0 07"
+        " C3"
+    )
+    data[0x600:0x600 + len(code)] = code
+    xbe_path.write_bytes(data)
+    return xbe_path,config_path
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output-dir",type=Path,required=True)
-    p.add_argument("--profile",choices=("simple","memory"),default="simple")
+    p.add_argument("--profile",choices=("simple","memory","calls"),default="simple")
     args=p.parse_args()
-    xbe,cfg=(create_memory_case(args.output_dir)
-             if args.profile=="memory" else create(args.output_dir))
+    selected={"simple":create,"memory":create_memory_case,"calls":create_call_case}
+    xbe,cfg=selected[args.profile](args.output_dir)
     print(f"Generated original test XBE: {xbe}")
     print(f"Generated recompiler config: {cfg}")
 
