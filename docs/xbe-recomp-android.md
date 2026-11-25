@@ -101,3 +101,22 @@ Android ARM64 `.so`.
 This tests portable game logic and crash-handling helpers only;
 **native Xbox execution, graphics and gameplay are not implemented**.
 The new commit must pass GitHub Actions before it is called validated.
+
+## Disc version gate: EU vs USA
+
+The playable Windows Hulk Recompiled port uses **different generated
+code and hook addresses** for the EU and USA XBE revisions:
+`config/game.toml` starts at `0x0020AAC6` (EU), while the
+USA game uses `0x0020A016` (see upstream `addresses.h`).
+Both carry Title ID `56550039`, so using only the Title ID risks
+building the wrong game code.
+
+In this experimental branch, `tools/xbe_info.py` now decodes the
+original Xbox retail/debug entry-point XOR field at XBE offset
+`0x128`, validates that candidates are inside the declared image
+address range, and reports `hulk_recompiled_candidate` as
+`eu`, `usa`, or `null`. It checks the Title ID too.
+Synthetic-file regression tests run in the Android ARM64 workflow.
+This detection is *not proof of exact executable compatibility*: exact
+section hashes and an actual device boot still have to be checked.
+It only inspects a local XBE and does not upload the game.
