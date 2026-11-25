@@ -120,3 +120,21 @@ Synthetic-file regression tests run in the Android ARM64 workflow.
 This detection is *not proof of exact executable compatibility*: exact
 section hashes and an actual device boot still have to be checked.
 It only inspects a local XBE and does not upload the game.
+
+## AArch64 native fiber-switch prototype
+
+A prototype `native/aarch64_context.S` saves and restores AAPCS64
+callee-saved registers (x19–x30, SP and d8–d15) between **two separate
+native stacks**. Its header defines a fixed context layout and a
+standalone test constructs a fresh fiber, switches into it, suspends
+back to the caller and resumes the same native C++ continuation.
+The Android ARM64 workflow now cross-compiles the prototype into an
+Android ELF shared object and runs the corresponding Linux AArch64 test
+under QEMU. This test is pending GitHub Actions verification.
+
+This is foundational work for replacing the Windows-specific
+`CreateFiberEx`/`SwitchToFiber` code. It does **not** implement Xbox
+fiber record mapping, exception/SEH handling, TLS, stack ownership,
+fiber deletion, cross-thread migration or Android runtime integration.
+Do not link the prototype to the game before its stack lifecycle,
+ownership and guest-record semantics are implemented and tested.
