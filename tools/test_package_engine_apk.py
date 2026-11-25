@@ -48,7 +48,7 @@ class PackageEngineTests(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.touch()
             arm64_elf(engine)
-            for name in ["libavcodec.so", "libavformat.so", "libavutil.so"]:
+            for name in ["libavcodec.so", "libavformat.so", "libavutil.so", "libswresample.so"]:
                 arm64_elf(ffmpeg / "lib" / name)
             self.assertTrue(all(mod.requirements(upstream, engine, ffmpeg).values()))
             (ffmpeg / "lib/libavcodec.so").unlink()
