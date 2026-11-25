@@ -41,6 +41,24 @@ class PackageEngineTests(unittest.TestCase):
             p.write_bytes(p.read_bytes()[:90])
             self.assertFalse(mod.is_elf64_aarch64(p))
 
+    def test_upstream_android_sdk_35_preflight(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sdk = Path(temp)
+            self.assertFalse(all(mod.android_sdk_requirements(sdk).values()))
+            for name in (
+                "platforms/android-35/android.jar",
+                "build-tools/35.0.0/aapt2",
+                "build-tools/35.0.0/d8",
+                "build-tools/35.0.0/zipalign",
+                "build-tools/35.0.0/apksigner",
+            ):
+                p = sdk / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(b"test fixture")
+            self.assertTrue(all(mod.android_sdk_requirements(sdk).values()))
+            (sdk / "build-tools/35.0.0/d8").unlink()
+            self.assertFalse(mod.android_sdk_requirements(sdk)["android_d8"])
+
     def test_complete_local_package_inputs(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
