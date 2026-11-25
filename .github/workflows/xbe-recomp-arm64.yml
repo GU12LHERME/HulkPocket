@@ -403,6 +403,7 @@ jobs:
           python3 -m unittest discover -s tools -p 'test_prepare_xbe_elf.py' -v
           python3 -m unittest discover -s tools -p 'test_audit_xbe_elf.py' -v
           python3 -m unittest discover -s tools -p 'test_recompile_hulk_local.py' -v
+          python3 -m unittest discover -s tools -p 'test_create_synthetic_xbe_recompile.py' -v
           # Artificial generated code uses real SDK headers/export conventions.
           # NO game image or actual Hulk executable is included.
           gen="$RUNNER_TEMP/xbe-generated"
