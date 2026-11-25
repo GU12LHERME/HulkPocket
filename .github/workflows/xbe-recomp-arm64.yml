@@ -108,6 +108,12 @@ jobs:
             native/native_fiber.cpp native/aarch64_context.S \
             -o "$RUNNER_TEMP/xbe-sdk-icall-binding-arm64"
           qemu-aarch64 "$RUNNER_TEMP/xbe-sdk-icall-binding-arm64"
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread -static \
+            -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            native/test_portable_xbe_dispatch.cpp native/portable_xbe_dispatch.cpp \
+            native/xbox_fiber_scheduler.cpp native/native_fiber.cpp native/aarch64_context.S \
+            -o "$RUNNER_TEMP/portable-xbe-dispatch-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/portable-xbe-dispatch-arm64"
           ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
@@ -129,6 +135,20 @@ jobs:
             -c native/test_xbe_sdk_icall_binding.cpp \
             -o "$RUNNER_TEMP/xbe-sdk-icall-binding-android.o"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/xbe-sdk-icall-binding-android.o" | grep -q AArch64
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
+            -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            -c native/test_portable_xbe_dispatch.cpp \
+            -o "$RUNNER_TEMP/portable-xbe-dispatch-test-android.o"
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC -shared \
+            -Wall -Wextra -Werror -Wl,-z,defs -Wl,-z,max-page-size=16384 \
+            -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            native/portable_xbe_dispatch.cpp native/xbox_fiber_scheduler.cpp \
+            native/native_fiber.cpp native/aarch64_context.S \
+            -o "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" | grep -q AArch64
+          "$ndk/llvm-nm" -D -C "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" |
+            grep -q 'x86_icall(X86Context'
+          echo "Portable XboxXBERecomp x86_icall ARM64 ELF shared library linked with Android NDK; synthetic game entry only." >> "$GITHUB_STEP_SUMMARY"
           echo "Tested the actual upstream X86Context guest state with real native AArch64 fiber stack switching." >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout playable Windows port as build input
         run: |
