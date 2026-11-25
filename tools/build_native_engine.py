@@ -6,6 +6,7 @@ NDK, and the upstream SDL3/FFmpeg app builds. No game assets are uploaded.
 This does not repair Thunderclap's unfinished native game startup.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -46,6 +47,19 @@ def snapshot_ready(snapshot: Path) -> bool:
         return True
     except (ValueError, OSError, TypeError):
         return False
+
+
+def identical_files(left: Path, right: Path) -> bool:
+    """Check both executable copies by size and streaming hash, not path."""
+    if not left.is_file() or not right.is_file() or left.stat().st_size != right.stat().st_size:
+        return False
+    def digest(path):
+        h = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                h.update(block)
+        return h.digest()
+    return digest(left) == digest(right)
 
 
 def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, jobs):
@@ -134,6 +148,19 @@ def main(argv=None):
             return 1
         if not xbe_check["matches_rp6_executable"]:
             print(json.dumps({"xbe_verification": xbe_check}, indent=2), flush=True)
+            return 1
+
+    if args.execute:
+        upstream_xbe = paths["upstream"] / "isos/extracted/default.xbe"
+        try:
+            matching_input = identical_files(args.xbe.expanduser().resolve(), upstream_xbe)
+        except OSError:
+            matching_input = False
+        if not matching_input:
+            print(json.dumps({
+                "upstream_disc_matches_verified_executable": False,
+                "note": "The local Thunderclap checkout must contain the same default.xbe at isos/extracted/default.xbe."
+            }), flush=True)
             return 1
 
     checks, env, commands, package, image = make_plan(
