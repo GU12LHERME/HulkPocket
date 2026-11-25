@@ -12,12 +12,15 @@ import java.security.MessageDigest;
 import java.util.*;
 
 public class MainActivity extends Activity {
+ public static native String nativeBridgeStatus();
  TextView status; Button select;
  @Override public void onCreate(Bundle b) {
   super.onCreate(b);
   LinearLayout layout=new LinearLayout(this); layout.setOrientation(1); layout.setPadding(32,24,32,24);
   TextView title=new TextView(this); title.setText("HulkPocket — Diagnóstico"); title.setTextSize(24); layout.addView(title);
   select=new Button(this); select.setText("Selecionar ISO Xbox"); layout.addView(select);
+  Button nativeTest=new Button(this); nativeTest.setText("Testar ponte ARM64"); layout.addView(nativeTest);
+  nativeTest.setOnClickListener(v->status.setText(NativeBridge.check()));
   status=new TextView(this); status.setText("Selecione a imagem original do jogo."); status.setTextIsSelectable(true);
   ScrollView scroll=new ScrollView(this); scroll.addView(status); layout.addView(scroll); setContentView(layout);
   select.setOnClickListener(v->{Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT); i.setType("*/*"); i.addCategory(Intent.CATEGORY_OPENABLE); startActivityForResult(i,1);});
