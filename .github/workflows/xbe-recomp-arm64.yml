@@ -164,8 +164,8 @@ jobs:
             -o "$RUNNER_TEMP/hulk-xbe-local-diagnostic"
           # The diagnostic does not run a guest image and never
           # prints bytes from the private user-provided executable.
-          "$RUNNER_TEMP/hulk-xbe-local-diagnostic" 2>&1 |
-            grep -q 'usage: hulk_xbe_local_diagnostic'
+          diagnostic_help=$("$RUNNER_TEMP/hulk-xbe-local-diagnostic" 2>&1 || :)
+          printf '%s\n' "$diagnostic_help" | grep -q 'usage: hulk_xbe_local_diagnostic'
           ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
