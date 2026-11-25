@@ -32,6 +32,7 @@ def requirements(upstream: Path, engine: Path, ffmpeg: Path):
         "ffmpeg_avcodec_arm64": is_elf64_aarch64(ffmpeg / "lib/libavcodec.so"),
         "ffmpeg_avformat_arm64": is_elf64_aarch64(ffmpeg / "lib/libavformat.so"),
         "ffmpeg_avutil_arm64": is_elf64_aarch64(ffmpeg / "lib/libavutil.so"),
+        "ffmpeg_swresample_arm64": is_elf64_aarch64(ffmpeg / "lib/libswresample.so"),
     }
 
 
