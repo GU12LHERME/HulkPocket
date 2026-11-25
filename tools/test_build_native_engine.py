@@ -40,7 +40,7 @@ class BuildNativeEngineTests(unittest.TestCase):
                 upstream / "tools/android_apk.py",
                 ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/clang",
                 sdl / "lib/libSDL3.a",
-                *[ff / "lib" / n for n in ("libavcodec.so", "libavformat.so", "libavutil.so")],
+                *[ff / "lib" / n for n in ("libavcodec.so", "libavformat.so", "libavutil.so", "libswresample.so")],
             ]:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.touch()
