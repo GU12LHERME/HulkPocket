@@ -28,7 +28,7 @@ def is_elf64_aarch64(path: Path) -> bool:
         size = path.stat().st_size
         if len(header) != 64 or size < 64:
             return False
-        if header[:4] != b"\\x7fELF" or header[4] != 2 or header[5] != 1 or header[6] != 1:
+        if header[:4] != b"\x7fELF" or header[4] != 2 or header[5] != 1 or header[6] != 1:
             return False
         kind, arch = struct.unpack_from("<HH", header, 16)
         if kind != 3 or arch != 183:   # ET_DYN, EM_AARCH64
