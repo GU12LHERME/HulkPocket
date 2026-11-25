@@ -29,6 +29,17 @@ class BuildNativeEngineTests(unittest.TestCase):
             self.assertEqual(image, root / "out/link/libmain.so")
             self.assertIn("--execute", pack)
 
+    def test_disc_copies_must_have_identical_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            verified, upstream = root / "verified.xbe", root / "upstream.xbe"
+            verified.write_bytes(b"original-test-game")
+            self.assertFalse(mod.identical_files(verified, upstream))
+            upstream.write_bytes(verified.read_bytes())
+            self.assertTrue(mod.identical_files(verified, upstream))
+            upstream.write_bytes(b"different-game")
+            self.assertFalse(mod.identical_files(verified, upstream))
+
     def test_local_inputs_form_real_upstream_pipeline(self):
         with tempfile.TemporaryDirectory() as d:
             r = Path(d)
