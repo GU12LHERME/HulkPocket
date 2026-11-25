@@ -19,7 +19,8 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
     checks = {
         "upstream_native_compiler": (upstream / "tools/native_elf.py").is_file(),
         "upstream_packager": (upstream / "tools/android_apk.py").is_file(),
-        "generated_snapshot": (snapshot / "snap").is_dir(),
+        "upstream_crt_table": (upstream / "src/platform/sdl/crt/native_crt_table.h").is_file(),
+        "generated_snapshot": (snapshot / "snap/manifest.json").is_file(),
         "generated_bindings": bindings.is_file(),
         "ndk_clang": any(
             (ndk / "toolchains/llvm/prebuilt" / host / "bin/clang").is_file()
@@ -31,6 +32,12 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
         "ffmpeg_avutil": (ffmpeg / "lib/libavutil.so").is_file(),
         "ffmpeg_swresample": (ffmpeg / "lib/libswresample.so").is_file(),
     }
+    if checks["generated_snapshot"]:
+        try:
+            manifest = json.loads((snapshot / "snap/manifest.json").read_text())
+            checks["generated_snapshot"] = isinstance(manifest, (dict, list)) and bool(manifest)
+        except (ValueError, OSError):
+            checks["generated_snapshot"] = False
     if checks["generated_bindings"]:
         try:
             data = json.loads(bindings.read_text())
