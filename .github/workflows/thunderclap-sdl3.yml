@@ -39,7 +39,7 @@ jobs:
           test -f build/third_party/out/sdl-android-arm64-app/include/SDL3/SDL.h
           ar="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           "$ar" t "$lib" > "$RUNNER_TEMP/sdl-objects.txt"
-          grep -Eq '\.o "$RUNNER_TEMP/sdl-objects.txt"
+          grep -Eq '[.]o$' "$RUNNER_TEMP/sdl-objects.txt"
           sha256sum "$lib"
           echo 'SDL3 Android ARM64 app archive built and checked.' >> "$GITHUB_STEP_SUMMARY"
       # No copyrighted game files or compiled binaries uploaded.
