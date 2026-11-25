@@ -138,3 +138,25 @@ fiber record mapping, exception/SEH handling, TLS, stack ownership,
 fiber deletion, cross-thread migration or Android runtime integration.
 Do not link the prototype to the game before its stack lifecycle,
 ownership and guest-record semantics are implemented and tested.
+
+## Managed Android ARM64 fiber primitive (experimental)
+
+`native/native_fiber.h` and `native/native_fiber.cpp` provide a
+single-thread, stack-owning fiber wrapper over the AArch64 switch
+assembly. The implementation allocates stacks with `mmap`, applies
+inaccessible guard pages at each end, and offers `Resume`, `Yield`,
+completion detection and a strict creator-thread rule. Normal function
+return from the fiber entry transfers back to the caller; returning to
+the arbitrary stack bootstrap is forbidden.
+
+`native/test_native_fiber.cpp` checks the lifecycle:
+resume → yield → resume → yield → resume → finish, then refuses a
+restart and rejects a yield without an active fiber. CI cross-compiles
+the wrapper for Android ARM64, and compiles and runs a corresponding
+AArch64 Linux binary under QEMU. This new test is **pending GitHub
+Actions confirmation**.
+
+The wrapper is **not yet connected to the game**: mapping the game's
+Xbox fiber records and TLS, native exceptions, saved guest registers,
+stack lifetime and switching semantics will require further work and
+real-game tests. It is also not a graphics backend or an APK.
