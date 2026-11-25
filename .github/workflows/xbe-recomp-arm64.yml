@@ -41,6 +41,10 @@ jobs:
             native/xbox_fiber_scheduler.cpp native/native_fiber.cpp native/aarch64_context.S \
             -o "$RUNNER_TEMP/hulk-fiber-dispatcher-arm64"
           qemu-aarch64 "$RUNNER_TEMP/hulk-fiber-dispatcher-arm64"
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -static \
+            -I native native/test_xbox_guest_fiber_state.cpp \
+            -o "$RUNNER_TEMP/hulk-guest-fiber-registers-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/hulk-guest-fiber-registers-arm64"
           ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           "$ndk/aarch64-linux-android29-clang++" -fPIC -shared \
             -Wl,-z,defs -Wl,-z,max-page-size=16384 \
@@ -56,6 +60,11 @@ jobs:
             -I native native/xbox_fiber_scheduler.cpp native/native_fiber.cpp \
             native/aarch64_context.S -o "$RUNNER_TEMP/libhulkpocket-fiber-dispatcher-android.so"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-fiber-dispatcher-android.so" | grep -q AArch64
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
+            -Wall -Wextra -Werror -I native \
+            -c native/test_xbox_guest_fiber_state.cpp \
+            -o "$RUNNER_TEMP/hulk-guest-fiber-registers-android.o"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-guest-fiber-registers-android.o" | grep -q AArch64
           echo "ARM64 fiber context switching passed suspend/resume under QEMU and linked with Android NDK." >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout playable Windows port as build input
         run: |
