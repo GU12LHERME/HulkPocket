@@ -166,6 +166,44 @@ jobs:
           # prints bytes from the private user-provided executable.
           diagnostic_help=$("$RUNNER_TEMP/hulk-xbe-local-diagnostic" 2>&1 || :)
           printf '%s\n' "$diagnostic_help" | grep -q 'usage: hulk_xbe_local_diagnostic'
+          python3 - "$RUNNER_TEMP/synthetic-private-xbe.bin" <<'PY'
+          import struct
+          import sys
+          data = bytearray(0x800)
+          data[:4] = b"XBEH"
+          base = 0x10000
+          def put(offset, value):
+              struct.pack_into("<I", data, offset, value)
+          put(0x104, base)
+          put(0x108, 0x400)
+          put(0x10C, 0x310000)
+          put(0x118, base + 0x180)
+          put(0x11C, 1)
+          put(0x120, base + 0x240)
+          put(0x128, 0x300010 ^ 0xA8FC57AB)
+          put(0x158, 0x300020 ^ 0x5B6D40B6)
+          put(0x188, 0x56550039)
+          put(0x240, 4)
+          put(0x244, 0x300000)
+          put(0x248, 0x1000)
+          put(0x24c, 0x600)
+          put(0x250, 0x100)
+          put(0x650, 0x87654321)
+          with open(sys.argv[1], "wb") as file:
+              file.write(data)
+          PY
+          "$RUNNER_TEMP/hulk-xbe-local-diagnostic" \
+            "$RUNNER_TEMP/synthetic-private-xbe.bin" \
+            "$RUNNER_TEMP/libsynthetic-xbe-memory-host.so" |
+            grep -q 'Module match: PASS'
+          # Reject an unrelated ELF module even though its loading
+          # mechanism is valid and both modules export SDK symbols.
+          if "$RUNNER_TEMP/hulk-xbe-local-diagnostic" \
+            "$RUNNER_TEMP/synthetic-private-xbe.bin" \
+            "$RUNNER_TEMP/libsynthetic-xbe-code-host.so" > /dev/null 2>&1; then
+            echo "XBE compatibility preflight accepted mismatched code entry!" >&2
+            exit 1
+          fi
           ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
