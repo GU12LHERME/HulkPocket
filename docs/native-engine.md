@@ -210,3 +210,20 @@ The input ISO is only read and the game data stays on the local device.
 This is an extraction and identity check, **not** proof of compatibility with
 Thunderclap-generated IR or bindings. The public CI tests only synthetic
 fixtures and never extracts or distributes game data.
+
+## Binary validation hardening
+
+The local APK packaging gate now inspects ELF shared-library headers, not
+just magic bytes. A candidate engine or FFmpeg library must be a
+little-endian AArch64 ELF64 `ET_DYN` file with complete program headers
+and at least one loadable segment whose file bytes are in bounds.
+Symlinks and truncated files are rejected.
+
+This is a **structural preflight**, not dynamic linker verification or proof
+that SDL3's `SDL_main` symbol exists. The Android loader and the actual
+Retroid Pocket 6 test remain the final checks. The offline tests use
+synthetic ELF fixtures, never game code.
+
+The GitHub connector currently cannot enumerate recent workflow runs for
+this repository, so the dependency workflows and these new tests remain
+unverified until their specific run results are inspected.
