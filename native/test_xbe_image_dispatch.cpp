@@ -1,4 +1,5 @@
 #include "portable_xbe_image.h"
+#include "hulk_xbe_preflight.h"
 #include "xbox_guest_address_space.h"
 #include "xbe_image_memory_loader.h"
 #include <cstdint>
@@ -39,6 +40,18 @@ int main(int argc,char** argv) {
     hulkpocket::PortableXbeImage module(argv[1]);
     if(loaded.entry!=module.Entry() || loaded.title_id!=0x56550039u ||
        !mem.IsCommitted(0x300050,4))return 2;
+    auto preflight=hulkpocket::CheckHulkXbePreflight(loaded,module);
+    if(!preflight.ReadyForGuestCall() ||
+       preflight.region_candidate!="unknown" || !preflight.failure.empty())
+        return 4;
+    auto wrong_title=loaded;
+    wrong_title.title_id=0xDEADBEEFu;
+    if(hulkpocket::CheckHulkXbePreflight(wrong_title,module).ReadyForGuestCall())
+        return 5;
+    auto wrong_entry=loaded;
+    wrong_entry.entry=0x300020;
+    if(hulkpocket::CheckHulkXbePreflight(wrong_entry,module).ReadyForGuestCall())
+        return 6;
     auto dispatch=module.CreateDispatcher();
     X86Context ctx{};
     ctx.ecx=0x300050;
