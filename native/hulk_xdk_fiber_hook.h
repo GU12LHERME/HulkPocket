@@ -1,5 +1,6 @@
 #pragma once
 #include "xbe_sdk_fiber_adapter.h"
+#include "xbe_guest_fiber_bootstrap.h"
 #include <cstdint>
 #include <stdexcept>
 
@@ -38,7 +39,8 @@ inline constexpr HulkXdkFiberLayout kHulkUsaFiberLayout{
 template <typename Read32, typename Write32>
 XboxGuestFiberSwap HulkXdkSwitchToFiber(
     XboxFiberScheduler& scheduler, X86Context& ctx,
-    HulkXdkFiberLayout layout, Read32&& read32, Write32&& write32) {
+    HulkXdkFiberLayout layout, Read32&& read32, Write32&& write32,
+    XbeGuestFiberBootstrap* bootstrap = nullptr) {
     if (!layout.fiber_tls_index_va || !layout.switch_to_fiber_va ||
         !layout.bootstrap_va)
         throw std::invalid_argument("unconfigured Hulk region");
@@ -66,9 +68,11 @@ XboxGuestFiberSwap HulkXdkSwitchToFiber(
         const std::uint32_t initial_entry = read32(saved + 20);
         if (initial_entry != layout.bootstrap_va)
             throw std::logic_error("unsupported Xbox fiber continuation");
-        // Do not silently create a dummy fiber: the host must provide
-        // a native trampoline that invokes x86_icall on this context.
-        throw std::logic_error("new guest fiber requires native game trampoline");
+        // Real guest-code trampoline receives the verified XDK entry
+        // and invokes the SDK's x86_icall on a fresh ARM64 native stack.
+        if (!bootstrap)
+            throw std::logic_error("new guest fiber requires native game trampoline");
+        bootstrap->Register(next, initial_entry);
     }
     XbeSdkFiberAdapter bridge(scheduler, ctx);
     return bridge.SwitchTo(next, tls, read32, write32);
