@@ -207,4 +207,11 @@ jobs:
           grep -q hulkpocket_game_code_probe "$RUNNER_TEMP/game-symbols.txt"
           echo "Compiled real platform-independent Hulk Recompiled game logic and RCF archive code as Android ARM64 shared library." >> "$GITHUB_STEP_SUMMARY"
           echo "This is a game-source portability test, not a complete engine or playable APK." >> "$GITHUB_STEP_SUMMARY"
+      - name: Export experimental ARM64 runtime library
+        uses: actions/upload-artifact@v4
+        with:
+          name: hulkpocket-portable-xbe-runtime-arm64
+          path: ${{ runner.temp }}/libhulkpocket-portable-xbe-dispatch.so
+          if-no-files-found: error
+          retention-days: 7
       # Do not distribute upstream binaries, copyrighted assets, or recompiled game image.
