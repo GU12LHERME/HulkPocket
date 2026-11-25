@@ -45,7 +45,9 @@ jobs:
           cat > "$RUNNER_TEMP/sdl-link-smoke.cpp" <<'CPP'
           #include <SDL3/SDL.h>
           extern "C" int hulkpocket_sdl_link_smoke() {
-              return SDL_GetVersion() >= SDL_VERSIONNUM(3, 0, 0) ? 1 : 0;
+              bool initialized = SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO);
+              if (initialized) SDL_Quit();
+              return initialized ? 1 : 0;
           }
           CPP
           ndkbin="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
