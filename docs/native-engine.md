@@ -242,3 +242,19 @@ native unbound symbols, link `libmain.so`, or provide an APK. It is a
 separate dependency smoke test to detect Android compiler and host glue
 integration regressions. The result requires an actual GitHub Actions
 success before it can be considered validated.
+
+## Real-engine prerequisite check (November 2026)
+
+The native-engine build gate now requires Thunderclap's actual
+`<snapshot>/snap/manifest.json` rather than accepting an arbitrary
+empty `snap/` directory. It also requires its upstream native CRT table.
+An empty or unreadable snapshot manifest is rejected, with an offline
+regression test. This mirrors the upstream `native_elf.py compile`
+requirement: the compiler reads `cp.SNAP/manifest.json` before compiling
+any translated game unit.
+
+The Android native host CI passing only proves six host glue objects can
+compile. It does not produce the game-derived clang-probe snapshot, data
+translation units or Wine bindings map. The upstream native image still
+has unresolved 64-bit game functions after linking with stubs; a successful
+link must not be represented as a playable port.
