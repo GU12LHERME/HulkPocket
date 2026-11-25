@@ -1,0 +1,38 @@
+name: Thunderclap native Android host glue smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/thunderclap-host.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install ARM64 Android NDK
+        run: sdkmanager 'ndk;28.2.13676358'
+      - name: Clone Thunderclap for isolated host compilation
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/matthewfcarlson/thunderclap.git "$RUNNER_TEMP/thunderclap"
+          git -C "$RUNNER_TEMP/thunderclap" rev-parse HEAD
+      - name: Compile upstream native host objects for Android ARM64
+        working-directory: ${{ runner.temp }}/thunderclap
+        run: |
+          set -euo pipefail
+          export HULK_NDK="$ANDROID_HOME/ndk/28.2.13676358"
+          python3 tools/native_elf.py host --target android-arm64 "$RUNNER_TEMP/hulk-host" | tee "$RUNNER_TEMP/host-report.txt"
+          find "$RUNNER_TEMP/hulk-host" -maxdepth 1 -name '*.o' -type f -size +0c | sort | tee "$RUNNER_TEMP/host-objects.txt"
+          test -s "$RUNNER_TEMP/host-objects.txt"
+          readelf -h "$(head -n1 "$RUNNER_TEMP/host-objects.txt")" | grep -q AArch64
+          printf 'Thunderclap Android ARM64 host C++ objects compiled successfully.\n' >> "$GITHUB_STEP_SUMMARY"
+      # Engine/game-derived objects and binaries are intentionally not built or uploaded.
