@@ -187,3 +187,26 @@ Note: The current Thunderclap FFmpeg Android build contains a static dav1d
 dependency in libavcodec, and libswresample is a required fourth shared
 library. The local packaging tool uses the upstream packager, which includes
 all *.so files from the selected FFmpeg prefix.
+
+## Preparing the player's disc locally
+
+The Thunderclap engine expects an **extracted original Xbox disc directory**,
+not the ISO URI understood by the HulkPocket 0.2.0 diagnostic app.
+
+To avoid uploading a disc to a public repository or workflow, HulkPocket
+provides a local preparation command. Install the `xdvdfs` command-line tool
+(as described in Thunderclap's README) and run:
+
+```sh
+python3 tools/prepare_disc.py /path/to/owned-hulk.iso /path/to/new-hulk-data
+```
+
+The destination **must not already exist**. The tool invokes the upstream-
+recommended `xdvdfs unpack` command, verifies `default.xbe` against the
+exact SHA-256 and size tested on RP6, and renames the temporary directory to
+the destination only after verification. An error leaves no partial destination.
+The input ISO is only read and the game data stays on the local device.
+
+This is an extraction and identity check, **not** proof of compatibility with
+Thunderclap-generated IR or bindings. The public CI tests only synthetic
+fixtures and never extracts or distributes game data.
