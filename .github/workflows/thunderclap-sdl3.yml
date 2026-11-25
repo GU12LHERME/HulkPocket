@@ -36,6 +36,12 @@ jobs:
           python3 tools/native_android_sdl.py --config app --jobs 2
           test -s build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
           test -f build/third_party/out/sdl-android-arm64-app/include/SDL3/SDL.h
-          sha256sum build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
+          lib=build/third_party/out/sdl-android-arm64-app/lib/libSDL3.a
+          ar="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+          "$ar" t "$lib" | grep -q '\.o
+          echo 'SDL3 Android ARM64 app library compiled successfully.' >> "$GITHUB_STEP_SUMMARY"
+      # No upstream/game-derived binaries are published as public artifacts.
+
+          sha256sum "$lib"
           echo 'SDL3 Android ARM64 app library compiled successfully.' >> "$GITHUB_STEP_SUMMARY"
       # No upstream/game-derived binaries are published as public artifacts.
