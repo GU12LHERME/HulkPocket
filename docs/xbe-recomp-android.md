@@ -301,3 +301,32 @@ fix**, not progress on the still unimplemented Android graphics or
 guest-code launch trampoline. Follow-up workflow
 [45715778455](https://github.com/GU12LHERME/HulkPocket/actions/runs/45715778455)
 must pass before the fix is considered validated.
+
+## Lazy XDK fiber bootstrap: first guest code invocation boundary
+
+`native/xbe_guest_fiber_bootstrap.h` owns a native ARM64 stack
+for each newly discovered XDK fiber record and stores its stable guest
+entry address. After the Hulk-specific XDK TLS chain and expected
+region's bootstrap address have been validated,
+`HulkXdkSwitchToFiber` can register a new fiber through a
+`XbeGuestFiberBootstrap` instance; the native-stack entry calls the
+provided `GuestCall(X86Context&, uint8_t*, uint32_t)`. The intended
+production binding is XboxXBERecomp's real `x86_icall`, on the
+original guest context and memory base.
+
+`native/test_hulk_xdk_fiber_bootstrap.cpp` tests registration while
+an existing ARM64 guest fiber is running, A → new B → A → B native
+stack switching, and checks that B's initial entry receives the
+region-correct XDK bootstrap address and shared SDK context. The
+test uses a **mock guest-call callback and synthetic guest memory**,
+not the game's XBE, and it flags unexpected bootstrap return. If
+the guest-code entry returns, production must trap/terminate the
+thread: there is no safe implicit continuation to a previously
+suspended fiber. CI cross-compiles the test using the Android NDK
+and runs the Linux ARM64 binary under QEMU.
+
+**Still missing:** the actual game hook registration and root-fiber
+conversion on its current kernel thread, callback binding to the
+recompiled game's `x86_icall`, kernel boot and Xbox resource
+services, graphics and audio rendering. The test added in
+commit `c00cfc8` is not yet verified on GitHub Actions.
