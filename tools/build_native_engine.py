@@ -29,6 +29,7 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
         "ffmpeg_avcodec": (ffmpeg / "lib/libavcodec.so").is_file(),
         "ffmpeg_avformat": (ffmpeg / "lib/libavformat.so").is_file(),
         "ffmpeg_avutil": (ffmpeg / "lib/libavutil.so").is_file(),
+        "ffmpeg_swresample": (ffmpeg / "lib/libswresample.so").is_file(),
     }
     if checks["generated_bindings"]:
         try:
