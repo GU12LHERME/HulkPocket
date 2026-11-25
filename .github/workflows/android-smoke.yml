@@ -1,0 +1,26 @@
+name: Android ARM64 smoke
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install NDK
+        run: sdkmanager 'ndk;28.2.13676358'
+      - name: Compile and inspect ARM64 ELF
+        run: |
+          set -eu
+          TOOL="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p build
+          "$TOOL/aarch64-linux-android24-clang++" -std=c++17 -O2 -Wall -Wextra -Werror native/smoke.cpp -o build/hulkpocket-smoke
+          "$TOOL/llvm-readelf" -h build/hulkpocket-smoke | tee build/elf.txt
+          grep -q AArch64 build/elf.txt
+          grep -q ELF64 build/elf.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-smoke
+          path: build/
