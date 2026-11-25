@@ -79,3 +79,30 @@ internos do projeto; revise o relatório antes de compartilhá-lo.
 recompilação para ELF, memória e kernel completos, hooks de jogo,
 dispositivos gráficos, áudio, controles, inicialização de threads
 e validação no RP6.
+
+## 4. Diagnóstico no Android ARM64 (Retroid Pocket 6)
+
+O GitHub Actions também compila
+`hulk-xbe-local-diagnostic-android-arm64`, um **executável CLI** para
+Android (não um APK). A validação de memória de 4 GiB no QEMU/Linux
+**não garante** que a reserva funcione no Android do RP6.
+
+Um teste opcional por ADB com o próprio XBE:
+
+```bash
+adb push hulk-xbe-local-diagnostic-android-arm64 /data/local/tmp/hulk-xbe-check
+adb push /caminho/local/default.xbe /data/local/tmp/hulk-own.xbe
+adb shell chmod 755 /data/local/tmp/hulk-xbe-check
+adb shell /data/local/tmp/hulk-xbe-check /data/local/tmp/hulk-own.xbe
+adb shell rm /data/local/tmp/hulk-own.xbe /data/local/tmp/hulk-xbe-check
+```
+
+O comando não renderiza nem executa o Hulk. Ele verifica a imagem e
+sua alocação de memória no Android real. O XBE pessoal é copiado
+temporariamente para o dispositivo pelo próprio usuário, **nunca**
+para o repositório. Não envie os arquivos de jogo junto dos logs.
+
+Em alguns dispositivos a reserva de 4 GiB pode falhar por restrições
+de endereçamento, memória virtual ou ambiente de execução. Nesse
+caso, o diagnóstico deve retornar uma mensagem de erro, não afirmar
+que o motor funciona.
