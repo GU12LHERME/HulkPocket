@@ -99,6 +99,7 @@ python3 tools/build_native_engine.py \
   --ndk /path/to/android-ndk \
   --sdl /path/to/sdl-android-arm64-app \
   --ffmpeg /path/to/ffmpeg-android-arm64/install \
+  --xbe /path/to/extracted/default.xbe \
   --out build/native-android-arm64 \
   --apk build/engine/hulk.apk
 ```
