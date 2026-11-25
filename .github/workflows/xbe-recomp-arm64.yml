@@ -328,6 +328,18 @@ jobs:
           "$RUNNER_TEMP/run-recompiled-xbe-opcodes-host" \
             "$RUNNER_TEMP/xbe-original-machine-code/synthetic.xbe" \
             "$RUNNER_TEMP/libsynthetic-recompiled-opcodes-host.so"
+          # QEMU executes machine code compiled for AArch64, not x86.
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -static -pthread \
+            -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
+            -I native -I "$RUNNER_TEMP/xbe-recompiled-real-opcodes" \
+            native/test_recompiled_xbe_arm64.cpp \
+            native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
+            native/portable_xbe_dispatch.cpp \
+            "$RUNNER_TEMP/xbe-recompiled-real-opcodes/x86_func_mapping.cpp" \
+            "$RUNNER_TEMP/xbe-recompiled-real-opcodes/x86_recomp.0.cpp" \
+            -o "$RUNNER_TEMP/execute-real-recompiled-xbe-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/execute-real-recompiled-xbe-arm64" \
+            "$RUNNER_TEMP/xbe-original-machine-code/synthetic.xbe"
           echo "Official XBE compiler decoded real synthetic x86 instructions and linked generated C++ into Android ARM64 ELF." >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare SDK-generated Xbox C++ for Android ELF and verify exports
         run: |
