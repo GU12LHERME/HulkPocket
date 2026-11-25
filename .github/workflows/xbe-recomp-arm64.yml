@@ -205,6 +205,13 @@ jobs:
               {0, nullptr},
           };
           const uint32_t X86Continuations[] = {0};
+          // Exercise the SDK's Windows /alternatename/ replacement
+          // with the Android ELF weak alias for an absent function.
+          X86_FUNC(__imp__sub_00300030) {
+              (void)base;
+              ctx.eax = 0x30;
+          }
+          X86_WEAK_FUNC(sub_00300030, __imp__sub_00300030)
           CPP
           python3 tools/prepare_xbe_elf.py \
             --sdk "$RUNNER_TEMP/xbe-sdk" --generated "$gen" \
