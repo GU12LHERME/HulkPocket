@@ -9,8 +9,9 @@ thread_local const PortableXbeDispatch* active_dispatch = nullptr;
 
 PortableXbeDispatch::PortableXbeDispatch(
     const X86FuncMapping* mappings, std::size_t count,
-    std::uint32_t code_lo, std::uint32_t code_hi)
-    : owner_(std::this_thread::get_id()), lo_(code_lo), hi_(code_hi) {
+    std::uint32_t code_lo, std::uint32_t code_hi, KernelCall kernel)
+    : owner_(std::this_thread::get_id()), lo_(code_lo), hi_(code_hi),
+      kernel_(kernel) {
     if (!code_lo || code_hi <= code_lo || (count && !mappings))
         throw std::invalid_argument("invalid Xbox code mapping");
     if (count > 1000000)
@@ -44,6 +45,19 @@ void PortableXbeDispatch::Call(
     if (std::this_thread::get_id() != owner_)
         throw std::logic_error("Xbox guest dispatch called from foreign host thread");
     if (!base) throw std::invalid_argument("null Xbox guest memory base");
+    // XboxXBERecomp dispatch.cpp reserves FE000000+ordinal*4 for
+    // Xbox kernel imports. The portable runtime supplies the kernel
+    // implementation separately from the recompiled game mappings.
+    constexpr std::uint32_t kernel_base = 0xFE000000;
+    constexpr std::uint32_t kernel_entries = 400;
+    if (target >= kernel_base &&
+        target < kernel_base + kernel_entries * 4) {
+        if (!kernel_ || (target - kernel_base) % 4)
+            throw std::out_of_range("unimplemented Xbox kernel thunk");
+        ctx.last_icall = target;
+        kernel_(ctx, base, (target - kernel_base) / 4);
+        return;
+    }
     const auto it = std::lower_bound(
         mappings_.begin(), mappings_.end(), target,
         [](const X86FuncMapping& m, std::uint32_t v) { return m.guest < v; });
