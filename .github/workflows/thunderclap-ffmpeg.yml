@@ -1,0 +1,55 @@
+name: Thunderclap Android FFmpeg dependency smoke
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/thunderclap-ffmpeg.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: thunderclap-ffmpeg-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ffmpeg-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install Android NDK
+        run: sdkmanager 'ndk;28.2.13676358'
+      - name: Host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang make ninja-build pkg-config xz-utils
+          python3 -m venv "$RUNNER_TEMP/ffmpeg-venv"
+          "$RUNNER_TEMP/ffmpeg-venv/bin/python" -m pip install --disable-pip-version-check meson pkgconf
+      - name: Checkout Thunderclap to temporary directory
+        run: |
+          git clone --depth 1 https://github.com/matthewfcarlson/thunderclap.git "$RUNNER_TEMP/thunderclap"
+          git -C "$RUNNER_TEMP/thunderclap" rev-parse HEAD | tee "$RUNNER_TEMP/upstream-sha.txt"
+      - name: Build FFmpeg and dav1d for Android ARM64
+        working-directory: ${{ runner.temp }}/thunderclap
+        env:
+          HULK_NDK: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+        run: |
+          set -euo pipefail
+          export HULK_NDK="$ANDROID_HOME/ndk/28.2.13676358"
+          "$RUNNER_TEMP/ffmpeg-venv/bin/python" tools/wine_ffmpeg.py build --target android-arm64
+          prefix="build/third_party/out/ffmpeg-android-arm64/install/lib"
+          llvm_readelf="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
+          for lib in libavcodec.so libavformat.so libavutil.so libswresample.so; do
+            test -s "$prefix/$lib"
+            "$llvm_readelf" -h "$prefix/$lib" | grep -q AArch64
+            "$llvm_readelf" -h "$prefix/$lib" | grep -q ELF64
+          done
+          test -s build/third_party/out/LICENSES-DAV1D.txt
+          "$llvm_readelf" -h "$prefix/libavcodec.so" | tee "$RUNNER_TEMP/ffmpeg-elf.txt"
+          printf 'FFmpeg and dav1d Android ARM64 shared libraries compiled and inspected.\n' >> "$GITHUB_STEP_SUMMARY"
+      # Never upload game code, game data, or upstream binaries to public artifacts.
