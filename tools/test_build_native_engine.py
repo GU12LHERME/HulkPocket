@@ -52,7 +52,7 @@ class BuildNativeEngineTests(unittest.TestCase):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.touch()
             bindings = r / "bindings.json"
-            bindings.write_text('{"test":true}')
+            bindings.write_text('{"bindings":{"FUN_00010000":{"addr":"0x00010000","how":["reloc"]}}}')
             checks, env, cmds, _, _ = mod.make_plan(
                 upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
             )
@@ -77,6 +77,11 @@ class BuildNativeEngineTests(unittest.TestCase):
                 upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
             )
             self.assertFalse(checks["generated_bindings"])
+            bindings.write_text('{"bindings":{"FUN_00010000":{"addr":"0x00010000","how":["reloc"]}}}')
+            checks, _, _, _, _ = mod.make_plan(
+                upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
+            )
+            self.assertTrue(checks["generated_bindings"])
 
 if __name__ == "__main__":
     unittest.main()
