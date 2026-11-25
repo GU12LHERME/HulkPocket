@@ -229,3 +229,30 @@ synthetic game memory; it is still not wired into the XboxXBE-Recomp
 SDK, its `X86Context`, real XBE executable, or graphics engine.
 The workflow triggered by the bridge commit must pass before claiming
 successful verification.
+
+## Actual XboxXBERecomp SDK X86Context integration gate
+
+`native/xbe_sdk_fiber_adapter.h` now includes the **real**
+`cpu/x86_context.h` from
+[TGP482/XboxXBERecomp](https://github.com/TGP482/XboxXBERecomp)
+(the upstream GitHub repository's current canonical name). The adapter
+reads the SDK's x86 register fields and guest `fs_base`, applies
+the XDK 5849 guest memory save/restore, writes the resulting state
+back into the same `X86Context`, then switches to the corresponding
+native AArch64 stack. Crucially it does **not** overwrite the shared
+context with a stale copy when a suspended C++ continuation resumes.
+
+A regression test runs two host fiber continuations A→B→A→B against
+a synthetic checked guest address space while asserting actual SDK
+register, TLS and SEH values. The workflow clones the public SDK,
+compiles this exact integration source with the Android ARM64 NDK,
+and executes the Linux AArch64 integration test under QEMU.
+
+The **next production blocker** is wiring this adapter to the
+actual `X86_FUNC(HULK_SUB_SWITCH_TO_FIBER)` hook and implementing the
+host runtime with Android-compatible services. In particular, the
+upstream SDK CMake script explicitly links Windows PE/DLL import
+libraries and `d3d12`, `xaudio2`, `dxgi` and Win32 GUI backends;
+its unmodified CMake project cannot build a playable Android ELF.
+A successful integration test is not game initialization or a
+rendered frame. This checkpoint is awaiting its GitHub Actions run.
