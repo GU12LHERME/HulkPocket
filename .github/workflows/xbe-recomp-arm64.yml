@@ -313,7 +313,8 @@ jobs:
           # instructions on the Linux host through the same SDK
           # guest function dispatch used by the Android runtime.
           clang++ -std=c++20 -O2 -fPIC -shared \
-            -Wall -Wextra -Werror -Wl,-z,defs \
+            -Wall -Wextra -Werror -Wno-unused-parameter \
+            -Wno-unused-variable -Wl,-z,defs \
             -I "$RUNNER_TEMP/xbe-recompiled-real-opcodes" \
             "$RUNNER_TEMP/xbe-recompiled-real-opcodes/x86_func_mapping.cpp" \
             "$RUNNER_TEMP/xbe-recompiled-real-opcodes/x86_recomp.0.cpp" \
