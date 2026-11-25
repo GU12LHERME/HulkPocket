@@ -160,3 +160,28 @@ The wrapper is **not yet connected to the game**: mapping the game's
 Xbox fiber records and TLS, native exceptions, saved guest registers,
 stack lifetime and switching semantics will require further work and
 real-game tests. It is also not a graphics backend or an APK.
+
+## Guest-to-guest Xbox fiber scheduling (prototype)
+
+The new `native/xbox_fiber_scheduler.{h,cpp}` models a central
+dispatcher using distinct guest IDs and separately owned ARM64 stacks.
+A guest calls `SwitchTo(id)`, which suspends the current C++ stack and
+returns control to the host dispatcher. The dispatcher resumes the
+requested guest stack; the caller's `SwitchTo` returns **only after**
+another guest switches back. This approximates an essential semantic
+difference between the original Xbox/Windows fiber API and a trivial
+callback loop.
+
+`test_xbox_fiber_scheduler.cpp` exercises an interleaved
+A → B → A → B → A sequence, then resumes the suspended B stack;
+it also rejects duplicate IDs and starting a completed fiber.
+GitHub Actions cross-compiles the dispatcher as a real Android ARM64
+shared library and executes its Linux ARM64 test under QEMU.
+
+**Verification pending:** a workflow run is required to confirm that
+these new tests build and pass. This is a host-side foundation, not an
+Xbox XBE execution engine. It does not yet manipulate the original
+guest TLS, XBE fiber records, Xbox register save/restore, or
+XboxXBE-Recomp's Win32 fiber hooks. Graphics, kernel services,
+and game bootstrap remain unported. Do not claim playable APK output
+from successful dispatcher tests.
