@@ -258,7 +258,8 @@ jobs:
           # This is NOT an APK, does not ship game code, and never executes
           # the original Xbox entry point.
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 \
-            -Wall -Wextra -Werror -Wl,-z,max-page-size=16384 \
+            -Wall -Wextra -Werror -static-libstdc++ \
+            -Wl,-z,max-page-size=16384 \
             -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp \
             native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
