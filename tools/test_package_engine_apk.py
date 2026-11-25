@@ -20,6 +20,7 @@ def arm64_elf(path: Path):
     struct.pack_into("<HHI", h, 16, 3, 183, 1)
     struct.pack_into("<Q", h, 32, 64)
     struct.pack_into("<HHH", h, 52, 64, 56, 1)
+    struct.pack_into("<IIQQQQQQ", h, 64, 1, 4, 0, 0, 0, 120, 120, 4096)
     path.write_bytes(h)
 
 
