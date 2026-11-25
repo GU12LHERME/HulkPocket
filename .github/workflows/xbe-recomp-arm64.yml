@@ -230,7 +230,9 @@ jobs:
             -o "$RUNNER_TEMP/libprepared-xbe-code-android.so"
           "$bin/llvm-readelf" -h "$RUNNER_TEMP/libprepared-xbe-code-android.so" | grep -q AArch64
           "$bin/llvm-nm" -D "$RUNNER_TEMP/libprepared-xbe-code-android.so" |
-            grep -q ' X86FuncMappings
+            grep 'X86FuncMappings'
+          echo "Verified generated-style C++ as an exported Android ARM64 ELF module (synthetic game code)." >> "$GITHUB_STEP_SUMMARY"
+      - name: Checkout playable Windows port as build input
         run: |
           set -euo pipefail
           git clone --depth 1 https://github.com/lookingcoding/hulk-ultimate-destruction-recomp-xbox-ver-.git "$RUNNER_TEMP/hulk-recompiled"
