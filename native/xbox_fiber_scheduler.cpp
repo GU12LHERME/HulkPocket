@@ -13,7 +13,10 @@ void XboxFiberScheduler::CheckOwner() const {
 }
 void XboxFiberScheduler::Create(std::uint32_t id, Entry entry, void* user, std::size_t stack_bytes) {
     CheckOwner();
-    if (dispatching_ || id == 0 || fibers_.count(id))
+    // XDK CreateFiber occurs while another fiber is running. Allow a
+    // newly initialized guest native stack to be registered from that
+    // same active execution, but never from an unrelated thread.
+    if ((dispatching_ && current_ == 0) || id == 0 || fibers_.count(id))
         throw std::logic_error("invalid or duplicate guest fiber id");
     auto fiber = std::make_unique<NativeFiber>(entry, user, stack_bytes);
     fibers_.emplace(id, std::move(fiber));
