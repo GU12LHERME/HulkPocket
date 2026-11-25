@@ -13,6 +13,8 @@ jobs:
         run: python3 -m unittest discover -s tools -p 'test_xiso.py' -v
       - name: Test native engine packaging gate
         run: python3 -m unittest discover -s tools -p 'test_package_engine_apk.py' -v
+      - name: Test native compile and link orchestration
+        run: python3 -m unittest discover -s tools -p 'test_build_native_engine.py' -v
       - name: Install NDK
         run: |
           set -eu
