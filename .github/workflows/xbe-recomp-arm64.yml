@@ -5,8 +5,7 @@ on:
     paths:
       - '.github/workflows/xbe-recomp-arm64.yml'
       - 'native/**'
-      - 'tools/xbe_info.py'
-      - 'tools/test_xbe_info.py'
+      - 'tools/**'
 permissions:
   contents: read
 
@@ -231,6 +230,15 @@ jobs:
           "$bin/llvm-readelf" -h "$RUNNER_TEMP/libprepared-xbe-code-android.so" | grep -q AArch64
           "$bin/llvm-nm" -D "$RUNNER_TEMP/libprepared-xbe-code-android.so" |
             grep 'X86FuncMappings'
+          # Full reusable local build command. Compiles each generated
+          # partition independently and refuses unresolved host imports.
+          python3 tools/build_xbe_android.py \
+            --sdk "$RUNNER_TEMP/xbe-sdk" \
+            --generated "$gen" \
+            --ndk-bin "$bin" \
+            --output "$RUNNER_TEMP/libprepared-xbe-code-local-build.so"
+          "$bin/llvm-nm" -D "$RUNNER_TEMP/libprepared-xbe-code-local-build.so" |
+            grep 'X86EntryPoint'
           echo "Verified generated-style C++ as an exported Android ARM64 ELF module (synthetic game code)." >> "$GITHUB_STEP_SUMMARY"
       - name: Checkout playable Windows port as build input
         run: |
