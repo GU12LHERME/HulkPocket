@@ -293,3 +293,18 @@ path-traversing entries are rejected before compilation begins.
 These checks ensure expected build inputs are structurally present,
 not that their game version or the bindings map matches the player's XBE.
 No snapshot or game-derived code is uploaded into GitHub Actions.
+
+## Native multimedia linker smoke
+
+The `thunderclap-ffmpeg.yml` dependency CI now compiles a tiny Android
+ARM64 shared library against FFmpeg's actual headers and
+`libavformat`, `libavcodec`, `libavutil`, and `libswresample`.
+It references the Bink decoder API and each library's version symbol;
+`-Wl,-z,defs` rejects unresolved direct references. The output is
+verified as ELF64/AArch64 with a dynamic NEEDED entry. It contains no
+game code or media. This guards against a dependency set that has ELF
+headers but cannot link together. It does not decode an actual movie,
+run on a device, or compile the full game engine.
+
+The new link smoke remains **pending GitHub Actions verification** until
+the corresponding workflow run succeeds.
