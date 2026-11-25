@@ -125,3 +125,22 @@ Title ID / SHA-256 do not establish identity with Thunderclap's build input.
 A public Actions workflow must not be made to download copyrighted disc
 contents or publish the generated game binary. Do not conflate the isolated
 native SDL APK with the tested HulkPocket diagnostic application.
+
+## Executable identity gate (RP6 test)
+
+The original diagnostic on the Retroid Pocket 6 identified Xbox Title ID
+`56550039` and XBE SHA-256
+`4f233ee49f8e675d88ed54075ad4e270387798435e7a3f4a66836d0ec0e768ee`
+(5,197,824 bytes).
+
+`tools/check_game_version.py /path/to/extracted/default.xbe` validates a **local**
+copy against those exact values; no game bytes are sent anywhere.
+`tools/build_native_engine.py --execute` now requires `--xbe
+/path/to/extracted/default.xbe`, and aborts if it differs. A different valid
+revision of the game needs separate compatibility analysis before the
+reference is changed.
+
+This check **does not prove** that Thunderclap's generated clang-probe
+snapshot or binding map was produced from this same XBE. That provenance
+must be established when the upstream build artifacts are generated.
+It also does not solve Thunderclap's missing functions or graphical startup.
