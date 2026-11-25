@@ -1,0 +1,11 @@
+*.iso
+*.xiso
+*.xbe
+*.chd
+*.apk
+/build/
+/isos/
+/game-data/
+/upstream/
+/.gradle/
+/local.properties
