@@ -573,3 +573,40 @@ virtual Xbox section rather than a hand-coded register value.
 This test **does not execute original Hulk recompilation output**;
 it validates the XBE file/guest memory/native code boundaries only.
 The actual game XBE has not been provided or parsed in CI.
+
+## XBE image preflight, ARM64 diagnostic and missing-symbol reports
+
+`native/hulk_xbe_preflight.h/.cpp` checks the original XBE's
+Hulk title ID, guest entry address, and actual presence of
+that guest entry in a trusted recompiled ELF module's SDK-format
+function mapping. Mismatches are rejected **before** the
+`x86_icall` execution path. Known EU/USA entrypoint labels
+are diagnostic candidates only, not proof of full game revision
+compatibility.
+
+`native/hulk_xbe_local_diagnostic.cpp` reads a **local**
+user-supplied XBE and loads validated sections into the 4 GiB
+guest virtual address map. Optionally it compares a trusted
+same-architecture ELF function module. It only prints limited
+header/module metadata and **never executes the Xbox entry**.
+The Android NDK builds a standalone ARM64 CLI for an optional
+physical Retroid Pocket 6 test; see
+[local-xbe-validation.md](local-xbe-validation.md) for details.
+
+`tools/audit_xbe_elf.py` reports undefined C++/guest runtime
+symbols from generated object files, grouped by dispatch,
+kernel/hook and platform categories. `tools/build_xbe_android.py`
+accepts `--audit-output imports.json`; the audit is emitted
+**before** final linking, so its report remains useful when
+`-z defs` rejects unsupported host APIs. Reports do not
+contain game image data, only names of unresolved references.
+
+[GitHub Actions run 45721370579](https://github.com/GU12LHERME/HulkPocket/actions/runs/45721370579)
+**passed**, including the matching/mismatching synthetic XBE
+local diagnostic tests, guest SDK dispatch integration and the
+Android ARM64 builds. It published two asset-free binaries:
+the experimental runtime library and
+[hulkpocket-xbe-preflight-cli-arm64](https://github.com/GU12LHERME/HulkPocket/actions/runs/45721370579/artifacts/15072002870).
+The standalone Android executable has **not yet been run on an
+actual RP6**, so 4 GiB virtual reservation compatibility
+remains unverified on the device.
