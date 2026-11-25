@@ -137,3 +137,36 @@ Os testes automatizados usam um XBE fictício contendo apenas
 `mov eax, 0x12345678; ret`, sem código comercial. Assim é
 possível verificar a ferramenta de recompilação inteira e a
 geração ARM64 em GitHub Actions, sem publicar arquivos de jogo.
+
+## 6. Teste original de instruções x86 recompiladas (sem Hulk)
+
+`tools/create_synthetic_xbe_recompile.py` cria um XBE **original e
+sintético**, contendo somente as instruções x86:
+`mov eax, 0x12345678; ret`. Não há dados comerciais do Hulk.
+
+O workflow `xbe-recomp-arm64.yml` usa o **recompilador real**
+`xbe_recomp_host` para traduzir esses bytes, passa o C++ gerado
+pela preparação ELF e compila o resultado como módulo ARM64.
+Também contém um teste Linux que carrega as seções do XBE,
+despacha a função recompilada e confirma o valor retornado em
+`X86Context.eax`. O teste nativo ARM64/QEMU e o executável
+Android ARM64 foram adicionados, mas precisam passar no CI.
+
+Quando publicado, o artefato
+`hulkpocket-genuine-x86-opcodes-arm64-smoke` deverá conter um
+**executável Android e o XBE de teste sintético**, para execução
+opcional por ADB no RP6, sem precisar do jogo comercial:
+
+```bash
+adb push hulk-synthetic-xbe-opcodes-android-arm64 /data/local/tmp/hulk-x86-smoke
+adb push synthetic.xbe /data/local/tmp/hulk-test.xbe
+adb shell chmod 755 /data/local/tmp/hulk-x86-smoke
+adb shell /data/local/tmp/hulk-x86-smoke /data/local/tmp/hulk-test.xbe
+adb shell rm /data/local/tmp/hulk-x86-smoke /data/local/tmp/hulk-test.xbe
+```
+
+O teste deve confirmar que **código originalmente x86, recompilado
+pela ferramenta oficial e compilado em ARM64**, é executado com
+a memória virtual Xbox no dispositivo. Ele não renderiza gráficos,
+não usa o Hulk e não demonstra que os serviços Xbox necessários
+ao jogo estão implementados.
