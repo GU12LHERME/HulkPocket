@@ -286,3 +286,18 @@ implemented before this can replace the live Hulk
 is executed in this test, and this does not implement graphics,
 audio or an Android gameplay APK. The new workflow must pass
 before this checkpoint is considered validated.
+
+## CI upstream API drift (2026-11-25)
+
+Run [45715461264](https://github.com/GU12LHERME/HulkPocket/actions/runs/45715461264)
+passed all guest/host fiber, native AArch64, SDK X86Context and
+Hulk-specific TLS-chain tests, but failed in the final upstream
+game logic probe because upstream Hulk Recompiled at
+`6603e8a4021a06331f63310ce47b42315d9dbfc6` no longer includes
+`src/common/actor_owner_guard.h`. The workflow now tests supported
+simulation clock, RCF alignment and case-insensitive path handling
+without depending on the removed header. This is a **test compatibility
+fix**, not progress on the still unimplemented Android graphics or
+guest-code launch trampoline. Follow-up workflow
+[45715778455](https://github.com/GU12LHERME/HulkPocket/actions/runs/45715778455)
+must pass before the fix is considered validated.
