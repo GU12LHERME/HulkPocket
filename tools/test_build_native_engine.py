@@ -35,9 +35,11 @@ class BuildNativeEngineTests(unittest.TestCase):
             upstream = r / "thunderclap"
             snap, ndk, sdl, ff = r / "snapshots", r / "ndk", r / "sdl-app", r / "ffmpeg"
             (snap / "snap").mkdir(parents=True)
+            (snap / "snap/manifest.json").write_text('{"test": true}')
             for p in [
                 upstream / "tools/native_elf.py",
                 upstream / "tools/android_apk.py",
+                upstream / "src/platform/sdl/crt/native_crt_table.h",
                 ndk / "toolchains/llvm/prebuilt/linux-x86_64/bin/clang",
                 sdl / "lib/libSDL3.a",
                 *[ff / "lib" / n for n in ("libavcodec.so", "libavformat.so", "libavutil.so", "libswresample.so")],
@@ -53,6 +55,12 @@ class BuildNativeEngineTests(unittest.TestCase):
             self.assertEqual(env["HULK_ANDROID_SDL"], str(sdl))
             self.assertEqual(env["HULK_CLANG_PROBE_DIR"], str(snap))
             self.assertEqual(cmds[0][-1], "4")
+            (snap / "snap/manifest.json").write_text("{}")
+            checks, _, _, _, _ = mod.make_plan(
+                upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
+            )
+            self.assertFalse(checks["generated_snapshot"])
+            (snap / "snap/manifest.json").write_text('{"test": true}')
             bindings.write_text("{}")
             checks, _, _, _, _ = mod.make_plan(
                 upstream, snap, bindings, ndk, sdl, ff, r / "output", r / "output/hulk.apk", 4
