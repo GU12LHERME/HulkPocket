@@ -187,3 +187,22 @@ guest TLS, XBE fiber records, Xbox register save/restore, or
 XboxXBE-Recomp's Win32 fiber hooks. Graphics, kernel services,
 and game bootstrap remain unported. Do not claim playable APK output
 from successful dispatcher tests.
+
+## XDK 5849 guest fiber record adapter
+
+`native/xbox_guest_fiber_state.h` reproduces the *guest-side* x86
+`SwitchToFiber` frame mutation documented by the playable upstream
+Windows implementation: it pushes the guest's EBP/ESI/EDI/EBX and
+`fs:[0]` exception-chain head, stores the guest ESP at fiber-record
+offset `+0x0C`, updates guest TLS at `+0x10`, and restores the
+destination guest's SEH and registers before consuming its entry/return
+address. All accesses go through injected guest-memory read/write
+callbacks, **not** raw pointers into the Android process. Tests use
+synthetic guest memory and verify the return trip A→B→A. CI compiles
+the test for Android ARM64 and executes an ARM64 Linux build under QEMU.
+
+This adapter is still deliberately **separate** from the native
+AArch64 stack dispatcher. Integrating them requires connecting
+XboxXBE-Recomp's X86Context, its real guest TLS and memory mapping,
+and the generated Xbox code. Do not claim game boot or gameplay based
+on these standalone test results. Latest test is pending CI.
