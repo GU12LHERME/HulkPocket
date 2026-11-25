@@ -1,4 +1,4 @@
-#include "cpu/x86_ops.h"
+#include "portable_xbe_cpu_services.h"
 #include "portable_xbe_dispatch.h"
 #include <cstdint>
 #include <cstdio>
