@@ -12,7 +12,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-from package_engine_apk import requirements as package_requirements
 
 def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, jobs):
     checks = {
