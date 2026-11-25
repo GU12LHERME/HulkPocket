@@ -451,3 +451,15 @@ resume. This prevents ordinary unsupported guest operations from
 turning directly into process aborts during early game startup.
 This is not a substitute for Windows SEH/x86 exception
 semantics in game code; those remain separate work.
+
+## Latest verified CI checkpoint — 2026-11-25
+
+[GitHub Actions run 45717478128](https://github.com/GU12LHERME/HulkPocket/actions/runs/45717478128)
+**passed**, including the actual portable `x86_icall` implementation,
+Xbox kernel ordinal bridge, native Android ELF `dlopen` loader,
+synthetic ELF SDK exports, guest fiber bootstrap and safe exception
+propagation under QEMU ARM64. The Android NDK produced a linked
+AArch64 16-KiB-compatible `.so`, published as the
+[experimental runtime artifact](https://github.com/GU12LHERME/HulkPocket/actions/runs/45717478128/artifacts/15069738727).
+The artifact contains **only the infrastructure runtime**; no
+Xbox game assets or recompilation of the Hulk XBE are included.
