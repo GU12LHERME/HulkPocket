@@ -164,3 +164,26 @@ the clang-probe snapshot and binding-map requirements.
 As of adding this workflow, its first GitHub Actions result has **not**
 been independently verified; a passing workflow is required before
 marking the SDL3 build as validated.
+
+## Android FFmpeg/dav1d dependency CI
+
+The isolated `.github/workflows/thunderclap-ffmpeg.yml` workflow now attempts
+an actual Android ARM64 build of the current upstream's multimedia stack:
+
+- Clones Thunderclap into a temporary runner directory (records commit SHA).
+- Installs Android NDK r28c, Clang, Meson, pkgconf and Ninja.
+- Runs upstream `tools/wine_ffmpeg.py build --target android-arm64`.
+- Upstream fetches hash-pinned FFmpeg and dav1d sources and builds dav1d
+  before FFmpeg, with Bink, AV1, Opus and Matroska support.
+- Checks that `libavcodec.so`, `libavformat.so`, `libavutil.so` and
+  `libswresample.so` are nonempty ELF64/AArch64 libraries.
+
+This CI intentionally publishes no FFmpeg or game binary artifacts. It does
+not upload copyrighted disc content or generate the native game engine.
+The first result must pass in GitHub Actions before the dependency is
+considered verified.
+
+Note: The current Thunderclap FFmpeg Android build contains a static dav1d
+dependency in libavcodec, and libswresample is a required fourth shared
+library. The local packaging tool uses the upstream packager, which includes
+all *.so files from the selected FFmpeg prefix.
