@@ -1,5 +1,6 @@
 #include "xbox_fiber_scheduler.h"
 #include <stdexcept>
+#include <exception>
 
 namespace hulkpocket {
 XboxFiberScheduler::XboxFiberScheduler() : owner_(std::this_thread::get_id()) {}
