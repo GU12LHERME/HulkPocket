@@ -106,3 +106,34 @@ Em alguns dispositivos a reserva de 4 GiB pode falhar por restrições
 de endereçamento, memória virtual ou ambiente de execução. Nesse
 caso, o diagnóstico deve retornar uma mensagem de erro, não afirmar
 que o motor funciona.
+
+## 5. Recompilação real em ambiente local (EU/USA)
+
+O projeto agora possui `tools/recompile_hulk_local.py`, que executa
+o **recompilador oficial** sobre o XBE original, selecionando
+automaticamente `config/game.toml` (Europa) ou
+`config/game_usa.toml` (EUA) usando o título e o ponto de entrada.
+Ele valida a identificação antes da recompilação e usa o XDK 5849
+do SDK oficial.
+
+Este processo é privado: o conteúdo de `--generated` contém código
+derivado da sua cópia do jogo e **não deve ser enviado ao GitHub**.
+
+```bash
+python3 tools/recompile_hulk_local.py \
+  --xbe /caminho/privado/default.xbe \
+  --sdk /caminho/XboxXBERecomp \
+  --upstream /caminho/hulk-ultimate-destruction-recomp-xbox-ver- \
+  --recompiler /caminho/xbe_recomp_host \
+  --generated /caminho/privado/generated
+```
+
+Depois, use `tools/build_xbe_android.py` com `--generated`.
+O ELF só será aceito se todos os símbolos requeridos estiverem
+disponíveis. Hoje ainda faltam serviços de kernel, hooks, GPU e
+áudio — **não espere que todo o Hulk compile com sucesso**.
+
+Os testes automatizados usam um XBE fictício contendo apenas
+`mov eax, 0x12345678; ret`, sem código comercial. Assim é
+possível verificar a ferramenta de recompilação inteira e a
+geração ARM64 em GitHub Actions, sem publicar arquivos de jogo.
