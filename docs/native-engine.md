@@ -145,3 +145,22 @@ This check **does not prove** that Thunderclap's generated clang-probe
 snapshot or binding map was produced from this same XBE. That provenance
 must be established when the upstream build artifacts are generated.
 It also does not solve Thunderclap's missing functions or graphical startup.
+
+## Android SDL3 app dependency CI (isolated)
+
+The `.github/workflows/thunderclap-sdl3.yml` workflow checks out the
+upstream Thunderclap project into the GitHub runner's temporary directory,
+fetches SDL3 through the upstream pinned fetcher, and builds
+`libSDL3.a` for Android ARM64 with the upstream
+`native_android_sdl.py --config app` script. The workflow validates
+the resulting static archive and headers and records the upstream commit
+and archive hash in its logs. It deliberately does not upload the upstream
+library or user game files as public artifacts.
+
+This is a genuine build attempt for the Android platform **dependency**,
+not for game code. It does not create an executable game engine or solve
+the clang-probe snapshot and binding-map requirements.
+
+As of adding this workflow, its first GitHub Actions result has **not**
+been independently verified; a passing workflow is required before
+marking the SDL3 build as validated.
