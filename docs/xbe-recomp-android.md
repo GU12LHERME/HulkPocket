@@ -404,3 +404,32 @@ The ARM64 regression exercises ordinal 17 and failure cases.
 This is an **invocation boundary**, not a port of all 400
 Xbox kernel services. Kernel memory, threads, filesystem,
 audio and GPU services remain to be implemented or replaced.
+
+## Android ELF loading as a replacement for Win32 LoadLibraryW
+
+`native/portable_xbe_image.h/.cpp` now implements a native
+`dlopen(RTLD_NOW | RTLD_LOCAL)`/ `dlsym` image loader for
+AArch64/Linux or Android ELF guest-code modules. It validates
+the existing SDK's exported `X86CodeBase`, `X86CodeEnd`,
+`X86EntryPoint`, and null-terminated `X86FuncMappings`
+and builds a `PortableXbeDispatch` from that mapping.
+
+`native/test_portable_xbe_image_module.cpp` exports these real
+SDK symbol names from a **synthetic host function module**,
+and `native/test_portable_xbe_image.cpp` tests opening the
+shared library, inspecting the guest entry, finding functions,
+dispatching them by Xbox virtual address, and rejecting unmapped
+functions. CI runs the dynamic loader test on Linux and
+cross-compiles both loader and synthetic module to Android ARM64.
+
+This is the real operating-system loading mechanism, but
+**not a transpiler**: a Windows PE DLL or original Xbox x86
+XBE cannot be loaded via `dlopen`, and the generated game
+functions must be recompiled specifically as Android AArch64
+ELF first. The XBE must remain with the user, not committed
+to the public repository.
+
+**Security:** Loading any ELF can execute its initialization
+code before export validation. Only load trusted modules
+generated from personally owned original game files, never
+arbitrary third-party game-code libraries.
