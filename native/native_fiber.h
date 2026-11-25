@@ -2,6 +2,7 @@
 #include "aarch64_context.h"
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <thread>
 
 namespace hulkpocket {
@@ -30,6 +31,7 @@ private:
     std::size_t mapping_bytes_ = 0;
     bool running_ = false;
     bool finished_ = false;
+    std::exception_ptr error_{};
     std::thread::id owner_;
     static thread_local NativeFiber* active_;
 };
