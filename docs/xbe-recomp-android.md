@@ -433,3 +433,21 @@ to the public repository.
 code before export validation. Only load trusted modules
 generated from personally owned original game files, never
 arbitrary third-party game-code libraries.
+
+## Safe ARM64 guest fiber fault propagation
+
+`NativeFiber::Bootstrap` used to call `abort()` if guest-side
+C++ code threw an exception. It now stores `std::exception_ptr`,
+finishes the guest fiber, switches back to its saved host ARM64
+stack, and rethrows from `NativeFiber::Resume` **only after**
+the original host stack/context and TLS active fiber pointer
+have been restored. `XboxFiberScheduler::Run` already catches
+host stack exceptions to reset its dispatch state.
+
+`native/test_native_fiber.cpp` tests both normal suspend/resume
+and a guest callback which yields once then throws an error. It
+asserts the error reaches the caller and the failed fiber cannot
+resume. This prevents ordinary unsupported guest operations from
+turning directly into process aborts during early game startup.
+This is not a substitute for Windows SEH/x86 exception
+semantics in game code; those remain separate work.
