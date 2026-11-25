@@ -1,0 +1,72 @@
+name: XboxXBE-Recomp portable game code Android ARM64
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/xbe-recomp-arm64.yml'
+permissions:
+  contents: read
+
+jobs:
+  portable-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Install NDK and host compiler
+        run: |
+          set -euo pipefail
+          sdkmanager 'ndk;28.2.13676358'
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Checkout playable Windows port as build input
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/lookingcoding/hulk-ultimate-destruction-recomp-xbox-ver-.git "$RUNNER_TEMP/hulk-recompiled"
+          git -C "$RUNNER_TEMP/hulk-recompiled" rev-parse HEAD | tee "$RUNNER_TEMP/upstream-commit.txt"
+      - name: Run upstream simulation regression tests on Linux host
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/hulk-recompiled"
+          clang++ -std=c++20 -O2 -Wall -Wextra -Werror -I "$src/src" \
+            "$src/tests/simulation.cpp" -o "$RUNNER_TEMP/hulk-simulation-test"
+          "$RUNNER_TEMP/hulk-simulation-test"
+      - name: Cross-compile game simulation and RCF archive code for Android
+        run: |
+          set -euo pipefail
+          src="$RUNNER_TEMP/hulk-recompiled"
+          bin="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          # Build actual game-ported source, not only a mock project.
+          "$bin/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
+            -Wall -Wextra -Werror -I "$src/src" \
+            -c "$src/src/common/rcf.cpp" -o "$RUNNER_TEMP/hulk-rcf.o"
+          cat > "$RUNNER_TEMP/game-port-probe.cpp" <<'CPP'
+          #include "common/rcf.h"
+          #include "common/simulation.h"
+          extern "C" __attribute__((visibility("default")))
+          int hulkpocket_game_code_probe() {
+              hulk::SimulationClock clock;
+              const unsigned ticks = clock.Advance(hulk::SimulationClock::kStep);
+              const auto archive_offset = hulk::AlignRcf(1);
+              return int(ticks == 1 && archive_offset == 0x800 &&
+                         hulk::SamePath("art/copyright-en.p3d", "ART\\copyright-en.p3d"));
+          }
+          CPP
+          "$bin/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
+            -Wall -Wextra -Werror -I "$src/src" \
+            -c "$RUNNER_TEMP/game-port-probe.cpp" -o "$RUNNER_TEMP/hulk-game-port-probe.o"
+          "$bin/aarch64-linux-android29-clang++" -shared \
+            -Wl,-z,defs -Wl,-z,max-page-size=16384 \
+            "$RUNNER_TEMP/hulk-game-port-probe.o" "$RUNNER_TEMP/hulk-rcf.o" \
+            -o "$RUNNER_TEMP/libhulkpocket-game-port-probe.so"
+          "$bin/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-game-port-probe.so" > "$RUNNER_TEMP/game-elf.txt"
+          grep -q 'AArch64' "$RUNNER_TEMP/game-elf.txt"
+          grep -q 'ELF64' "$RUNNER_TEMP/game-elf.txt"
+          "$bin/llvm-nm" -D "$RUNNER_TEMP/libhulkpocket-game-port-probe.so" > "$RUNNER_TEMP/game-symbols.txt"
+          grep -q hulkpocket_game_code_probe "$RUNNER_TEMP/game-symbols.txt"
+          echo "Compiled real platform-independent Hulk Recompiled game logic and RCF archive code as Android ARM64 shared library." >> "$GITHUB_STEP_SUMMARY"
+          echo "This is a game-source portability test, not a complete engine or playable APK." >> "$GITHUB_STEP_SUMMARY"
+      # Do not distribute upstream binaries, copyrighted assets, or recompiled game image.
