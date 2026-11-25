@@ -40,6 +40,21 @@ jobs:
           ar="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
           "$ar" t "$lib" > "$RUNNER_TEMP/sdl-objects.txt"
           grep -Eq '[.]o$' "$RUNNER_TEMP/sdl-objects.txt"
+          # Confirm SDL3 and the Android NDK can link an actual shared object,
+          # not merely archive C++ objects.
+          cat > "$RUNNER_TEMP/sdl-link-smoke.cpp" <<'CPP'
+          #include <SDL3/SDL.h>
+          extern "C" int hulkpocket_sdl_link_smoke() {
+              return SDL_GetVersion() >= SDL_VERSIONNUM(3, 0, 0) ? 1 : 0;
+          }
+          CPP
+          ndkbin="$HULK_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          "$ndkbin/aarch64-linux-android29-clang++" \
+            -std=c++17 -fPIC -shared -Wl,-z,defs \
+            -I build/third_party/out/sdl-android-arm64-app/include \
+            "$RUNNER_TEMP/sdl-link-smoke.cpp" "$lib" \
+            -landroid -llog -lOpenSLES -lEGL -lGLESv2 -lm -o "$RUNNER_TEMP/libhulkpocket-sdl-smoke.so"
+          "$ndkbin/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-sdl-smoke.so" | grep -q AArch64
           sha256sum "$lib"
           echo 'SDL3 Android ARM64 app archive built and checked.' >> "$GITHUB_STEP_SUMMARY"
       # No copyrighted game files or compiled binaries uploaded.
