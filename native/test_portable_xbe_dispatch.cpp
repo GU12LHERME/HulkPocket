@@ -65,6 +65,10 @@ void Root(void* raw) {
     t.trace.push_back(9);
 }
 void AnotherGuest(X86Context& ctx,std::uint8_t*) { ctx.eax=0xCAFE; }
+void KernelImport(X86Context& ctx,std::uint8_t*,std::uint32_t ordinal) {
+    if (ordinal != 17) std::abort();
+    ctx.eax=0xD00D;
+}
 } // namespace
 
 int main() {
@@ -73,7 +77,7 @@ int main() {
         {kHulkEuFiberLayout.bootstrap_va,RecompiledGuestFunction},
         {0x390000,AnotherGuest}
     };
-    PortableXbeDispatch dispatcher(mapping,2,lo,hi);
+    PortableXbeDispatch dispatcher(mapping,2,lo,hi,KernelImport);
     if(dispatcher.FunctionCount()!=2 ||
        !dispatcher.Contains(kHulkEuFiberLayout.bootstrap_va) ||
        dispatcher.Contains(0x390001)) return 1;
@@ -87,6 +91,12 @@ int main() {
         ScopedXbeDispatch bound(dispatcher);
         x86_icall(temp,&dummy,0x390000);
         if(temp.eax!=0xCAFE || temp.last_icall!=0x390000) return 3;
+        x86_icall(temp,&dummy,0xFE000000u+17u*4u);
+        if(temp.eax!=0xD00D || temp.last_icall!=0xFE000044u) return 8;
+        rejected=false;
+        try { x86_icall(temp,&dummy,0xFE000001u); }
+        catch(const std::out_of_range&) { rejected=true; }
+        if(!rejected) return 9;
         rejected=false;
         try { x86_icall(temp,&dummy,0x390001); }
         catch(const std::out_of_range&) { rejected=true; }
