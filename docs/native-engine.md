@@ -308,3 +308,34 @@ run on a device, or compile the full game engine.
 
 The new link smoke remains **pending GitHub Actions verification** until
 the corresponding workflow run succeeds.
+
+## Native link: validated Wine map and matching input disc
+
+HulkPocket now rejects placeholder binding maps. Thunderclap's
+`native_unbound.wine_index` expects a `bindings` object, each mapping a
+symbol to a record with string `addr` and `how` metadata. The
+preflight requires that shape rather than accepting any nonempty JSON.
+This is a structural check only: it cannot prove bindings originated
+from exactly the same compiled tree.
+
+For `build_native_engine.py --execute`, the XBE supplied through
+`--xbe` must both match the original RP6 diagnostic executable
+and be **byte-identical** to
+`<upstream>/isos/extracted/default.xbe`. This prevents accidentally
+linking locally generated data from a different disc executable.
+The check does **not** certify the upstream Thunderclap source tree
+was decompiled from the same game revision or that its bindings match.
+No XBE bytes or translated game files are sent to GitHub.
+
+### What remains impossible to finish in public CI
+
+The native game engine cannot be generated from the public repository
+alone. The upstream build needs a private, locally generated clang-probe
+snapshot with translated game and data TUs and a Wine binding map. Those
+are not committed to HulkPocket. The existing native-host / SDL3 / FFmpeg
+workflows build components, **not** a complete `libmain.so`.
+
+Even after supplying these locally, the upstream native ARM64 game
+startup and renderer have unresolved work; successful linkage is not
+evidence of an Android playable build. No public build should be
+advertised as gameplay-ready until verified on hardware.
