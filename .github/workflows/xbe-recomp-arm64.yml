@@ -395,6 +395,31 @@ jobs:
             "$RUNNER_TEMP/xbe-memory-recompiled/x86_recomp.0.cpp" \
             -o "$RUNNER_TEMP/hulk-synthetic-xbe-memory-android-arm64"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-memory-android-arm64" | grep -q AArch64
+          # Real original x86 CALL and RET across separately discovered
+          # caller/callee functions, checking guest x86 stack unwinding.
+          python3 tools/create_synthetic_xbe_recompile.py \
+            --profile calls --output-dir "$RUNNER_TEMP/xbe-calls-machine-code"
+          "$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host" \
+            "$RUNNER_TEMP/xbe-calls-machine-code/synthetic.toml" \
+            "$RUNNER_TEMP/xbe-calls-machine-code/synthetic.xbe" \
+            "$RUNNER_TEMP/xbe-calls-machine-code/generated"
+          python3 tools/prepare_xbe_elf.py \
+            --sdk "$RUNNER_TEMP/xbe-sdk" \
+            --generated "$RUNNER_TEMP/xbe-calls-machine-code/generated" \
+            --output "$RUNNER_TEMP/xbe-calls-recompiled"
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -static -pthread \
+            -Wall -Wextra -Werror -Wno-unused-parameter \
+            -Wno-unused-variable -Wno-missing-attributes \
+            -I native -I "$RUNNER_TEMP/xbe-calls-recompiled" \
+            native/test_recompiled_xbe_calls_arm64.cpp \
+            native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
+            native/portable_xbe_dispatch.cpp \
+            "$RUNNER_TEMP/xbe-calls-recompiled/x86_func_mapping.cpp" \
+            "$RUNNER_TEMP/xbe-calls-recompiled/x86_recomp.0.cpp" \
+            -o "$RUNNER_TEMP/execute-xbe-calls-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/execute-xbe-calls-arm64" \
+            "$RUNNER_TEMP/xbe-calls-machine-code/synthetic.xbe"
+          echo "Official recompilation validated native ARM64 multi-function x86 call/return stack execution." >> "$GITHUB_STEP_SUMMARY"
           echo "Official x86-to-ARM64 recompilation validated Xbox memory load/arithmetic/store guest instructions." >> "$GITHUB_STEP_SUMMARY"
           echo "Official XBE compiler decoded real synthetic x86 instructions and linked generated C++ into Android ARM64 ELF." >> "$GITHUB_STEP_SUMMARY"
       - name: Prepare SDK-generated Xbox C++ for Android ELF and verify exports
