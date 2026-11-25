@@ -43,7 +43,3 @@ jobs:
           sha256sum "$lib"
           echo 'SDL3 Android ARM64 app archive built and checked.' >> "$GITHUB_STEP_SUMMARY"
       # No copyrighted game files or compiled binaries uploaded.
- "$RUNNER_TEMP/sdl-objects.txt"
-          sha256sum "$lib"
-          echo 'SDL3 Android ARM64 app archive built and checked.' >> "$GITHUB_STEP_SUMMARY"
-      # No copyrighted game files or compiled binaries uploaded.
