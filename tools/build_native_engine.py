@@ -15,12 +15,45 @@ import sys
 from check_game_version import verify as verify_game_version
 
 
+def snapshot_ready(snapshot: Path) -> bool:
+    """Validate the actual clang-probe snapshot layout used by Thunderclap.
+
+    The upstream compiler reads manifest["tus"] and compiles translated source
+    from snap/src plus the separately generated data translation units.
+    A JSON file with unrelated keys is not a usable snapshot.
+    """
+    root = snapshot / "snap"
+    manifest_path = root / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text())
+        tus = manifest.get("tus") if isinstance(manifest, dict) else None
+        if not isinstance(tus, list) or not tus:
+            return False
+        for name in ("src", "include", "repo-include", "data/src"):
+            if not (root / name).is_dir():
+                return False
+        if not any((root / "data/src").rglob("*.cpp")):
+            return False
+        for tu in tus:
+            if not isinstance(tu, dict) or not isinstance(tu.get("path"), str):
+                return False
+            rel = Path(tu["path"])
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                return False
+            source = root / rel
+            if not source.is_file() or source.is_symlink():
+                return False
+        return True
+    except (ValueError, OSError, TypeError):
+        return False
+
+
 def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, jobs):
     checks = {
         "upstream_native_compiler": (upstream / "tools/native_elf.py").is_file(),
         "upstream_packager": (upstream / "tools/android_apk.py").is_file(),
         "upstream_crt_table": (upstream / "src/platform/sdl/crt/native_crt_table.h").is_file(),
-        "generated_snapshot": (snapshot / "snap/manifest.json").is_file(),
+        "generated_snapshot": snapshot_ready(snapshot),
         "generated_bindings": bindings.is_file(),
         "ndk_clang": any(
             (ndk / "toolchains/llvm/prebuilt" / host / "bin/clang").is_file()
@@ -32,12 +65,6 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
         "ffmpeg_avutil": (ffmpeg / "lib/libavutil.so").is_file(),
         "ffmpeg_swresample": (ffmpeg / "lib/libswresample.so").is_file(),
     }
-    if checks["generated_snapshot"]:
-        try:
-            manifest = json.loads((snapshot / "snap/manifest.json").read_text())
-            checks["generated_snapshot"] = isinstance(manifest, (dict, list)) and bool(manifest)
-        except (ValueError, OSError):
-            checks["generated_snapshot"] = False
     if checks["generated_bindings"]:
         try:
             data = json.loads(bindings.read_text())
