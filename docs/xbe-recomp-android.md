@@ -206,3 +206,26 @@ AArch64 stack dispatcher. Integrating them requires connecting
 XboxXBE-Recomp's X86Context, its real guest TLS and memory mapping,
 and the generated Xbox code. Do not claim game boot or gameplay based
 on these standalone test results. Latest test is pending CI.
+
+## First combined guest/host fiber switch test
+
+`native/xbox_fiber_bridge.h` combines **both previously separate**
+pieces of runtime functionality: `SaveRestoreXboxFiber` applies the
+original XDK guest-x86 stack, SEH and TLS record mutation, while
+`XboxFiberScheduler::SwitchTo` suspends and resumes the host's
+AArch64 C++ stack. Before changing guest state, the bridge checks
+that guest TLS names the current native fiber and that the target
+is present and not completed.
+
+`native/test_xbox_fiber_bridge.cpp` tests a complete A→B→A→B
+sequence using real ARM64 stack switches and synthetic checked Xbox
+memory. Both the first destination restore and the resumed source
+registers/SEH/guest SP are checked inside their separate native C++
+continuations. The workflow cross-compiles the test with the Android
+NDK and runs the Linux AArch64 version under QEMU.
+
+**Important:** this is a host/guest integration *prototype* with
+synthetic game memory; it is still not wired into the XboxXBE-Recomp
+SDK, its `X86Context`, real XBE executable, or graphics engine.
+The workflow triggered by the bridge commit must pass before claiming
+successful verification.
