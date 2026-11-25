@@ -23,7 +23,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle -p android --no-daemon assembleDebug
+      - name: Build APK with bounded retries
+        run: |
+          for attempt in 1 2 3; do
+            if gradle -p android --no-daemon assembleDebug; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then sleep $((attempt * 60)); fi
+          done
+          exit 1
       - uses: actions/upload-artifact@v4
         with:
           name: HulkPocket-0.1.0-diagnostic
