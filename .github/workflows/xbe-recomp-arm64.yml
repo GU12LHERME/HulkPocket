@@ -254,6 +254,18 @@ jobs:
             native/test_portable_xbe_image_module.cpp \
             -o "$RUNNER_TEMP/libsynthetic-xbe-code-android.so"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libsynthetic-xbe-code-android.so" | grep -q AArch64
+          # Standalone Android ARM64 diagnostic for physical Retroid tests.
+          # This is NOT an APK, does not ship game code, and never executes
+          # the original Xbox entry point.
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 \
+            -Wall -Wextra -Werror -Wl,-z,max-page-size=16384 \
+            -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp \
+            native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
+            native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl \
+            -o "$RUNNER_TEMP/hulk-xbe-local-diagnostic-android-arm64"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xbe-local-diagnostic-android-arm64" |
+            grep -q AArch64
           "$ndk/llvm-nm" -D -C "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" |
             grep -q 'x86_icall(X86Context'
           echo "Portable XboxXBERecomp x86_icall ARM64 ELF shared library linked with Android NDK; synthetic game entry only." >> "$GITHUB_STEP_SUMMARY"
@@ -416,6 +428,13 @@ jobs:
         with:
           name: hulkpocket-portable-xbe-runtime-arm64
           path: ${{ runner.temp }}/libhulkpocket-portable-xbe-dispatch.so
+          if-no-files-found: error
+          retention-days: 7
+      - name: Export Android ARM64 standalone XBE preflight CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: hulkpocket-xbe-preflight-cli-arm64
+          path: ${{ runner.temp }}/hulk-xbe-local-diagnostic-android-arm64
           if-no-files-found: error
           retention-days: 7
       # Do not distribute upstream binaries, copyrighted assets, or recompiled game image.
