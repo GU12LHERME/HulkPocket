@@ -256,3 +256,33 @@ libraries and `d3d12`, `xaudio2`, `dxgi` and Win32 GUI backends;
 its unmodified CMake project cannot build a playable Android ELF.
 A successful integration test is not game initialization or a
 rendered frame. This checkpoint is awaiting its GitHub Actions run.
+
+## Hulk-specific `SwitchToFiber` call-chain adapter
+
+`native/hulk_xdk_fiber_hook.h` now resolves the exact XDK 5849
+indirection chain used by the playable Windows Hulk port:
+`next = guest[ctx.esp+4]`, `stack_base = guest[ctx.fs_base+4]`,
+`tls_index = guest[region.fiber_tls_index_va]`,
+`tls = guest[stack_base+4*tls_index]`,
+`current = guest[tls+0x10]`. It checks invalid/null addresses
+and disagreement between the native scheduler and the real SDK
+`X86Context`, then delegates to the existing ARM64 guest/host
+fiber bridge. Region-specific EU/USA TLS, switch and bootstrap
+addresses come from upstream `src/common/addresses.h`.
+
+`native/test_hulk_xdk_fiber_hook.cpp` uses an actual SDK
+`X86Context` and **synthetic** Xbox TLS/stack memory to test
+two suspended native ARM64 continuations. CI runs the host
+AArch64 build under QEMU and cross-compiles the test translation
+unit with the Android NDK.
+
+**Known missing functionality:** When the target guest fiber does
+not exist in the native dispatcher, the adapter validates the
+guest's expected bootstrap address but deliberately rejects
+creation. A real `x86_icall` trampoline, root-fiber registration,
+guest TLS/exception safety and lifetime management must be
+implemented before this can replace the live Hulk
+`X86_FUNC(HULK_SUB_SWITCH_TO_FIBER)` hook. No actual XBE code
+is executed in this test, and this does not implement graphics,
+audio or an Android gameplay APK. The new workflow must pass
+before this checkpoint is considered validated.
