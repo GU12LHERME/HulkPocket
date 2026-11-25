@@ -46,15 +46,35 @@ jobs:
           cat > "$RUNNER_TEMP/game-port-probe.cpp" <<'CPP'
           #include "common/rcf.h"
           #include "common/simulation.h"
+          #include "common/actor_owner_guard.h"
           extern "C" __attribute__((visibility("default")))
           int hulkpocket_game_code_probe() {
               hulk::SimulationClock clock;
               const unsigned ticks = clock.Advance(hulk::SimulationClock::kStep);
               const auto archive_offset = hulk::AlignRcf(1);
+              // Real original-Xbox instruction decoder used to prevent the
+              // Lightning Strike null-owner crash in the playable Windows port.
+              const uint8_t owner_read[] = {0x8B, 0x88, 0xEC, 0x00, 0x00, 0x00};
+              const auto plan = hulk::PlanOwnerGuard(owner_read, sizeof(owner_read));
+              uint32_t guest_regs[8] = {0x1000, 0, 0, 0, 0, 0, 0, 0};
+              const bool guards_null = hulk::OwnerGuardSkips(
+                  plan, guest_regs, [](uint32_t) { return uint32_t(0); });
               return int(ticks == 1 && archive_offset == 0x800 &&
-                         hulk::SamePath("art/copyright-en.p3d", "ART\\copyright-en.p3d"));
+                         hulk::SamePath("art/copyright-en.p3d", "ART\\copyright-en.p3d") &&
+                         plan.rule == hulk::OwnerGuardRule::OwnerRegister &&
+                         plan.owner_reg == 0 && !guards_null);
           }
           CPP
+          # Also execute these game-logic assertions on the Linux host.
+          clang++ -std=c++20 -O2 -Wall -Wextra -Werror -I "$src/src" \
+            "$RUNNER_TEMP/game-port-probe.cpp" "$src/src/common/rcf.cpp" \
+            -shared -fPIC -o "$RUNNER_TEMP/libhulkpocket-host-probe.so"
+          python3 - "$RUNNER_TEMP/libhulkpocket-host-probe.so" <<'PY'
+          import ctypes
+          import sys
+          lib = ctypes.CDLL(sys.argv[1])
+          assert lib.hulkpocket_game_code_probe() == 1, "Portable gameplay probe failed"
+          PY
           "$bin/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I "$src/src" \
             -c "$RUNNER_TEMP/game-port-probe.cpp" -o "$RUNNER_TEMP/hulk-game-port-probe.o"
