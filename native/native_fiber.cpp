@@ -49,6 +49,9 @@ bool NativeFiber::Resume() {
     hulkpocket_aarch64_switch(&caller_, &guest_);
     running_ = false;
     active_ = nullptr;
+    // Never throw on a switched ARM64 stack. Propagate only after
+    // the host caller stack is restored and the guest is inactive.
+    if (error_) std::rethrow_exception(error_);
     return !finished_;
 }
 
@@ -65,8 +68,9 @@ void NativeFiber::Yield() {
     try {
         fiber->entry_(fiber->user_);
     } catch (...) {
-        // Do not unwind a C++ exception across an assembly context switch.
-        std::abort();
+        // Save and propagate from Resume() on the original host stack.
+        // Unwinding across the architecture context switch is unsafe.
+        fiber->error_ = std::current_exception();
     }
     fiber->finished_ = true;
     hulkpocket_aarch64_switch(&fiber->guest_, &fiber->caller_);
