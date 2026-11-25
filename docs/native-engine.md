@@ -258,3 +258,24 @@ compile. It does not produce the game-derived clang-probe snapshot, data
 translation units or Wine bindings map. The upstream native image still
 has unresolved 64-bit game functions after linking with stubs; a successful
 link must not be represented as a playable port.
+
+## Android APK toolchain preflight
+
+Upstream `tools/android_apk.py` specifically requires
+`platforms/android-35/android.jar` and Android Build Tools **35.0.0**
+(`aapt2`, `d8`, `zipalign`, `apksigner`). HulkPocket now checks for
+these **before** an `--execute` packaging attempt and includes offline
+unit coverage for missing SDK components. It uses `ANDROID_HOME` when
+set, otherwise Thunderclap's default `build/android/sdk`.
+
+To provision upstream's exact tools locally:
+
+```sh
+python3 /path/to/thunderclap/tools/android_apk.py --setup
+```
+
+The `--execute` packaging preflight needs an installed Android 35 SDK;
+the ordinary dry-run deliberately only validates the input engine and FFmpeg
+files, so it remains usable without Android SDK installed.
+
+The real native game image and device gameplay remain unvalidated.
