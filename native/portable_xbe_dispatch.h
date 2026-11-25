@@ -18,8 +18,10 @@ namespace hulkpocket {
 class PortableXbeDispatch {
 public:
     // x86 SDK mapping: {guest address, native function pointer}.
+    using KernelCall = void (*)(X86Context&, std::uint8_t*, std::uint32_t ordinal);
     PortableXbeDispatch(const X86FuncMapping* mappings, std::size_t count,
-                        std::uint32_t code_lo, std::uint32_t code_hi);
+                        std::uint32_t code_lo, std::uint32_t code_hi,
+                        KernelCall kernel = nullptr);
     PortableXbeDispatch(const PortableXbeDispatch&) = delete;
     PortableXbeDispatch& operator=(const PortableXbeDispatch&) = delete;
 
@@ -31,6 +33,7 @@ private:
     std::vector<X86FuncMapping> mappings_;
     std::thread::id owner_;
     std::uint32_t lo_, hi_;
+    KernelCall kernel_;
 };
 
 // A scoped, thread-local binding for the SDK's unmodified x86_icall ABI.
