@@ -70,3 +70,20 @@ renderer nor privately generated game-derived inputs.
 Keep this work on `experiment-xbe-recomp-android` until a real
 AArch64 engine can compile, link and boot on the RP6. Avoid disrupting
 the currently working diagnostic APK on `main`.
+
+## First practical ARM64 code integration smoke
+
+`.github/workflows/xbe-recomp-arm64.yml` clones the upstream Windows port
+into a temporary GitHub runner directory (nothing is copied into HulkPocket),
+runs the original `tests/simulation.cpp` timing regression on the Linux host,
+then cross-compiles the **actual upstream** `src/common/rcf.cpp` archive
+reader and `src/common/simulation.h` timing logic as an Android ARM64
+shared library. It links with `-Wl,-z,defs` and checks AArch64/ELF64
+and the exported entry point.
+
+This is a meaningful portability checkpoint for two game-related
+components, **not** the recompilation of Xbox machine code, the game
+rendering engine or an Android gameplay APK. Passing this test would
+show the selected logic ports to the Android NDK without Windows APIs.
+At publication, the new workflow has not yet been independently
+confirmed as successful.
