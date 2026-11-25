@@ -545,3 +545,31 @@ not proven.
 code translation nor memory reservation loads the user's real
 XBE or builds gameplay graphics. The first actual Xbox game
 instruction run is still outstanding.
+
+## Validated XBE header/section memory loading (CI pending)
+
+`native/xbe_image_memory_loader.h/.cpp` parses the actual original
+Xbox XBE section-header layout (matching
+`XboxXBERecomp/runtime/xbe/xbe.h`) and maps **header bytes and
+raw sections** into `XboxGuestAddressSpace` using guest VAs.
+It handles zero-filled section tails and the original Xbox retail
+and debug XOR-encoded entry/kernel-thunk addresses. It validates
+virtual address/range overflow, section table bounds, raw source
+bounds, title certificate, section overlaps and header conflicts
+before committing memory pages. This currently loads only
+section bytes, not the full Xbox kernel process or TLS.
+
+`native/test_xbe_image_memory_loader.cpp` checks a synthetic
+two-section XBE (including BSS), and malformed entrypoint, table,
+overlap and section-size rejection under Linux ARM64 QEMU.
+`native/test_xbe_image_dispatch.cpp` is an **end-to-end synthetic
+startup boundary**: it loads artificial XBE sections into a
+reserved 4 GiB guest address region and dispatches a function from
+a native ELF guest-code module at the same virtual entrypoint.
+The module reads memory using `X86Context.ecx` and
+`base + guest_va`, verifying the data came from the
+virtual Xbox section rather than a hand-coded register value.
+
+This test **does not execute original Hulk recompilation output**;
+it validates the XBE file/guest memory/native code boundaries only.
+The actual game XBE has not been provided or parsed in CI.
