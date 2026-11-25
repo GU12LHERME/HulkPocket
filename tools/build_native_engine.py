@@ -12,6 +12,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from check_game_version import verify as verify_game_version
+
 
 def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, jobs):
     checks = {
@@ -67,6 +69,7 @@ def main(argv=None):
         parser.add_argument("--" + key, type=Path, required=True)
     parser.add_argument("--apk", type=Path, required=True)
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--xbe", type=Path, help="local extracted default.xbe from the tested ISO")
     parser.add_argument("--execute", action="store_true", help="execute upstream build (default: preflight only)")
     args = parser.parse_args(argv)
     if args.jobs < 1 or args.jobs > 64:
@@ -76,6 +79,19 @@ def main(argv=None):
     if paths["apk"].suffix.lower() != ".apk":
         parser.error("--apk must end in .apk")
 
+    if args.execute and args.xbe is None:
+        parser.error("--execute requires --xbe to verify the local disc executable")
+    xbe_check = None
+    if args.xbe is not None:
+        try:
+            xbe_check = verify_game_version(args.xbe.expanduser().resolve())
+        except (OSError, ValueError) as exc:
+            print(json.dumps({"xbe_verification": {"error": str(exc)}}), flush=True)
+            return 1
+        if not xbe_check["matches_rp6_executable"]:
+            print(json.dumps({"xbe_verification": xbe_check}, indent=2), flush=True)
+            return 1
+
     checks, env, commands, package, image = make_plan(
         paths["upstream"], paths["snapshot"], paths["bindings"], paths["ndk"],
         paths["sdl"], paths["ffmpeg"], paths["out"], paths["apk"], args.jobs
@@ -83,6 +99,7 @@ def main(argv=None):
     # Never dump the bindings or game code into logs.
     print(json.dumps({"preflight": checks, "ready": all(checks.values()),
                       "execute_requested": args.execute,
+                      "xbe_matches_tested_rp6_executable": (xbe_check["matches_rp6_executable"] if xbe_check else None),
                       "note": "Native compilation requires locally generated game-derived inputs."}, indent=2),
           flush=True)
     if not all(checks.values()):
