@@ -196,11 +196,21 @@ jobs:
             "$RUNNER_TEMP/synthetic-private-xbe.bin" \
             "$RUNNER_TEMP/libsynthetic-xbe-memory-host.so" |
             grep -q 'Module match: PASS'
-          # Reject an unrelated ELF module even though its loading
-          # mechanism is valid and both modules export SDK symbols.
+          # Change the XBE's guest entry while keeping a valid retail
+          # encoding: a mismatched function map must fail preflight.
+          python3 - "$RUNNER_TEMP/synthetic-private-xbe.bin" \
+            "$RUNNER_TEMP/synthetic-mismatched-xbe.bin" <<'PY'
+          import struct
+          import sys
+          with open(sys.argv[1], "rb") as file:
+              data = bytearray(file.read())
+          struct.pack_into("<I", data, 0x128, 0x300020 ^ 0xA8FC57AB)
+          with open(sys.argv[2], "wb") as file:
+              file.write(data)
+          PY
           if "$RUNNER_TEMP/hulk-xbe-local-diagnostic" \
-            "$RUNNER_TEMP/synthetic-private-xbe.bin" \
-            "$RUNNER_TEMP/libsynthetic-xbe-code-host.so" > /dev/null 2>&1; then
+            "$RUNNER_TEMP/synthetic-mismatched-xbe.bin" \
+            "$RUNNER_TEMP/libsynthetic-xbe-memory-host.so" > /dev/null 2>&1; then
             echo "XBE compatibility preflight accepted mismatched code entry!" >&2
             exit 1
           fi
