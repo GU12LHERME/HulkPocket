@@ -2,6 +2,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import struct
 import unittest
 
 SPEC = importlib.util.spec_from_file_location(
@@ -13,11 +14,12 @@ SPEC.loader.exec_module(mod)
 
 def arm64_elf(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    h = bytearray(20)
-    h[:4] = b"\x7fELF"
-    h[4] = 2
-    h[5] = 1
-    h[18:20] = (183).to_bytes(2, "little")
+    h = bytearray(120)  # ELF64 header and a minimal program header
+    h[:4] = b"\\x7fELF"
+    h[4:7] = bytes([2, 1, 1])
+    struct.pack_into("<HHI", h, 16, 3, 183, 1)
+    struct.pack_into("<Q", h, 32, 64)
+    struct.pack_into("<HHH", h, 52, 64, 56, 1)
     path.write_bytes(h)
 
 
@@ -33,6 +35,9 @@ class PackageEngineTests(unittest.TestCase):
             b = bytearray(p.read_bytes())
             b[18:20] = (62).to_bytes(2, "little")
             p.write_bytes(b)
+            self.assertFalse(mod.is_elf64_aarch64(p))
+            arm64_elf(p)
+            p.write_bytes(p.read_bytes()[:90])
             self.assertFalse(mod.is_elf64_aarch64(p))
 
     def test_complete_local_package_inputs(self):
