@@ -73,6 +73,18 @@ def requirements(upstream: Path, engine: Path, ffmpeg: Path):
     }
 
 
+def android_sdk_requirements(sdk: Path):
+    """SDK files required by upstream android_apk.py (platform 35, tools 35.0.0)."""
+    bt = sdk / "build-tools/35.0.0"
+    return {
+        "android_platform_35": (sdk / "platforms/android-35/android.jar").is_file(),
+        "android_aapt2": (bt / "aapt2").is_file(),
+        "android_d8": (bt / "d8").is_file(),
+        "android_zipalign": (bt / "zipalign").is_file(),
+        "android_apksigner": (bt / "apksigner").is_file(),
+    }
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--upstream", required=True, type=Path, help="local Thunderclap checkout")
@@ -85,6 +97,9 @@ def main(argv=None):
         args.upstream.resolve(), args.engine.resolve(), args.ffmpeg.resolve(), args.out.resolve()
     )
     checks = requirements(upstream, engine, ffmpeg)
+    if args.execute:
+        sdk = Path(os.environ.get("ANDROID_HOME") or upstream / "build/android/sdk").expanduser().resolve()
+        checks.update(android_sdk_requirements(sdk))
     report = {
         "ready_to_package": all(checks.values()),
         "checks": checks,
