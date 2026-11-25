@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 
 from prepare_xbe_elf import prepare
+from audit_xbe_elf import audit
+import json
 
 VALID_PART = re.compile(r"x86_recomp\.[0-9]+\.cpp\Z")
 
@@ -26,7 +28,7 @@ def generated_sources(directory: pathlib.Path) -> list[pathlib.Path]:
 
 def build(
     sdk: pathlib.Path, generated: pathlib.Path, ndk_bin: pathlib.Path,
-    output: pathlib.Path,
+    output: pathlib.Path, audit_output: pathlib.Path | None = None,
 ) -> pathlib.Path:
     compiler = ndk_bin / "aarch64-linux-android29-clang++"
     nm = ndk_bin / "llvm-nm"
@@ -52,6 +54,13 @@ def build(
             ]
             subprocess.run(command, check=True)
             objects.append(obj)
+        if audit_output is not None:
+            report = audit(nm, objects)
+            audit_output.parent.mkdir(parents=True, exist_ok=True)
+            audit_output.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False) + "\\n",
+                encoding="utf-8",
+            )
         # The generated code often imports SDK services such as
         # x86_icall, kernel accessors and game hooks. Production builds
         # must explicitly resolve all of these against the host runtime.
@@ -76,8 +85,9 @@ def main() -> None:
     parser.add_argument("--generated", required=True, type=pathlib.Path)
     parser.add_argument("--ndk-bin", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--audit-output", type=pathlib.Path, default=None)
     args = parser.parse_args()
-    result = build(args.sdk, args.generated, args.ndk_bin, args.output)
+    result = build(args.sdk, args.generated, args.ndk_bin, args.output, args.audit_output)
     print(f"Validated Android ARM64 ELF: {result}")
 
 if __name__ == "__main__":
