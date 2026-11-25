@@ -71,3 +71,57 @@ the HulkPocket diagnostic activity does not install that data for the engine.
 create the missing intermediate generated objects and binding map, and does
 not make Thunderclap playable. Validate permissions before redistributing any
 upstream-derived APK or binary.
+
+## Full native build orchestration
+
+`tools/build_native_engine.py` joins the upstream compile, link and APK
+packaging commands into a **local-only** workflow. This is different from
+`tools/package_engine_apk.py`, which requires an already linked `libmain.so`.
+
+Prepare these local inputs using **Thunderclap's** documented toolchain:
+- `THUNDERCLAP`: full upstream checkout with Python dependencies installed.
+- `SNAPSHOT`: directory containing a generated `snap/` tree from the
+  upstream clang-probe pipeline, consistent with the current source tree.
+- `BINDINGS`: compatible binding map (`bindings.json`) from the Wine proof
+  build of that **same** source tree.
+- `NDK`: Android NDK installation with clang.
+- `SDL_APP`: Thunderclap's SDL3 **app** build, containing `lib/libSDL3.a`.
+- `FFMPEG`: Thunderclap's Android FFmpeg install prefix with
+  `libavformat.so`, `libavcodec.so` and `libavutil.so`.
+
+Check the plan without compiling:
+
+```sh
+python3 tools/build_native_engine.py \
+  --upstream /path/to/thunderclap \
+  --snapshot /path/to/clang-probe \
+  --bindings /path/to/bindings.json \
+  --ndk /path/to/android-ndk \
+  --sdl /path/to/sdl-android-arm64-app \
+  --ffmpeg /path/to/ffmpeg-android-arm64/install \
+  --out build/native-android-arm64 \
+  --apk build/engine/hulk.apk
+```
+
+Only after all input checks pass, add `--execute`. That executes:
+
+1. `native_elf.py compile --target android-arm64 --jobs 2`
+2. `native_elf.py link --target android-arm64 --ld --bindings ...`
+3. `package_engine_apk.py --execute` invoking the upstream
+   `android_apk.py` to produce an isolated native SDL3 APK.
+
+This process may take considerable CPU time and storage. It has **not** been
+executed for HulkPocket: the generated snapshot, binding map, SDK
+dependencies and local game-derived data are not present in this repo or
+available to its public GitHub Actions runner. The test workflow exercises
+the orchestration and input checks with synthetic data; it does not build
+Thunderclap's actual game engine.
+
+The current upstream Android link may contain numerous deliberately
+stubbed unresolved functions and stop before gameplay; a successful
+link/package does not constitute a working port. The user's verified
+Title ID / SHA-256 do not establish identity with Thunderclap's build input.
+
+A public Actions workflow must not be made to download copyrighted disc
+contents or publish the generated game binary. Do not conflate the isolated
+native SDL APK with the tested HulkPocket diagnostic application.
