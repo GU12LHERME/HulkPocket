@@ -90,7 +90,7 @@ jobs:
           echo "ARM64 fiber context switching passed suspend/resume under QEMU and linked with Android NDK." >> "$GITHUB_STEP_SUMMARY"
       - name: Test actual XboxXBERecomp SDK X86Context against native ARM64 fiber adapter
         run: |
-          set -euo pipefail
+          set -euxo pipefail
           git clone --depth 1 https://github.com/TGP482/XboxXBERecomp.git "$RUNNER_TEMP/xbe-sdk"
           git -C "$RUNNER_TEMP/xbe-sdk" rev-parse HEAD | tee "$RUNNER_TEMP/xbe-sdk-commit.txt"
           aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread -static \
