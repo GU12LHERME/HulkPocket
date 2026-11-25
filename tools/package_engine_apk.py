@@ -40,7 +40,22 @@ def is_elf64_aarch64(path: Path) -> bool:
             return False
         if phoff < 64 or phoff + phentsize * phnum > size:
             return False
-        return True
+        # Require a loadable segment whose bytes fit inside the file.
+        with path.open("rb") as f:
+            f.seek(phoff)
+            segments = f.read(phentsize * phnum)
+        found_load = False
+        for index in range(phnum):
+            base = index * phentsize
+            p_type = struct.unpack_from("<I", segments, base)[0]
+            if p_type != 1:  # PT_LOAD
+                continue
+            offset, vaddr, paddr, filesz, memsz = struct.unpack_from("<QQQQQ", segments, base + 8)
+            if filesz > memsz or offset > size or filesz > size - offset:
+                return False
+            if filesz:
+                found_load = True
+        return found_load
     except OSError:
         return False
 
