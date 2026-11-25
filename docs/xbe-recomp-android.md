@@ -463,3 +463,32 @@ AArch64 16-KiB-compatible `.so`, published as the
 [experimental runtime artifact](https://github.com/GU12LHERME/HulkPocket/actions/runs/45717478128/artifacts/15069738727).
 The artifact contains **only the infrastructure runtime**; no
 Xbox game assets or recompilation of the Hulk XBE are included.
+
+## Android-generated guest code preparation checkpoint
+
+An inspection of the actual SDK `tools/recomp/codegen_emit.cpp` showed that
+the recompiler already emits portable **C++ instruction bodies**, but the
+generated mapping table and support macros target Windows PE/DLL linkage.
+The `tools/prepare_xbe_elf.py` script accepts a directory of SDK-generated
+C++ and the upstream SDK source, then:
+
+- Copies generated instruction partitions unchanged, preserving recompiled code.
+- Rewrites the generated mapping table definitions to export the expected
+  `X86CodeBase`, `X86CodeEnd`, `X86EntryPoint`,
+  `X86FuncMappings`, and related names through ELF C linkage.
+- Copies the SDK runtime's x86 context/header, replacing only Windows
+  import/export/weak-alias macros with ELF-compatible definitions.
+- Rejects unknown upstream mapping or macro layouts instead of silently
+  generating a broken Android build.
+
+The GitHub Actions job tests a synthetic SDK-style generated directory
+with the **real upstream SDK runtime header**, compiles it into
+Linux and Android ARM64 shared libraries, and checks the exported symbols
+and the Linux `dlopen`→`x86_icall` dispatch.
+
+**Not validated yet with any real Hulk XBE.** Because `xbe_recomp` needs
+an XBE from a lawful game copy and no XBE should be uploaded to the
+public GitHub repository, this integration uses synthetic generated
+C++. Actual instruction translation, hooking, exception behavior and
+guest kernel requirements still need extensive validation. The
+updated CI run should be checked before considering this passed.
