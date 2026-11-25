@@ -50,6 +50,8 @@ jobs:
             "$llvm_readelf" -h "$prefix/$lib" | grep -q ELF64
           done
           test -s build/third_party/out/LICENSES-DAV1D.txt
+          test -s build/third_party/out/LICENSES-FFMPEG.txt
+          "$llvm_readelf" -d "$prefix/libavcodec.so" | grep -q SONAME
           "$llvm_readelf" -h "$prefix/libavcodec.so" | tee "$RUNNER_TEMP/ffmpeg-elf.txt"
           printf 'FFmpeg and dav1d Android ARM64 shared libraries compiled and inspected.\n' >> "$GITHUB_STEP_SUMMARY"
       # Never upload game code, game data, or upstream binaries to public artifacts.
