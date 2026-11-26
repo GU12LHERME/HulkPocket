@@ -29,6 +29,9 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     status=0
     "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
     cat "$execution_log"
+    if grep -q "HULK ALLOC caller=" "$execution_log"; then
+        python tools/report_hulk_allocator.py "$generated" "$execution_log" || true
+    fi
     pc=$(sed -n 's/.*pc_minus_module_base=\(0x[0-9A-Fa-f]*\).*/\1/p' "$execution_log" | tail -n 1)
     if [[ -n "$pc" && -x "$PREFIX/bin/llvm-addr2line" ]]; then
         echo "Fault native function:"

@@ -378,6 +378,39 @@ private:
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
         switch(ordinal) {
+            case kHulkAllocatorStop: {
+                Check(cpu,0);
+                const auto ret=mem_.Read32(cpu.esp);
+                std::fprintf(stderr,"HULK STOP target=0008D320 ret=%08X ESP=%08X EAX=%08X EBX=%08X ECX=%08X EDX=%08X ESI=%08X EDI=%08X\n",
+                    ret,cpu.esp,cpu.eax,cpu.ebx,cpu.ecx,cpu.edx,cpu.esi,cpu.edi);
+                // Only decode the USA allocator wrapper ABI when its
+                // exact return address matches the inspected source.
+                if(ret==0x00266E1Cu&&mem_.IsCommitted(cpu.esp,32)){
+                    auto type=mem_.Read32(cpu.esp+24),bytes=mem_.Read32(cpu.esp+28);
+                    auto caller=mem_.Read32(cpu.esp+20);
+                    std::fprintf(stderr,"HULK ALLOC caller=%08X type=%08X bytes=%08X vcall_arg=%08X\n",
+                        caller,type,bytes,mem_.Read32(cpu.esp+4));
+                    uint64_t slot=0x00527C60ull+uint64_t(type)*16;
+                    if(slot+16<=XboxGuestAddressSpace::kSize&&mem_.IsCommitted(uint32_t(slot),16)){
+                        std::fprintf(stderr,"Allocator slot=%08X values=%08X %08X %08X %08X\n",uint32_t(slot),
+                            mem_.Read32(uint32_t(slot)),mem_.Read32(uint32_t(slot+4)),
+                            mem_.Read32(uint32_t(slot+8)),mem_.Read32(uint32_t(slot+12)));
+                    }
+                    if(mem_.IsCommitted(cpu.ecx,4)){
+                        auto table=mem_.Read32(cpu.ecx);
+                        if(mem_.IsCommitted(table,16))
+                            std::fprintf(stderr,"Allocator object=%08X vtable=%08X entries=%08X %08X %08X %08X\n",
+                                cpu.ecx,table,mem_.Read32(table),mem_.Read32(table+4),mem_.Read32(table+8),mem_.Read32(table+12));
+                    }
+                }
+                for(unsigned i=0;i<16;++i){
+                    uint64_t a=uint64_t(cpu.esp)+i*4;
+                    if(a+4>XboxGuestAddressSpace::kSize||!mem_.IsCommitted(uint32_t(a),4))break;
+                    std::fprintf(stderr,"Hulk stack +%02X=%08X\n",i*4,mem_.Read32(uint32_t(a)));
+                }
+                DumpRecent();
+                throw std::runtime_error("Hulk entered deliberate stop loop; allocator caller captured");
+            }
             case kXapiLaunchImage: {
                 Check(cpu,2);auto path=Arg(cpu,0);
                 auto name=DiagnosticString(path,520);

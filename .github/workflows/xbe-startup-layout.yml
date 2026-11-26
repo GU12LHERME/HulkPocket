@@ -11,6 +11,8 @@ on:
       - 'native/xbe_d3d8_entry_guard.cpp'
       - 'native/test_xbe_graphics_boundary.cpp'
       - 'tools/link_hulk_cached.py'
+      - 'tools/report_hulk_allocator.py'
+      - 'native/portable_xbe_dispatch.cpp'
       - 'native/xbe_diagnostic_runtime.cpp'
       - 'native/portable_xbe_cpu_services.*'
       - 'native/xbe_guest_cpu_primitives.h'
@@ -58,7 +60,8 @@ jobs:
           /tmp/graphics-boundary
           nm /tmp/graphics-boundary | grep ' T sub_0037D900$'
           nm /tmp/graphics-boundary | grep ' T sub_00209C04$'
-          python3 -m py_compile tools/link_hulk_cached.py
+          python3 -m py_compile tools/link_hulk_cached.py tools/report_hulk_allocator.py
+          python3 tools/report_hulk_allocator.py --self-test
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout

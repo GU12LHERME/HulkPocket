@@ -97,6 +97,20 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     memory->Write(0x12700,launch,sizeof(launch));
     call(*c,base,cb,kXapiLaunchImage,{0x12700,0});assert(c->eax==2);
     call(*c,base,cb,kXapiLaunchImage,{0,0});assert(c->eax==2);
+    // Diagnostic stop must not pretend to allocate or pop the guest stack.
+    {
+        auto old=c->esp;
+        c->esp-=32;
+        memory->Write32(c->esp,0x266e1c);
+        memory->Write32(c->esp+4,0x100);
+        memory->Write32(c->esp+20,0x123456);
+        memory->Write32(c->esp+24,2);
+        memory->Write32(c->esp+28,0x100);
+        bool stopped=false;
+        try{cb(*c,base,kHulkAllocatorStop);}catch(const std::runtime_error&){stopped=true;}
+        assert(stopped&&c->esp==old-32);
+        c->esp=old;
+    }
     // SHA-1 of "abc" and RFC 2202 HMAC-SHA1 vector, through the guest ABI.
     const uint8_t sha[]={0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d};
     const uint8_t mac[]={0xb6,0x17,0x31,0x86,0x55,0x05,0x72,0x64,0xe2,0x8b,0xc0,0xb6,0xfb,0x37,0x8c,0x8e,0xf1,0x46,0xbe,0x00};

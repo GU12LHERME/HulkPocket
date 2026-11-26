@@ -1,4 +1,5 @@
 #include "portable_xbe_dispatch.h"
+#include "xbe_graphics_boundary.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -64,6 +65,13 @@ void PortableXbeDispatch::Call(
     if (it == mappings_.end() || it->guest != target)
         throw std::out_of_range("unmapped Xbox guest entry; code was not recompiled");
     ctx.last_icall = target;
+    // The local USA trace and generated source confirmed this is a
+    // deliberate self-loop. Capture the checked guest call frame before
+    // entering it; never return a made-up allocator result.
+    if(target==0x0008D320u&&kernel_){
+        kernel_(ctx,base,kHulkAllocatorStop);
+        throw std::runtime_error("Hulk stop handler unexpectedly returned");
+    }
     it->host(ctx, base);
 }
 
