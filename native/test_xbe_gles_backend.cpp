@@ -226,6 +226,33 @@ int main(){
     call("D3DDevice_DrawVertices",{5,0,3});
     assert((backend.ReadPixel(44,32)==std::array<uint8_t,4>{255,255,0,255}));
     assert((backend.ReadPixel(16,32)==std::array<uint8_t,4>{0,0,0,255}));
+    // XYZ viewport in Xbox top-left coordinates: check that the actual
+    // rasterization is confined to the selected region, not the full target.
+    const uint32_t partial[]={8,12,32,24,std::bit_cast<uint32_t>(.25f),std::bit_cast<uint32_t>(.75f)};
+    mem.Write(0x10340,partial,sizeof(partial));
+    call("D3DDevice_SetViewport",{0x10340});
+    const float identity[]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    mem.Write(0x10600,identity,sizeof(identity));
+    call("D3DDevice_SetTransform",{6,0x10600});call("D3DDevice_SetTransform",{0,0x10600});
+    const WV full[]={{-1,-1,.5f,0xffff0000},{1,-1,.5f,0xffff0000},{1,1,.5f,0xffff0000},
+                     {-1,-1,.5f,0xffff0000},{1,1,.5f,0xffff0000},{-1,1,.5f,0xffff0000}};
+    mem.Write(0x80105000,full,sizeof(full));
+    call("D3DDevice_SetRenderState_ZEnable",{1});rs(gpu::kMZFunc,GL_LESS);rs(gpu::kMZWriteEnable,1);
+    call("D3DDevice_Clear",{0,0,0xf1,0xff000000,std::bit_cast<uint32_t>(.6f),0});
+    call("D3DDevice_DrawVertices",{5,0,6});
+    assert((backend.ReadPixel(24,24)==std::array<uint8_t,4>{255,0,0,255}));
+    assert((backend.ReadPixel(24,44)==std::array<uint8_t,4>{0,0,0,255}));
+    assert((backend.ReadPixel(4,24)==std::array<uint8_t,4>{0,0,0,255}));
+    // A Z=.5 vertex maps to .5 with [.25,.75], and .8 with [.6,1].
+    mem.Write32(0x10350,std::bit_cast<uint32_t>(.6f));mem.Write32(0x10354,std::bit_cast<uint32_t>(1.0f));
+    call("D3DDevice_SetViewport",{0x10340});
+    call("D3DDevice_Clear",{0,0,0xf1,0xff000000,std::bit_cast<uint32_t>(.6f),0});
+    call("D3DDevice_DrawVertices",{5,0,6});
+    assert((backend.ReadPixel(24,24)==std::array<uint8_t,4>{0,0,0,255}));
+    mem.Write32(0x10348,64);call("D3DDevice_SetViewport",{0x10340});
+    bool outside=false;
+    try{call("D3DDevice_DrawVertices",{5,0,6});}catch(const std::invalid_argument&){outside=true;}
+    assert(outside&&cpu.esp==0x1f000);
     auto fence=backend.Fence();assert(!backend.FencePending(fence));backend.WaitFence(fence);
     assert(bridge.Present(0x10100)==1);
     std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");

@@ -107,6 +107,11 @@ private:
         std::array<uint32_t,6> now{};
         for(unsigned i=0;i<now.size();++i)now[i]=mem_.Read32(live.buffers.DeviceAddress()+0xee0+4*i);
         if(now!=live.last_viewport){
+            auto device=live.buffers.DeviceAddress();
+            auto target=mem_.Read32(device+0x1a04);
+            if(target&&mem_.IsCommitted(target,20))
+                std::fprintf(stderr,"D3D VIEWPORT TARGET header=%08X common=%08X data=%08X format=%08X size=%08X\n",
+                    target,mem_.Read32(target),mem_.Read32(target+4),mem_.Read32(target+12),mem_.Read32(target+16));
             std::fprintf(stderr,"D3D VIEWPORT CHANGE previous_id=%08X previous_caller=%08X current_id=%08X current_caller=%08X old=%u,%u,%u,%u new=%u,%u,%u,%u z=%08X,%08X\n",
                 live.last_viewport_call,live.last_viewport_caller,ordinal,caller,
                 live.last_viewport[0],live.last_viewport[1],live.last_viewport[2],live.last_viewport[3],

@@ -63,7 +63,7 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
     cat "$execution_log"
     if grep -q "D3D original viewport has zero extent" "$execution_log"; then
-        python tools/report_hulk_viewport.py "$generated" || true
+        python tools/report_hulk_viewport.py "$generated" "$execution_log" || true
     fi
     if grep -q "MISSING GUEST target=" "$execution_log"; then
         python tools/report_missing_guest.py "$xbe" "$generated" --log "$execution_log" || true

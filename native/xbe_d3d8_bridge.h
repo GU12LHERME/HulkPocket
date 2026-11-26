@@ -75,7 +75,9 @@ class XbeD3d8Bridge {
             if(a[0]) {
                 auto p=uint64_t(a[0]);gpu::CheckedGuestRange(p,24);
                 gpu::Viewport v{Read(p),Read(p+4),Read(p+8),Read(p+12),Float(Read(p+16)),Float(Read(p+20))};
-                if(!v.w||!v.h||v.w>4096||v.h>4096||!std::isfinite(v.min_z)||!std::isfinite(v.max_z))
+                if(!v.w||!v.h||uint64_t(v.x)+v.w>4096||uint64_t(v.y)+v.h>4096||
+                   !std::isfinite(v.min_z)||!std::isfinite(v.max_z)||
+                   v.min_z<0||v.max_z>1||v.min_z>v.max_z)
                     throw std::invalid_argument("Invalid D3D viewport");
                 state_.viewport=v;
             }

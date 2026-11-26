@@ -328,11 +328,20 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     const bool transformed=(s.vs_handle&0xe)==4;
     const uint32_t expected=(textured?0x140u:0x40u)|(transformed?4u:2u);
     if(s.vs_handle!=expected||s.vs||s.ps||s.scissor_count||
-       s.viewport.x||s.viewport.y||s.viewport.w!=width_||s.viewport.h!=height_||
-       s.viewport.min_z!=0||s.viewport.max_z!=1||s.ss_offset_x!=0||s.ss_offset_y!=0||
+       s.ss_offset_x!=0||s.ss_offset_y!=0||
        std::any_of(s.textures.begin()+1,s.textures.end(),[](auto v){return v!=0;})||
        std::any_of(s.tss.begin()+1,s.tss.end(),[](const auto& stage){return std::any_of(stage.begin(),stage.end(),[](auto v){return v!=0;});}))
         Unsupported("GLES diagnostic requires XYZ or XYZRHW diffuse and a single optional texture");
+    const auto& vp=s.viewport;
+    if(!vp.w||!vp.h||uint64_t(vp.x)+vp.w>width_||uint64_t(vp.y)+vp.h>height_||
+       !std::isfinite(vp.min_z)||!std::isfinite(vp.max_z)||
+       vp.min_z<0||vp.max_z>1||vp.min_z>vp.max_z)
+        throw std::invalid_argument("Invalid GLES viewport extent or depth range");
+    // XYZRHW input already contains window coordinates and mapped depth.
+    // Keep that path restricted to a full viewport until its separate
+    // clipping rules are implemented. XYZ uses the real D3D viewport.
+    if(transformed&&(vp.x||vp.y||vp.w!=width_||vp.h!=height_||vp.min_z!=0||vp.max_z!=1))
+        Unsupported("Partial XYZRHW viewport not integrated");
     const auto& st=s.tss[0];
     for(unsigned i=0;i<st.size();++i){
         if(!st[i])continue;
@@ -393,7 +402,8 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     auto alpha_cmp=s.simple[gpu::kMAlphaFunc>>2],alpha_reference=s.simple[gpu::kMAlphaRef>>2];
     if(alpha_enable>1||(alpha_enable&&(alpha_cmp<0x200||alpha_cmp>0x207||alpha_reference>255)))
         Unsupported("Invalid alpha test state");
-    glViewport(0,0,width_,height_);RasterState(s);
+    glViewport(GLint(vp.x),GLint(height_-vp.y-vp.h),GLsizei(vp.w),GLsizei(vp.h));
+    glDepthRangef(vp.min_z,vp.max_z);RasterState(s);
     if(textured)UploadTexture(s);
     glUseProgram(program_);glUniform2f(extent_,float(width_),float(height_));
     glUniform1i(transformed_,transformed);
