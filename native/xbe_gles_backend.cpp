@@ -325,6 +325,28 @@ std::array<uint8_t,4> XbeGlesBackend::ReadPixel(uint32_t x,uint32_t y){
     Check();if(x>=width_||y>=height_)throw std::out_of_range("Pixel outside framebuffer");
     std::array<uint8_t,4> pixel{};glReadPixels(x,height_-1-y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());GlCheck("GLES readback");return pixel;
 }
+// Copy the single current color target into its actual Xbox linear BGRA
+// backing storage. No depth readback, other targets or asynchronous sync.
+void XbeGlesBackend::ReadbackColor(const gpu::Surface& s){
+    Check();
+    if(!target_||target_!=s.header)Unsupported("GLES readback requires current color target");
+    Target(s);
+    gpu::TextureDesc d{};
+    if(!gpu::DescribeSurface(s,d)||d.pitch<uint64_t(width_)*4)
+        throw std::invalid_argument("Invalid GLES readback surface");
+    auto* dst=gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
+    std::vector<uint8_t> rgba(size_t(width_)*height_*4);
+    glReadPixels(0,0,width_,height_,GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());
+    GlCheck("GLES color readback");
+    for(uint32_t y=0;y<height_;++y){
+        const auto* src=rgba.data()+size_t(height_-1-y)*width_*4;
+        auto* row=dst+size_t(y)*d.pitch;
+        for(uint32_t x=0;x<width_;++x){
+            row[x*4]=src[x*4+2];row[x*4+1]=src[x*4+1];
+            row[x*4+2]=src[x*4];row[x*4+3]=src[x*4+3];
+        }
+    }
+}
 void XbeGlesBackend::Copy(const gpu::Surface&,const gpu::Surface&,uint32_t,uint32_t,uint32_t,float,float){Unsupported("GLES surface copies pending");}
 void XbeGlesBackend::Sync(uint32_t,uint32_t){Unsupported("GLES guest readback pending");}
 void XbeGlesBackend::SyncLate(uint32_t){Unsupported("GLES asynchronous readback pending");}

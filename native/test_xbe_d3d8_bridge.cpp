@@ -30,6 +30,15 @@ int main(){
         auto methods=DecodeNv2aMethods(guest,0x24000,0x24000+sizeof(packets));
         assert(methods.size()==4&&methods[0].method==0x400&&methods[1].method==0x404);
         assert(methods[2].method==0x420&&methods[3].method==0x420&&methods[3].value==10);
+        gpu::State pushed{};Nv2aConstantCursor cursor{};
+        ApplyNv2aState(pushed,cursor,{{gpu::kMBlendEnable,1},{0x1ea4,8},{0xb80,0x3f800000},{0xb84,0x40000000}});
+        assert(pushed.simple[gpu::kMBlendEnable>>2]==1&&pushed.vsc[8][0]==1&&pushed.vsc[8][1]==2);
+        ApplyNv2aState(pushed,cursor,{{0xb88,0x40400000},{0xb8c,0x40800000}});
+        assert(cursor.reg==9&&cursor.component==0&&pushed.vsc[8][3]==4);
+        bool state_rejected=false;
+        try{ApplyNv2aState(pushed,cursor,{{gpu::kMBlendEnable,0},{0x17fc,5}});}
+        catch(const std::logic_error&){state_rejected=true;}
+        assert(state_rejected&&pushed.simple[gpu::kMBlendEnable>>2]==1);
         bool invalid_packet=false;
         try{DecodeNv2aMethods(guest,0x24000,0x24000+sizeof(packets)-4);}catch(const std::invalid_argument&){invalid_packet=true;}
         assert(invalid_packet);
@@ -46,6 +55,8 @@ int main(){
             XbeD3d8DeviceMemory device(guest,pool,physical);
             device.Initialize(dev,slot,pp);
             assert(device.BufferCount()==2&&guest.Read32(slot)==dev);
+            assert(device.Scratch()&&device.ScratchEnd()==device.Scratch());
+            assert(guest.Read32(dev+4)==device.Scratch()+0xf000);
             auto front=device.BackBuffer(-1),back=device.BackBuffer(0),depth=device.Depth();
             assert(front&&back&&depth&&front!=back);
             assert(guest.Read32(dev+0x1a04)==back&&guest.Read32(dev+0x1a08)==depth);

@@ -48,5 +48,6 @@ public:
     void WaitResource(uint32_t) override;
     void WaitGpuFrame(uint64_t) override;
     std::array<uint8_t,4> ReadPixel(uint32_t x,uint32_t y);
+    void ReadbackColor(const gpu::Surface& surface);
 };
 }

@@ -3,6 +3,7 @@
 // This is the graphics-side bridge, not yet a guest hook replacement:
 // device mirrors, reference ownership and pushbuffer walking belong to the next layer.
 #include "gpu/backend.h"
+#include "xbe_nv2a_push.h"
 #include "gpu/guest_memory.h"
 #include "gpu/texture.h"
 #include "gpu/vertex.h"
@@ -36,6 +37,7 @@ class XbeD3d8Bridge {
     XboxGuestAddressSpace& mem_;
     gpu::Backend& backend_;
     gpu::State state_{};
+    Nv2aConstantCursor push_constants_{};
     std::mutex lock_;
     bool initialized_=false;
     uint32_t presents_=0;
@@ -192,6 +194,11 @@ public:
         if(!initialized_||!color)throw std::logic_error("Invalid initial render targets");
         auto rt=Surface(color),zs=Surface(depth);
         state_.rt=rt;state_.zs=zs;ViewportConstants();
+    }
+    void ApplyPush(uint32_t begin,uint32_t end){
+        std::lock_guard guard(lock_);
+        if(!initialized_)throw std::logic_error("D3D bridge not initialized");
+        ApplyNv2aState(state_,push_constants_,DecodeNv2aMethods(mem_,begin,end));
     }
     uint32_t Call(std::string_view name,X86Context& cpu,const D3dAbi& abi) {
         std::lock_guard guard(lock_);

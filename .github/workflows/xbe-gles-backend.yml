@@ -8,6 +8,7 @@ on:
       - 'native/xbe_d3d8_bridge.h'
       - 'native/xbe_d3d8_create_probe.h'
       - 'native/xbe_d3d8_device_memory.h'
+      - 'native/xbe_nv2a_push.h'
       - 'native/xbe_kernel_session.h'
       - 'tools/run_hulk_diagnostic.sh'
       - 'native/xbox_guest_address_space.*'

@@ -38,6 +38,12 @@ int main(){
     call("D3DDevice_DrawVertices",{5,0,3});
     assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{255,0,0,255}));
     assert((backend.ReadPixel(1,1)==std::array<uint8_t,4>{0,255,0,255}));
+    {
+        gpu::ScopedGuestMemory scoped(mem);
+        backend.ReadbackColor(bridge.Snapshot().rt);
+        assert(mem.Read32(0x80100000+(24*256+32*4))==0xffff0000);
+        assert(mem.Read32(0x80100000+(1*256+1*4))==0xff00ff00);
+    }
     call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
     const uint16_t ix[]={0,1,2};mem.Write(0x10300,ix,sizeof(ix));
     call("D3DDevice_DrawIndexedVertices",{5,3,0x10300});

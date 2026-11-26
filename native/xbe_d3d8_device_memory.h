@@ -14,7 +14,8 @@ class XbeD3d8DeviceMemory {
     XbePhysicalMemory& physical_;
     struct Resource{uint32_t header=0,data=0;};
     std::array<Resource,4> resources_{};
-    uint32_t count_=0,device_=0,slot_=0;
+    uint32_t count_=0,device_=0,slot_=0,scratch_=0;
+    static constexpr uint32_t scratch_size=0x10000;
     Resource Make(uint32_t w,uint32_t h,uint32_t fmt){
         uint32_t pitch=(w*4+63)&~63u;
         if(pitch/64>256)throw std::invalid_argument("D3D pitch exceeds resource header");
@@ -36,6 +37,7 @@ class XbeD3d8DeviceMemory {
             if(r.data)physical_.Free(r.data);
             r={};
         }
+        if(scratch_){physical_.Free(scratch_);scratch_=0;}
         count_=0;
     }
     void Set(uint32_t off,uint32_t v){mem_.Write32(device_+off,v);}
@@ -64,10 +66,13 @@ public:
         try{
             for(uint32_t i=0;i<count_;++i)resources_[i]=Make(w,h,0x12);
             if(auto_depth)resources_[3]=Make(w,h,0x2e);
+            scratch_=physical_.Allocate(scratch_size,0,UINT32_MAX,4096);
+            if(!scratch_)throw std::runtime_error("D3D scratch allocation failed");
         }catch(...){Release();throw;}
         device_=device;slot_=slot;
         std::memset(mem_.Base()+device,0,device_size);
         mem_.Write32(slot,device);
+        Set(0,scratch_);Set(4,scratch_+scratch_size-0x1000);
         Set(0x1a04,resources_[1].header);Set(0x1a08,resources_[3].header);
         Set(0x1a14,resources_[1].header);Set(0x1a18,resources_[1].header);
         Set(0x1a20,resources_[3].header);
@@ -84,6 +89,18 @@ public:
         return resources_[index+1].header;
     }
     uint32_t Depth()const{return resources_[3].header;}
+    uint32_t Scratch()const{return scratch_;}
+    uint32_t ScratchEnd()const{
+        if(!device_)throw std::logic_error("D3D device not allocated");
+        auto end=mem_.Read32(device_);
+        if(end<scratch_||end>scratch_+scratch_size||end%4)
+            throw std::out_of_range("D3D scratch pointer outside allocation");
+        return end;
+    }
+    void RewindScratch(){
+        if(!device_)throw std::logic_error("D3D device not allocated");
+        Set(0,scratch_);
+    }
     uint32_t BufferCount()const{return count_;}
     // Rotate physical data and lock words while preserving resource headers.
     // Called only after a successful backend present and push processing.

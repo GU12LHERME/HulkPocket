@@ -16,12 +16,26 @@ inline void RunD3dCreateProbe(XboxGuestAddressSpace& mem,XbeKernelPool& pool,
     XbeD3d8Bridge bridge(mem,backend);
     bridge.Initialize(w,h);
     bridge.BindInitialTargets(buffers.BackBuffer(0),buffers.Depth());
+    // Diagnostic packets use the same scratch buffer and method decoder as
+    // future guest pushes. The game has not executed its defaults yet.
+    auto scratch=buffers.Scratch();
+    const uint32_t methods[]={gpu::kMColorWriteEnable|(1u<<18),0x01010101,
+        gpu::kMBlendEnable|(1u<<18),0};
+    mem.Write(scratch,methods,sizeof(methods));
+    mem.Write32(device,scratch+sizeof(methods));
+    bridge.ApplyPush(scratch,buffers.ScratchEnd());
+    buffers.RewindScratch();
     auto state=bridge.Snapshot();
     gpu::ScopedGuestMemory scope(mem);
     backend.Clear(state,0,nullptr,0xf0u|(buffers.Depth()?gpu::kClearZ:0u),0xff123456,1.0f,0);
     auto pixel=backend.ReadPixel(w/2,h/2);
     if(pixel!=std::array<uint8_t,4>{0x12,0x34,0x56,0xff})
         throw std::runtime_error("D3D device diagnostic readback mismatch");
+    backend.ReadbackColor(state.rt);
+    gpu::TextureDesc desc{};
+    if(!gpu::DescribeSurface(state.rt,desc)||
+        mem.Read32(desc.data+(h/2)*desc.pitch+(w/2)*4)!=0xff123456)
+        throw std::runtime_error("D3D guest color readback mismatch");
     bridge.Present(buffers.BackBuffer(0));
     if(buffers.Rotate()!=1)throw std::runtime_error("D3D device diagnostic swap count mismatch");
     std::fprintf(stderr,"D3D8 LIVE DEVICE PROBE PASS: %ux%u color=%08X depth=%08X RGBA=%02X%02X%02X%02X\n",
