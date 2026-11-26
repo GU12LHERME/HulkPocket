@@ -8,6 +8,7 @@
 #include "xbe_kernel_crypto.h"
 #include "xbe_kernel_virtual_memory.h"
 #include "xbe_kernel_physical_memory.h"
+#include "xbe_kernel_stacks.h"
 #include "xbe_kernel_files.h"
 #include "xbe_fault_diagnostic.h"
 #include "xbe_graphics_boundary.h"
@@ -38,6 +39,7 @@ private:
     XbeKernelPool pool_;
     XbeVirtualMemory virtual_;
     XbePhysicalMemory physical_;
+    XbeKernelStacks stacks_;
     XbeDiscFiles files_;
     XbeTlsTemplate tls_;
     const HulkKernelClock* clock_;
@@ -809,6 +811,19 @@ private:
                 // still unsupported. Explicit frees clear the flags.
                 Ret(cpu,3,0);return;
             }
+            case 169: {
+                Check(cpu,2);auto bytes=Arg(cpu,0);
+                if(Arg(cpu,1)&255u)throw std::runtime_error("Debugger kernel stack not supported");
+                auto top=stacks_.Allocate(bytes);
+                std::fprintf(stderr,"MmCreateKernelStack bytes=%08X top=%08X\n",bytes,top);
+                Ret(cpu,2,top);return;
+            }
+            case 170: {
+                Check(cpu,2);auto top=Arg(cpu,0),limit=Arg(cpu,1);
+                if(!stacks_.Free(top,limit,cpu.esp))
+                    throw std::runtime_error("Invalid or active kernel stack deletion");
+                Ret(cpu,2,0);return;
+            }
             case 167: {
                 Check(cpu,2);auto bytes=Arg(cpu,0),protect=Arg(cpu,1);
                 if(protect!=4)throw std::runtime_error("Unsupported system memory protection");
@@ -861,7 +876,7 @@ private:
                 constexpr uint32_t total=0x04000000/4096;
                 auto committed=virtual_.CommittedBytes(),reserved=virtual_.ReservedBytes();
                 auto pool_pages=pool_.UsedPages();
-                uint32_t stacks=initial_stack_pages_;
+                uint32_t stacks=initial_stack_pages_+stacks_.Pages();
                 for(size_t i=0;i<count_;++i)stacks+=workers_[i].stack_pages;
                 // Diagnostic allocations use separate host arenas; account
                 // for live Xbox-equivalent pages, not Android total RAM.
@@ -1191,7 +1206,7 @@ private:
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
                      XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0)
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),files_(mem,disc_root),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

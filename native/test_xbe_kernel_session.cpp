@@ -82,6 +82,18 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,kXapiInputSetState,{pad_handle,0x12b40});assert(c->eax==1167);
     call(*c,base,cb,kXapiInputClose,{pad_handle});assert(!c->eax);
     call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});assert(c->eax==6);
+    // Guest stack top, inaccessible guard, zeroed reuse and checked deletion.
+    call(*c,base,cb,169,{0x10000,0});
+    auto stack_top=c->eax;assert(stack_top&&stack_top%0x10000==0);
+    assert(memory->IsCommitted(stack_top-0x10000,0x10000));
+    assert(!memory->IsCommitted(stack_top-0x10001,1));
+    memory->Write32(stack_top-4,0x12345678);
+    call(*c,base,cb,170,{stack_top,stack_top-0x10000});
+    assert(!memory->IsCommitted(stack_top-4,4));
+    call(*c,base,cb,169,{0x10000,0});
+    assert(c->eax==stack_top&&memory->Read32(stack_top-4)==0);
+    call(*c,base,cb,170,{stack_top,stack_top-0x10000});
+    call(*c,base,cb,169,{0,0});assert(!c->eax);
     // Main-thread settings and fastcall object references.
     const auto main_body=memory->Read32(c->fs_base+0x28);
     call(*c,base,cb,246,{0xfffffffeu,0,0x10f00});
