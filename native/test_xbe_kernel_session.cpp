@@ -127,10 +127,10 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,185,{timer,0x12818});assert(c->eax==0);
     call(*c,base,cb,187,{timer});assert(c->eax==0);
     call(*c,base,cb,189,{0x12824,0,1,0});assert(c->eax==0);
-    auto ev=memory->Read32(0x12824);
-    call(*c,base,cb,230,{ev,ev,0,0,0});assert(c->eax==0);
-    call(*c,base,cb,233,{ev,0,0x12820});assert(c->eax==0x102);
-    call(*c,base,cb,187,{ev});assert(c->eax==0);
+    auto signal_event=memory->Read32(0x12824);
+    call(*c,base,cb,230,{signal_event,signal_event,0,0,0});assert(c->eax==0);
+    call(*c,base,cb,233,{signal_event,0,0x12820});assert(c->eax==0x102);
+    call(*c,base,cb,187,{signal_event});assert(c->eax==0);
     // Requests for non-recompiled executable images return the same
     // error as the upstream XAPI replacement instead of rebooting.
     const char launch[]="C:\\xboxdash.xbe";
