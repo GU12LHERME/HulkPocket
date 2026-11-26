@@ -61,7 +61,15 @@ struct Nv2aConstantCursor {
     bool loaded=false,pending_raw_configuration=false;
     // Offset and format may arrive in separate packets. Retain per-stage
     // presence independently of their values (physical offset zero is legal).
-    std::array<uint8_t,4> texture_words{};
+    std::array<uint8_t,4> texture_words{}, texture_dirty{};
+    std::array<bool,4> texture_control{};
+    bool TextureReady(unsigned stage)const{
+        return texture_words.at(stage)==3&&texture_dirty.at(stage)&&
+            (texture_dirty.at(stage)==3||texture_control.at(stage));
+    }
+    void TextureInspected(unsigned stage){
+        texture_dirty.at(stage)=0;texture_control.at(stage)=false;
+    }
 };
 // State-only method subset, based on XboxXBERecomp ApplyConstant/SetSimple.
 // Entire batch validated before committing; do not silently drop a method.
@@ -98,16 +106,21 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         if(m>=0x1b00&&m<0x1c00){
             auto stage=(m-0x1b00)/0x40,off=m&0x3f;
             if(off==0||off==4){
-                next.texture_words[stage]|=off==0?1u:2u;
+                const uint8_t bit=off==0?1u:2u;
+                next.texture_words[stage]|=bit;
+                next.texture_dirty[stage]|=bit;
                 simple[m>>2]=v;next.pending_raw_configuration=true;continue;
             }
             if(off==8||off==0x10||off==0x14||off==0x1c||off==0x20||off==0x24){
                 simple[m>>2]=v;next.pending_raw_configuration=true;continue;
             }
-            if(off==0xc&&v){
-                if(next.texture_words[stage]!=3)
+            if(off==0xc){
+                if(v&&next.texture_words[stage]!=3)
                     throw std::logic_error("Enabled raw texture without offset and format");
-                simple[m>>2]=v;next.pending_raw_configuration=true;continue;
+                if(next.texture_words[stage]==3&&next.texture_dirty[stage])
+                    next.texture_control[stage]=true;
+                if(v)next.pending_raw_configuration=true;
+                simple[m>>2]=v;continue;
             }
         }
         if(IsDisabledTextureMethod(m)){

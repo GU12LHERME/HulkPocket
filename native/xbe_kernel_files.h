@@ -311,8 +311,18 @@ public:
             root,access,disposition,options,LogName(name).c_str());
         // FILE_DIRECTORY_FILE is not a write. FILE_DELETE_ON_CLOSE is.
         // Never create or modify a file; OPEN_IF only opens existing entries.
+        // XAPI opens existing private title directories with add/write
+        // intent. Accept only this observed request; mutations are not
+        // implemented and regular file writes remain forbidden.
+        auto canonical=Upper(name);
+        std::replace(canonical.begin(),canonical.end(),'/','\\');
+        if(!canonical.empty()&&canonical.back()=='\\')canonical.pop_back();
+        const bool title_directory_intent=root==0&&access==0x00120117u&&
+            disposition==3&&options==0x00004021u&&
+            (canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\TDATA\\56550039"||
+             canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039");
         if((disposition!=1&&disposition!=3)||(options&0x1000u)||
-           (access&0x500d0116u))return Finish(iosb,denied);
+           ((access&0x500d0116u)&&!title_directory_intent))return Finish(iosb,denied);
         if((options&0x41u)==0x41u)return Finish(iosb,invalid);
         if(!ValidRoot(root))return Finish(iosb,bad_handle);
         if(files_.size()+link_handles_.size()>=256)return Finish(iosb,0xc000011fu);
@@ -322,6 +332,13 @@ public:
         struct stat st{};
         if(fstat(fd,&st)){close(fd);return Finish(iosb,0xc0000185u);}
         const bool directory=S_ISDIR(st.st_mode);
+        if(title_directory_intent){
+            if(!hdd||!directory||st.st_uid!=geteuid()||
+               faccessat(fd,".",W_OK|X_OK,0)!=0){
+                close(fd);return Finish(iosb,denied);
+            }
+            std::fprintf(stderr,"XBOX TITLE DIRECTORY OPEN PASS (existing private directory; file mutations unsupported)\n");
+        }
         if(directory&&(options&0x40u)){close(fd);return Finish(iosb,0xc00000bau);}
         if(!directory&&(options&1u)){close(fd);return Finish(iosb,0xc0000103u);}
         std::shared_ptr<File> file;

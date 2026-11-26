@@ -389,14 +389,8 @@ public:
         auto next=state_;auto cursor=push_constants_;
         ApplyNv2aState(next,cursor,methods);
         gpu::ScopedGuestMemory scope(mem_);
-        std::array<uint8_t,4> changed{};
-        for(auto [m,v]:methods){
-            (void)v;
-            if(m>=0x1b00&&m<0x1c00&&(m&0x3f)<=4)
-                changed[(m-0x1b00)/0x40]|=(m&0x3f)==0?1u:2u;
-        }
         for(unsigned stage=0;stage<4;++stage){
-            if(changed[stage]!=3)continue;
+            if(!cursor.TextureReady(stage))continue;
             const auto base=0x1b00+stage*0x40;
             auto offset=next.simple[base>>2],format=next.simple[(base+4)>>2];
             // Only decode the verified swizzled 2D family here; preserve
@@ -411,6 +405,7 @@ public:
             }else{
                 std::fprintf(stderr,"D3D RAW TEXTURE PENDING stage=%u physical=%08X format=%08X\n",stage,offset,format);
             }
+            cursor.TextureInspected(stage);
         }
         state_=std::move(next);push_constants_=cursor;
     }

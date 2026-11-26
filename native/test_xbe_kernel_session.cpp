@@ -386,6 +386,26 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,1,0x40});
     assert(c->eax==0xc0000034u); // Disc assets cannot appear on empty HDD.
     call(*c,base,cb,187,{hdd});assert(c->eax==0);
+    const char title_dir[]="\\Device\\Harddisk0\\partition1\\TDATA\\56550039";
+    memory->Write32(0x10950,0);
+    memory->Write(0x10900,title_dir,sizeof(title_dir));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,190,{0x10960,0x00120117,0x10950,0x10968,0,0,0,3,0x00004021});
+    assert(c->eax==0&&memory->Read32(0x1096c)==1);
+    auto title_handle=memory->Read32(0x10960);
+    call(*c,base,cb,211,{title_handle,0x10968,0x12c00,24,5});
+    assert(c->eax==0&&memory->Read32(0x12c14)==0x100);
+    call(*c,base,cb,187,{title_handle});assert(c->eax==0);
+    const char disc_title[]="\\Device\\CdRom0\\TDATA\\56550039";
+    memory->Write(0x10900,disc_title,sizeof(disc_title));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,190,{0x10960,0x00120117,0x10950,0x10968,0,0,0,3,0x00004021});
+    assert(c->eax==0xc0000022u);
+    const char fake_title[]="\\Device\\Harddisk0\\partition1\\UDATA\\56550039";
+    memory->Write(0x10900,fake_title,sizeof(fake_title));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,190,{0x10960,0x00120117,0x10950,0x10968,0,0,0,3,0x00004021});
+    assert(c->eax==0xc0000034u);
     // Guest-created DOS aliases map only to selected Xbox device roots.
     const char link_name[]="\\??\\Q:";
     const char link_target[]="\\Device\\CdRom0";
@@ -645,11 +665,19 @@ int main() {
     assert(symlink("/etc/passwd",symlink_path.c_str())==0);
     char partition_dir[]="/tmp/hulk-partition1-XXXXXX";
     assert(mkdtemp(partition_dir));
+    const std::string tdata=std::string(partition_dir)+"/TDATA";
+    const std::string title_dir=tdata+"/56550039";
+    const std::string udata=std::string(partition_dir)+"/UDATA";
+    assert(mkdir(tdata.c_str(),0700)==0&&mkdir(title_dir.c_str(),0700)==0);
+    assert(mkdir(udata.c_str(),0700)==0);
+    const std::string fake_title=udata+"/56550039";
+    assert(symlink(dir,fake_title.c_str())==0);
     HulkKernelDataRegistry registry;
     RegisterDispatcherObjectTypes(mem,registry,0x10c00);
     XbeKernelSession session(mem,0x09000000,0x01000000,tls,nullptr,dir,&registry,0,partition_dir);
     assert(session.Run(entry,cpu,0x1000)==0);
     assert(ran==1);
     assert(mem.Read32(0x0A000404)==1);
+    assert(unlink(fake_title.c_str())==0&&rmdir(udata.c_str())==0&&rmdir(title_dir.c_str())==0&&rmdir(tdata.c_str())==0);
     assert(unlink(path.c_str())==0&&unlink(manifest_path.c_str())==0&&unlink(symlink_path.c_str())==0&&rmdir(dir)==0&&rmdir(partition_dir)==0);
 }

@@ -93,6 +93,20 @@ int main(){
             catch(const std::out_of_range&){rejected=true;}
             assert(rejected);
         }
+        assert(cursor.TextureReady(0));
+        cursor.TextureInspected(0);
+        assert(!cursor.TextureReady(0));
+        ApplyNv2aState(pushed,cursor,{{0x1b40,0x03ae0000}});
+        assert(!cursor.TextureReady(1));
+        ApplyNv2aState(pushed,cursor,{{0x1b44,0x08810629}});
+        assert(cursor.TextureReady(1));
+        cursor.TextureInspected(1);
+        ApplyNv2aState(pushed,cursor,{{0x1b40,0x03aa0000}});
+        assert(!cursor.TextureReady(1));
+        ApplyNv2aState(pushed,cursor,{{0x1b4c,0}});
+        assert(cursor.TextureReady(1));
+        cursor.TextureInspected(1);
+        assert(!cursor.TextureReady(1));
         ApplyNv2aState(pushed,cursor,{{0x1b0c,0x40000000}});
         assert(cursor.pending_raw_configuration&&pushed.simple[0x1b0c>>2]==0x40000000);
         ApplyNv2aState(pushed,cursor,{{0x1710,0},{0x1950,0},{0x195c,0xffffffff},{0x1960,0}});
