@@ -29,8 +29,15 @@ def generated_sources(directory: pathlib.Path) -> list[pathlib.Path]:
 def build(
     sdk: pathlib.Path, generated: pathlib.Path, ndk_bin: pathlib.Path,
     output: pathlib.Path, audit_output: pathlib.Path | None = None,
+    termux: bool = False, audit_only: bool = False,
 ) -> pathlib.Path:
-    compiler = ndk_bin / "aarch64-linux-android29-clang++"
+    compiler = ndk_bin / ("clang++" if termux else "aarch64-linux-android29-clang++")
+    if termux:
+        target = subprocess.check_output([str(compiler), "-dumpmachine"], text=True).strip()
+        if not target.startswith("aarch64") or "android" not in target:
+            raise ValueError("Termux compiler must target Android AArch64")
+    if audit_only and audit_output is None:
+        raise ValueError("audit-only requires --audit-output")
     nm = ndk_bin / "llvm-nm"
     readelf = ndk_bin / "llvm-readelf"
     for tool in (compiler, nm, readelf):
@@ -61,6 +68,8 @@ def build(
                 json.dumps(report, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+        if audit_only:
+            return audit_output
         # The generated code often imports SDK services such as
         # x86_icall, kernel accessors and game hooks. Production builds
         # must explicitly resolve all of these against the host runtime.
@@ -86,9 +95,11 @@ def main() -> None:
     parser.add_argument("--ndk-bin", required=True, type=pathlib.Path)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--audit-output", type=pathlib.Path, default=None)
+    parser.add_argument("--termux", action="store_true", help="Use native Android clang++ in --ndk-bin")
+    parser.add_argument("--audit-only", action="store_true", help="Compile and inventory imports without linking")
     args = parser.parse_args()
-    result = build(args.sdk, args.generated, args.ndk_bin, args.output, args.audit_output)
-    print(f"Validated Android ARM64 ELF: {result}")
+    result = build(args.sdk, args.generated, args.ndk_bin, args.output, args.audit_output, args.termux, args.audit_only)
+    print(f"{'Private import audit' if args.audit_only else 'Validated Android ARM64 ELF'}: {result}")
 
 if __name__ == "__main__":
     main()
