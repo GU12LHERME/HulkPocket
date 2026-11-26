@@ -110,6 +110,23 @@ int main(){
         for(unsigned y=30;y<=33;++y)
             if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,0,255,255})replay_pixel=true;
         assert(replay_pixel&&bridge.Snapshot().viewport.w==64&&mem.Read32(dev+0xee8)==64);
+        auto first_profile=bridge.Snapshot();
+        // Second line uses a different buffer and leaves the first line in
+        // the framebuffer. No intervening clear, just as observed on RP6.
+        mem.Write32(0x10220,0x01080001);mem.Write32(0x10224,0x106000);
+        const XYZ second[]={{-.75f,.5f,.5f,0xff00ffff},{.75f,.5f,.5f,0xff00ffff}};
+        mem.Write(0x80106000,second,sizeof(second));
+        call("D3DDevice_SetStreamSource",{0,0x10220,sizeof(XYZ)});
+        assert(XbeD3d8Bridge::SameDiagnosticLineProfile(first_profile,bridge.Snapshot()));
+        bridge.ReplayFixedLinesDiagnostic(0,2);
+        bool second_pixel=false,first_pixel=false;
+        for(unsigned y=14;y<=17;++y)
+            if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{0,255,255,255})second_pixel=true;
+        for(unsigned y=30;y<=33;++y)
+            if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,0,255,255})first_pixel=true;
+        assert(first_pixel&&second_pixel);
+        auto incompatible=bridge.Snapshot();incompatible.simple[gpu::kMBlendEnable>>2]^=1;
+        assert(!XbeD3d8Bridge::SameDiagnosticLineProfile(first_profile,incompatible));
         mem.Write32(dev+0xee8,32);
         assert(bridge.SyncFixedDiffuseShader(dev)==0x42);
         bool partial_rejected=false;

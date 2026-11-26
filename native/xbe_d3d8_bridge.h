@@ -329,6 +329,21 @@ public:
     // Reduced diagnostic line profile. Use the actual guest viewport if
     // valid; zero extent fallback is for investigation only. Keep guest
     // state and the normal unresolved raw-packet guard intact.
+    // Match the already observed reduced line profile before permitting
+    // another diagnostic return. Only the stream bindings and vertex data
+    // may change; no assumption that a different raster state is harmless.
+    static bool SameDiagnosticLineProfile(const gpu::State& a,const gpu::State& b){
+        return a.rs==b.rs&&a.tss==b.tss&&a.simple==b.simple&&
+            a.textures==b.textures&&a.palettes==b.palettes&&
+            a.vs_handle==b.vs_handle&&!a.vs&&!b.vs&&!a.ps&&!b.ps&&
+            a.rt.header==b.rt.header&&a.zs.header==b.zs.header&&
+            a.base_vertex==b.base_vertex&&a.scissor_count==b.scissor_count&&
+            a.scissors==b.scissors&&a.transforms==b.transforms&&
+            a.viewport.x==b.viewport.x&&a.viewport.y==b.viewport.y&&
+            a.viewport.w==b.viewport.w&&a.viewport.h==b.viewport.h&&
+            a.viewport.min_z==b.viewport.min_z&&a.viewport.max_z==b.viewport.max_z&&
+            a.ss_offset_x==b.ss_offset_x&&a.ss_offset_y==b.ss_offset_y&&a.zscale==b.zscale;
+    }
     void ReplayFixedLinesDiagnostic(uint32_t start,uint32_t count){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!initialized_||state_.vs_handle!=0x42||state_.vs||state_.ps||

@@ -98,6 +98,9 @@ private:
         XbeD3d8Bridge bridge;
         uint32_t owner;
         unsigned setter_calls=0,diagnostic_draw_returns=0;
+        uint32_t diagnostic_vertices=0;
+        std::unique_ptr<gpu::State> diagnostic_line_profile;
+        static constexpr unsigned diagnostic_draw_limit=8;
         std::array<uint32_t,6> last_viewport{};
         uint32_t last_viewport_call=0,last_viewport_caller=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
@@ -893,9 +896,19 @@ private:
                     std::fprintf(stderr,"\n");
                 }
                 const bool zero_viewport=!synced.viewport.w||!synced.viewport.h;
-                // Run at most one explicitly opt-in reduced draw return.
-                // Subsequent geometry remains guarded until integrated.
-                if(!indexed&&Arg(cpu,0)==2&&!live.diagnostic_draw_returns){
+                const char* allow=std::getenv("HULK_CONTINUE_DRAW");
+                const bool opted_in=allow&&std::strcmp(allow,"1")==0;
+                const auto caller=mem_.Read32(cpu.esp),start=Arg(cpu,1),count=Arg(cpu,2);
+                const bool same_caller=caller==0x0031c10f&&!indexed&&Arg(cpu,0)==2&&
+                    start==0&&count>0&&count<=1020&&count%2==0;
+                const bool first=!live.diagnostic_draw_returns;
+                const bool matching=first?count==1020:
+                    live.diagnostic_line_profile&&XbeD3d8Bridge::SameDiagnosticLineProfile(*live.diagnostic_line_profile,synced);
+                // Preserve the original single diagnostic replay by default;
+                // continuing multiple draws requires the explicit opt-in,
+                // same observed raster/transform profile and bounded count.
+                if(!indexed&&Arg(cpu,0)==2&&(first||(opted_in&&!zero_viewport&&
+                    same_caller&&matching&&live.diagnostic_draw_returns<LiveD3dDevice::diagnostic_draw_limit))){
                         gpu::ScopedGuestMemory scope(mem_);
                         gpu::TextureDesc desc{};
                         if(!gpu::DescribeSurface(synced.rt,desc))
@@ -918,18 +931,22 @@ private:
                                 std::fprintf(stderr,"D3D DIAGNOSTIC BITMAP: %s (reduced replay, not a presented frame)\n",path);
                             }catch(const std::exception& ex){std::fprintf(stderr,"D3D DIAGNOSTIC BITMAP FAILED: %s\n",ex.what());}
                         }
-                    // Explicitly experimental continuation of the observed
-                    // USA first untextured line draw only. No arbitrary draw
-                    // success, no raw-state guard removal, no swap bypass.
-                    const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                    if(allow&&std::strcmp(allow,"1")==0&&!zero_viewport&&changed&&
+                    // The first draw must demonstrate a pixel change.
+                    // Later valid draws may be occluded or overdraw identical
+                    // pixels: a successful checked GPU call need not change
+                    // the color buffer. The BMP is cumulative, not a frame.
+                    if(opted_in&&!zero_viewport&&(!first||changed)&&same_caller&&matching&&
                         synced.viewport.w==desc.width&&synced.viewport.h==desc.height&&
-                        mem_.Read32(cpu.esp)==0x0031c10f&&Arg(cpu,1)==0&&Arg(cpu,2)==1020){
-                        ++live.diagnostic_draw_returns;
-                        std::fprintf(stderr,"D3D DIAGNOSTIC DRAW RETURN: original viewport, reduced raster profile; one draw only\n");
+                        live.diagnostic_draw_returns<LiveD3dDevice::diagnostic_draw_limit){
+                        if(first)live.diagnostic_line_profile=std::make_unique<gpu::State>(synced);
+                        ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
+                        std::fprintf(stderr,"D3D DIAGNOSTIC DRAW RETURN: batch=%u/%u vertices=%u cumulative_vertices=%u changed_pixels=%u (reduced profile)\n",
+                            live.diagnostic_draw_returns,LiveD3dDevice::diagnostic_draw_limit,vertices,live.diagnostic_vertices,changed);
                         Ret(cpu,3,0);return;
                     }
                 }
+                if(!first)std::fprintf(stderr,"D3D DIAGNOSTIC BATCH STOP: completed=%u vertices=%u matching=%u same_caller=%u\n",
+                    live.diagnostic_draw_returns,live.diagnostic_vertices,unsigned(matching),unsigned(same_caller));
                 if(zero_viewport)
                     throw std::runtime_error("D3D original viewport has zero extent; investigate device initialization");
                 throw std::runtime_error("D3D original geometry assembled; raw raster translation pending");
