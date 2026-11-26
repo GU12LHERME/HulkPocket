@@ -17,7 +17,8 @@
 #include <vector>
 #include <optional>
 namespace hulkpocket {
-// Read-only disc directory. Every guest component is opened relative to a
+// Read-only disc directory and a narrowly writable private title metadata file.
+// Every guest component is opened relative to a
 // directory descriptor with O_NOFOLLOW; guest paths never become host paths.
 class XbeDiscFiles {
     XboxGuestAddressSpace& mem_;
@@ -27,6 +28,7 @@ class XbeDiscFiles {
     std::optional<uint64_t> disc_units_;
     struct File {
         int fd; bool directory,partition1; uint64_t pos=0;
+        bool metadata_write=false;
         bool listed=false;
         size_t next_entry=0;
         std::vector<DirEntry> entries;
@@ -213,6 +215,47 @@ class XbeDiscFiles {
         }
         close(dir);return -1;
     }
+    // Only the observed XAPI TitleMeta.xbx OPEN_IF request may create
+    // or write a host file. Never resolve a writable path through a DOS
+    // alias, guest directory handle, symlink, or hardlink.
+    static constexpr uint64_t kMetadataLimit=65536;
+    uint32_t OpenTitleMetadata(uint32_t out,uint32_t iosb){
+        bool hdd=false;
+        int dir=Resolve("\\Device\\Harddisk0\\partition1\\UDATA\\56550039",0,&hdd);
+        if(dir<0)return Finish(iosb,missing);
+        struct stat st{},root{};
+        if(!hdd||fstat(dir,&st)||fstat(partition1_,&root)||
+           st.st_uid!=geteuid()||root.st_uid!=geteuid()||
+           (st.st_mode&0022)||(root.st_mode&0022)||
+           faccessat(dir,".",W_OK|X_OK,0)!=0){
+            close(dir);return Finish(iosb,denied);
+        }
+        auto name=Match(dir,"TitleMeta.xbx");
+        bool created=false;int fd=-1;
+        if(name.empty()){
+            fd=openat(dir,"TitleMeta.xbx",O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,0600);
+            created=fd>=0;
+        }else{
+            // Opening without O_TRUNC cannot damage an unsafe existing file.
+            // Reject special files before opening, then recheck descriptor.
+            if(!fstatat(dir,name.c_str(),&st,AT_SYMLINK_NOFOLLOW)&&S_ISREG(st.st_mode)&&
+               st.st_uid==geteuid()&&st.st_nlink==1&&!(st.st_mode&0022))
+                fd=openat(dir,name.c_str(),O_WRONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK);
+        }
+        close(dir);
+        if(fd<0)return Finish(iosb,denied);
+        if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_uid!=geteuid()||
+           st.st_nlink!=1||(st.st_mode&0022)||st.st_size<0||uint64_t(st.st_size)>kMetadataLimit){
+            close(fd);return Finish(iosb,denied);
+        }
+        std::shared_ptr<File> file;
+        try{file=std::make_shared<File>(fd,false,true);}catch(...){close(fd);throw;}
+        file->metadata_write=true;
+        const auto h=next_;next_+=4;
+        files_.emplace(h,std::move(file));mem_.Write32(out,h);
+        std::fprintf(stderr,"XBOX TITLE METADATA OPEN PASS created=%u (private file, max 64 KiB)\n",unsigned(created));
+        return Finish(iosb,0,created?2u:1u);
+    }
     uint32_t Finish(uint32_t iosb,uint32_t status,uint32_t info=0) {
         if(!mem_.IsCommitted(iosb,8)) return invalid;
         mem_.Write32(iosb,status);mem_.Write32(iosb+4,info);return status;
@@ -317,6 +360,11 @@ public:
         auto canonical=Upper(name);
         std::replace(canonical.begin(),canonical.end(),'/','\\');
         if(!canonical.empty()&&canonical.back()=='\\')canonical.pop_back();
+        if(root==0&&access==0x40100000u&&disposition==3&&options==0x22u&&
+           canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEMETA.XBX"){
+            if(files_.size()+link_handles_.size()>=256)return Finish(iosb,0xc000011fu);
+            return OpenTitleMetadata(out,iosb);
+        }
         const bool title_directory_intent=root==0&&access==0x00120117u&&
             disposition==3&&options==0x00004021u&&
             (canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\TDATA\\56550039"||
@@ -362,7 +410,8 @@ public:
     uint32_t Flush(uint32_t h,uint32_t iosb){
         if(!mem_.IsCommitted(iosb,8))return invalid;
         if(!Contains(h))return Finish(iosb,bad_handle);
-        // Read-only disc handles have no dirty host data to flush.
+        // Only the private metadata file may have dirty host data.
+        if(files_.at(h)->metadata_write&&fsync(files_.at(h)->fd))return Finish(iosb,0xc0000185u);
         return Finish(iosb,0);
     }
     uint32_t FullAttributes(uint32_t attrs,uint32_t out){
@@ -390,6 +439,7 @@ public:
         auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
         auto& f=*it->second;
         if(f.directory)return Finish(iosb,0xc00000bau);
+        if(f.metadata_write)return Finish(iosb,denied);
         int64_t pos=-2;
         if(offset){if(!mem_.IsCommitted(offset,8))return Finish(iosb,invalid);mem_.Read(offset,&pos,8);}
         if(pos==-2)pos=static_cast<int64_t>(f.pos);
@@ -400,6 +450,32 @@ public:
         if(n<0)return Finish(iosb,0xc0000185u);
         f.pos=uint64_t(pos)+uint64_t(n);
         return Finish(iosb,n?0:0xc0000011u,static_cast<uint32_t>(n));
+    }
+    uint32_t WriteMetadata(uint32_t h,uint32_t iosb,uint32_t buf,uint32_t len,uint32_t offset){
+        if(!mem_.IsCommitted(iosb,8))return invalid;
+        auto it=files_.find(h);
+        if(it==files_.end())return Finish(iosb,bad_handle);
+        auto& f=*it->second;
+        if(!f.metadata_write||f.directory||!f.partition1)return Finish(iosb,denied);
+        if(len>kMetadataLimit||!mem_.IsCommitted(buf,len))return Finish(iosb,invalid);
+        int64_t pos=-2;
+        if(offset){if(!mem_.IsCommitted(offset,8))return Finish(iosb,invalid);mem_.Read(offset,&pos,8);}
+        if(pos==-2)pos=static_cast<int64_t>(f.pos);
+        if(pos<0||uint64_t(pos)>kMetadataLimit-len)return Finish(iosb,invalid);
+        struct stat st{};
+        if(fstat(f.fd,&st)||!S_ISREG(st.st_mode)||st.st_uid!=geteuid()||
+           st.st_nlink!=1||(st.st_mode&0022))return Finish(iosb,denied);
+        uint32_t done=0;
+        while(done<len){
+            auto n=pwrite(f.fd,mem_.Base()+buf+done,len-done,static_cast<off_t>(pos+done));
+            if(n<0&&errno==EINTR)continue;
+            if(n<=0){f.pos=uint64_t(pos)+done;return Finish(iosb,0xc0000185u,done);}
+            done+=uint32_t(n);
+        }
+        f.pos=uint64_t(pos)+done;
+        std::fprintf(stderr,"XBOX TITLE METADATA WRITE PASS bytes=%u offset=%llu\n",done,
+            static_cast<unsigned long long>(pos));
+        return Finish(iosb,0,done);
     }
     // Xbox FILE_DIRECTORY_INFORMATION (ANSI/OCHAR name, offset 0x40).
     // One entry per call, as in the pinned XboxXBERecomp implementation.

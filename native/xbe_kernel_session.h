@@ -1291,6 +1291,19 @@ private:
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,6),status);
                 Ret(cpu,8,status);return;
             }
+            case 236: {
+                Check(cpu,8);
+                if(Arg(cpu,2))throw std::runtime_error("Metadata write APC not implemented");
+                auto event=Arg(cpu,1);
+                if(event&&(!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){
+                    Ret(cpu,8,0xc0000008u);return;
+                }
+                auto status=files_.WriteMetadata(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
+                if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
+                std::fprintf(stderr,"XBOX WRITE caller=%08X handle=%08X bytes=%u status=%08X\n",
+                    mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,6),status);
+                Ret(cpu,8,status);return;
+            }
             case 198: Check(cpu,2);Ret(cpu,2,files_.Flush(Arg(cpu,0),Arg(cpu,1)));return;
             case 210: Check(cpu,2);Ret(cpu,2,files_.FullAttributes(Arg(cpu,0),Arg(cpu,1)));return;
             case 211: Check(cpu,5);Ret(cpu,5,files_.Query(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
