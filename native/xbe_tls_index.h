@@ -14,7 +14,7 @@ inline void InitializeDiagnosticTlsIndex(const XbeBootstrapState& boot,
     if(!boot.tls.index || !mem.IsCommitted(boot.tls.index,4) ||
        !boot.tls_data || !mem.IsCommitted(boot.tls_data,boot.tls_size))
         throw std::runtime_error("Incomplete TLS allocation");
-    // Slot zero is reserved for the sole image in this diagnostic runtime.
-    mem.Write32(boot.tls.index,0);
+    // XboxXBERecomp uses StackBase + index*4 == TlsData (32-bit wrap).
+    mem.Write32(boot.tls.index,0u-(boot.memory.stack_top-boot.tls_data)/4u);
 }
 }
