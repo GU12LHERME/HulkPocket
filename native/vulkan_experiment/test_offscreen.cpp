@@ -73,7 +73,7 @@ int main(int argc,char** argv){
         memory.Write32(rt,0x50000);memory.Write32(rt+4,0x102000);
         memory.Write32(rt+12,0x00011221);memory.Write32(rt+16,63|(63<<12)|(3<<24));
         Surface surface{};surface.header=rt;
-        hulkpocket::vkexp::StoreColor(surface,static_cast<const uint8_t*>(f.readback.data),W,H);
+        hulkpocket::vkexp::StoreColor(surface,f.ColorPixels(),W,H);
         if(memory.Read32(0x80102000+(32*W+32)*4)!=0xffff0000u||
            memory.Read32(0x80102000)!=0xff000000u)throw std::runtime_error("Guest BGRA readback mismatch");
         // Exercise rebuilt 32-bit quad indices and a different texture extent.
@@ -282,6 +282,23 @@ int main(int argc,char** argv){
         }
         if(f.pipelines.size()!=VulkanCore::PipelineLimit)throw std::runtime_error("Vulkan pipeline cache not bounded");
         Expect("pipeline cache eviction",f.Pixel(32,32),{0,255,0,255});
+        // Multiple submissions may update color without forcing host transfers.
+        auto copies=f.readback_copies,hits=f.readback_hits,draws=f.draw_submissions;
+        f.ClearFrame(0xf3,0xff0000ff,1,0);
+        f.Draw(argv[1],false,false,false);
+        f.Draw(argv[1],false,false,true);
+        if(f.readback_copies!=copies||f.draw_submissions!=draws+2)
+            throw std::runtime_error("Draw or clear forced eager readback");
+        Expect("deferred readback newest color",f.Pixel(32,32),{128,0,127,191});
+        if(f.readback_copies!=copies+1)throw std::runtime_error("Missing deferred color transfer");
+        Expect("cached readback same frame",f.Pixel(0,0),{0,0,255,255});
+        f.ClearFrame(3,0,1,0);
+        Expect("depth clear retains CPU color",f.Pixel(32,32),{128,0,127,191});
+        if(f.readback_copies!=copies+1||f.readback_hits!=hits+2)
+            throw std::runtime_error("Repeated color queries or depth clear transferred color");
+        f.ClearFrame(0xf0,0xff123456,1,0);
+        Expect("clear invalidates cached readback",f.Pixel(32,32),{18,52,86,255});
+        if(f.readback_copies!=copies+2)throw std::runtime_error("Color clear did not invalidate readback");
         std::printf("Vulkan pipelines created=%llu reused=%llu resident=%zu\n",
             (unsigned long long)f.pipeline_creates,(unsigned long long)f.pipeline_hits,f.pipelines.size());
         }

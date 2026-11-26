@@ -30,7 +30,7 @@ class VulkanBridgeBackend final:public gpu::Backend {
     }
     void Writeback(){
         if(!target_.header||!core_.frame_valid)throw std::logic_error("No initialized Vulkan frame");
-        StoreColor(target_,static_cast<const uint8_t*>(core_.readback.data),core_.W,core_.H);
+        StoreColor(target_,core_.ColorPixels(),core_.W,core_.H);
         if(std::find(saved_.begin(),saved_.end(),address_)==saved_.end())saved_[saved_next_++%saved_.size()]=address_;
     }
 public:
@@ -153,7 +153,7 @@ public:
         if(!target_.header||target_.header!=s.header||!core_.frame_valid)throw std::logic_error("Invalid Vulkan rotation");
         auto old=address_;target_={};Target(s);
         if(old==address_)throw std::logic_error("Vulkan rotation did not change backing");
-        core_.frame_valid=false;depth_valid_=stencil_valid_=false;rotated_=true;
+        core_.frame_valid=false;core_.readback_valid=false;depth_valid_=stencil_valid_=false;rotated_=true;
     }
     void RestoreRotatedColor(const gpu::Surface& s){
         Target(s);if(core_.frame_valid)return;

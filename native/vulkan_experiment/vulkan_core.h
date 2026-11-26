@@ -75,6 +75,8 @@ struct VulkanCore{
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
     VkRenderPass pass{},load_pass{};bool frame_valid=false;VkFramebuffer fb{};VkSampler sampler{};
+    bool readback_valid=false;
+    uint64_t readback_copies=0,readback_hits=0,draw_submissions=0;
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
     VkDescriptorPool descriptors{};VkDescriptorSet set{};
     VkPipeline pipeline{};
@@ -461,8 +463,19 @@ struct VulkanCore{
             vkDestroyPipeline(dev,oldest->second.handle,nullptr);pipelines.erase(oldest);
         }
     }
+    // GPU color remains authoritative between draws. Read CPU pixels only
+    // at explicit consumers (present, resource sync, capture or pixel probe).
+    const uint8_t* ColorPixels(){
+        if(!frame_valid)throw std::logic_error("Readback of uninitialized Vulkan frame");
+        if(!readback_valid){
+            Begin();ReadbackCommands();Submit();readback_valid=true;++readback_copies;
+        }else ++readback_hits;
+        return static_cast<const uint8_t*>(readback.data);
+    }
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
-        std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
+        if(x>=W||y>=H)throw std::out_of_range("Vulkan pixel outside target");
+        auto* pixels=ColorPixels();
+        std::array<uint8_t,4> out{};std::memcpy(out.data(),pixels+(y*W+x)*4,4);return out;
     }
     void ReadbackCommands(){
         gpu::RenderPassBarrier(cmd);
@@ -491,7 +504,10 @@ struct VulkanCore{
             VkClearRect rect{{{0,0},{W,H}},0,1};
             vkCmdClearAttachments(cmd,n,ca,rects.empty()?1u:uint32_t(rects.size()),rects.empty()?&rect:rects.data());
         }
-        vkCmdEndRenderPass(cmd);ReadbackCommands();Submit();frame_valid=true;
+        // Preserve attachment visibility even when there is no CPU read.
+        vkCmdEndRenderPass(cmd);gpu::RenderPassBarrier(cmd);Submit();
+        if(!frame_valid||(flags&0xf0))readback_valid=false;
+        frame_valid=true;
     }
     void RestoreColor(const uint8_t* bgra,uint32_t pitch){
         if(!bgra||pitch<uint64_t(W)*4||frame_valid)throw std::invalid_argument("Invalid Vulkan restored color");
@@ -515,7 +531,7 @@ struct VulkanCore{
         Transition(target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
         Submit();
-        std::memcpy(readback.data,staging.data,size_t(W)*H*4);
+        std::memcpy(readback.data,staging.data,size_t(W)*H*4);readback_valid=true;
     }
     void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false,bool preserve=false,bool guest_viewport=false){
         if(preserve&&!frame_valid)throw std::logic_error("Cannot preserve an uninitialized framebuffer");
@@ -612,8 +628,10 @@ struct VulkanCore{
         }else vkCmdDraw(cmd,3,1,0,0);
         if(second)vkCmdDraw(cmd,3,1,3,0);
         vkCmdEndRenderPass(cmd);
-        ReadbackCommands();
-        Submit();frame_valid=true;
+        gpu::RenderPassBarrier(cmd);
+        Submit();frame_valid=true;++draw_submissions;
+        // A preserving stencil/depth-only draw cannot change color.
+        if(!preserve||!state||state->simple[gpu::kMColorWriteEnable/4])readback_valid=false;
     }
 };
 }
