@@ -744,3 +744,31 @@ test callback for one ordinal, **not** Xbox OS emulation.
 probe must pass before regarding the fourth workload as
 validated. Real Hulk executable instructions have not
 been executed.
+
+## Verified ARM64 kernel thunk boundary — CI 45730263492
+
+[GitHub Actions run 45730263492](https://github.com/GU12LHERME/HulkPocket/actions/runs/45730263492)
+**passed all jobs**, including:
+
+- Bounded **original XBE on-disk kernel import** ordinal scanning
+  (deduplication and failure-path coverage), implemented in
+  `native/xbe_kernel_imports.cpp`
+- `--imports` in local preflight CLI, listing imported ordinal
+  numbers without executing or distributing the user's image
+- Original Xbox TLS and stack/heap startup metadata extraction
+- Actual **IA-32 `call eax` to `0xFE000044`** recompiled by
+  the official tool and executed as ARM64 machine code under
+  QEMU; a known callback at ordinal **17** returned a test value
+  while preserving expected x86 guest stack semantics
+- Android NDK compilation of the native CLI and kernel-call
+  smoke test (still awaiting a physical Retroid Pocket 6 run)
+
+New asset-free artifacts:
+[kernel-call ARM64 smoke](https://github.com/GU12LHERME/HulkPocket/actions/runs/45730263492/artifacts/15076094583),
+[XBE preflight + imports CLI](https://github.com/GU12LHERME/HulkPocket/actions/runs/45730263492/artifacts/15075639862),
+[portable ARM64 runtime library](https://github.com/GU12LHERME/HulkPocket/actions/runs/45730263492/artifacts/15075619962).
+
+**Critical limitation:** the ordinal callback is a narrow,
+fully synthetic test and does not implement Xbox kernel API
+behavior. Nothing has executed instructions from the actual
+commercial Hulk XBE or displayed a game frame.
