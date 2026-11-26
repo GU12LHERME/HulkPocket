@@ -283,7 +283,7 @@ int main(int argc,char** argv){
         if(f.pipelines.size()!=VulkanCore::PipelineLimit)throw std::runtime_error("Vulkan pipeline cache not bounded");
         Expect("pipeline cache eviction",f.Pixel(32,32),{0,255,0,255});
         // Multiple submissions may update color without forcing host transfers.
-        auto copies=f.readback_copies,hits=f.readback_hits,draws=f.draw_submissions;
+        auto copies=f.readback_copies,readback_hits_before=f.readback_hits,draws=f.draw_submissions;
         f.ClearFrame(0xf3,0xff0000ff,1,0);
         f.Draw(argv[1],false,false,false);
         f.Draw(argv[1],false,false,true);
@@ -294,7 +294,7 @@ int main(int argc,char** argv){
         Expect("cached readback same frame",f.Pixel(0,0),{0,0,255,255});
         f.ClearFrame(3,0,1,0);
         Expect("depth clear retains CPU color",f.Pixel(32,32),{128,0,127,191});
-        if(f.readback_copies!=copies+1||f.readback_hits!=hits+2)
+        if(f.readback_copies!=copies+1||f.readback_hits!=readback_hits_before+2)
             throw std::runtime_error("Repeated color queries or depth clear transferred color");
         f.ClearFrame(0xf0,0xff123456,1,0);
         Expect("clear invalidates cached readback",f.Pixel(32,32),{18,52,86,255});
