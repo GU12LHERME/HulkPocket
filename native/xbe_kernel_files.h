@@ -29,12 +29,48 @@ class XbeDiscFiles {
         File& operator=(const File&)=delete;
     };
     std::map<uint32_t,std::shared_ptr<File>> files_;
+    // Guest object namespace only; never create host symbolic links.
+    std::map<std::string,std::string> links_{{"D:","\\Device\\CdRom0"}};
+    std::map<uint32_t,std::string> link_handles_;
     uint32_t next_=0x4000;
     static constexpr uint32_t invalid=0xc000000d, denied=0xc0000022,
         missing=0xc0000034, bad_handle=0xc0000008, small=0xc0000023;
     static std::string Upper(std::string s) {
         for(auto& c:s) if(c>='a'&&c<='z') c=char(c-32);
         return s;
+    }
+    static bool DriveName(std::string name,std::string& key){
+        std::replace(name.begin(),name.end(),'/','\\');
+        name=Upper(name);
+        if(name.rfind("\\??\\",0)==0)name.erase(0,4);
+        if(name.size()!=2||name[0]<'A'||name[0]>'Z'||name[1]!=':')return false;
+        key=name;return true;
+    }
+    bool Ansi(uint32_t desc,std::string& out,bool allow_empty=false){
+        if(!desc||!mem_.IsCommitted(desc,8))return false;
+        const auto lengths=mem_.Read32(desc);
+        const auto len=lengths&0xffffu,max=lengths>>16,p=mem_.Read32(desc+4);
+        if(len>max||len>4096||(!len&&!allow_empty)||(len&&(!p||!mem_.IsCommitted(p,len))))return false;
+        out.resize(len);if(len)mem_.Read(p,out.data(),len);
+        return out.find('\0')==std::string::npos;
+    }
+    static bool DeviceTarget(std::string& target){
+        std::replace(target.begin(),target.end(),'/','\\');
+        const auto up=Upper(target);
+        // A namespace binding may name an unmounted Xbox device. Opening
+        // such a target must still fail; there is no fallback to host paths.
+        if(up.rfind("\\DEVICE\\",0)!=0||target.size()<=8)return false;
+        size_t start=8;
+        while(start<target.size()){
+            auto end=target.find('\\',start);
+            auto part=target.substr(start,end==std::string::npos?end:end-start);
+            if(part.empty()||part=="."||part==".."||part.find(':')!=std::string::npos)return false;
+            for(unsigned char c:part)if(c<32||c>126)return false;
+            if(end==std::string::npos)break;
+            start=end+1;
+        }
+        while(target.size()>8&&target.back()=='\\')target.pop_back();
+        return true;
     }
     static std::string Match(int dir,const std::string& name) {
         int copy=openat(dir,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC);
@@ -55,7 +91,6 @@ class XbeDiscFiles {
     }
     int Resolve(std::string path,uint32_t root=0,bool* on_partition1=nullptr) {
         std::replace(path.begin(),path.end(),'/','\\');
-        const auto upper=Upper(path);
         size_t start=0;
         int parent=root_;
         bool hdd=false;
@@ -66,11 +101,18 @@ class XbeDiscFiles {
             parent=it->second->fd;hdd=it->second->partition1;
         }else{
             start=std::string::npos;
-            // The special DOS directory is a namespace, not a file handle.
-            // Only D: is mapped in that namespace. The internal partition
-            // has a separate, explicitly selected read-only backing.
-            for(const std::string prefix:{"\\DEVICE\\CDROM0","\\??\\D:","D:","\\DEVICE\\HARDDISK0\\PARTITION1"}){
-                if(root==kDosDevicesDirectory&&prefix!="D:")continue;
+            // Resolve one DOS drive alias to an absolute guest device.
+            // Targets are restricted to the Device namespace, so no cycles.
+            std::string dos=path;
+            if(root!=kDosDevicesDirectory&&Upper(dos).rfind("\\??\\",0)==0)dos.erase(0,4);
+            if(dos.size()>=2&&dos[1]==':'){
+                if(dos.size()>2&&dos[2]!='\\')return -1;
+                auto it=links_.find(Upper(dos.substr(0,2)));
+                if(it==links_.end())return -1;
+                path=it->second+dos.substr(2);
+            }else if(root==kDosDevicesDirectory)return -1;
+            const auto upper=Upper(path);
+            for(const std::string prefix:{"\\DEVICE\\CDROM0","\\DEVICE\\HARDDISK0\\PARTITION1"}){
                 if(upper==prefix)start=prefix.size();
                 else if(upper.rfind(prefix+"\\",0)==0)start=prefix.size()+1;
                 else continue;
@@ -111,13 +153,7 @@ class XbeDiscFiles {
     bool Name(uint32_t attrs,std::string& out,uint32_t& root) {
         if(!mem_.IsCommitted(attrs,12)) return false;
         root=mem_.Read32(attrs);
-        auto desc=mem_.Read32(attrs+4);
-        if(!mem_.IsCommitted(desc,8))return false;
-        auto len=mem_.Read32(desc)&0xffffu, max=mem_.Read32(desc)>>16;
-        auto p=mem_.Read32(desc+4);
-        if(len>max||len>4096||(!len&&!root)||(len&&!mem_.IsCommitted(p,len)))return false;
-        out.resize(len);if(len)mem_.Read(p,out.data(),len);
-        return out.find('\0')==std::string::npos;
+        return Ansi(mem_.Read32(attrs+4),out,root!=0);
     }
     bool ValidRoot(uint32_t root)const{
         return root==0||root==kDosDevicesDirectory||
@@ -148,7 +184,51 @@ public:
     ~XbeDiscFiles(){files_.clear();if(root_>=0)close(root_);if(partition1_>=0)close(partition1_);}
     XbeDiscFiles(const XbeDiscFiles&)=delete;
     XbeDiscFiles& operator=(const XbeDiscFiles&)=delete;
+    uint32_t CreateLink(uint32_t name_desc,uint32_t target_desc){
+        std::string name,target,key;
+        if(!Ansi(name_desc,name)||!Ansi(target_desc,target)||!DriveName(name,key)||!DeviceTarget(target)){
+            std::fprintf(stderr,"XBOX LINK CREATE unsupported name=%s target=%s\n",LogName(name).c_str(),LogName(target).c_str());
+            return invalid;
+        }
+        auto it=links_.find(key);
+        if(it!=links_.end()&&Upper(it->second)!=Upper(target)){
+            std::fprintf(stderr,"XBOX LINK COLLISION name=%s existing=%s requested=%s\n",key.c_str(),it->second.c_str(),target.c_str());
+            return 0xc0000035u;
+        }
+        links_[key]=target;
+        std::fprintf(stderr,"XBOX LINK CREATE name=%s target=%s\n",key.c_str(),target.c_str());
+        return 0;
+    }
+    uint32_t DeleteLink(uint32_t name_desc){
+        std::string name,key;
+        if(!Ansi(name_desc,name)||!DriveName(name,key))return invalid;
+        const bool removed=links_.erase(key)!=0;
+        std::fprintf(stderr,"XBOX LINK DELETE name=%s removed=%u\n",key.c_str(),unsigned(removed));
+        return removed?0:missing;
+    }
+    uint32_t OpenLink(uint32_t out,uint32_t attrs){
+        if(!out||!mem_.IsCommitted(out,4))return invalid;
+        std::string name,key;uint32_t root=0;
+        if(!Name(attrs,name,root)||!DriveName(name,key))return invalid;
+        if(root!=0&&root!=kDosDevicesDirectory)return bad_handle;
+        auto it=links_.find(key);if(it==links_.end())return missing;
+        if(files_.size()+link_handles_.size()>=256)return 0xc000011fu;
+        const auto h=next_;next_+=4;link_handles_.emplace(h,it->second);
+        mem_.Write32(out,h);return 0;
+    }
+    uint32_t QueryLink(uint32_t h,uint32_t desc,uint32_t returned){
+        auto it=link_handles_.find(h);if(it==link_handles_.end())return bad_handle;
+        if(!desc||!mem_.IsCommitted(desc,8)||(returned&&!mem_.IsCommitted(returned,4)))return invalid;
+        const auto max=mem_.Read32(desc)>>16,p=mem_.Read32(desc+4);
+        const auto n=uint32_t(it->second.size());
+        if(returned)mem_.Write32(returned,n);
+        if(max<n)return small;
+        if(!p||!mem_.IsCommitted(p,n))return invalid;
+        mem_.Write(p,it->second.data(),n);mem_.Write32(desc,(max<<16)|n);
+        return 0;
+    }
     bool Close(uint32_t h) {
+        if(link_handles_.erase(h))return true;
         auto it=files_.find(h);if(it==files_.end())return false;
         files_.erase(it);return true;
     }
@@ -168,7 +248,7 @@ public:
            (access&0x500d0116u))return Finish(iosb,denied);
         if((options&0x41u)==0x41u)return Finish(iosb,invalid);
         if(!ValidRoot(root))return Finish(iosb,bad_handle);
-        if(files_.size()>=256)return Finish(iosb,0xc000011fu);
+        if(files_.size()+link_handles_.size()>=256)return Finish(iosb,0xc000011fu);
         bool hdd=false;
         int fd=Resolve(name,root,&hdd);
         if(fd<0)return Finish(iosb,missing);
@@ -188,7 +268,7 @@ public:
     uint32_t Duplicate(uint32_t h,uint32_t out,bool close_source){
         auto it=files_.find(h);if(it==files_.end())return bad_handle;
         if(!mem_.IsCommitted(out,4))return invalid;
-        if(files_.size()>=256)return 0xc000011fu;
+        if(files_.size()+link_handles_.size()>=256)return 0xc000011fu;
         auto alias=next_;next_+=4;
         files_.emplace(alias,it->second);
         mem_.Write32(out,alias);

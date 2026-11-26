@@ -1208,6 +1208,10 @@ private:
                 }
                 Ret(cpu,1,result);return;
             }
+            case 67: Check(cpu,2);Ret(cpu,2,files_.CreateLink(Arg(cpu,0),Arg(cpu,1)));return;
+            case 69: Check(cpu,1);Ret(cpu,1,files_.DeleteLink(Arg(cpu,0)));return;
+            case 203: Check(cpu,2);Ret(cpu,2,files_.OpenLink(Arg(cpu,0),Arg(cpu,1)));return;
+            case 215: Check(cpu,3);Ret(cpu,3,files_.QueryLink(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)));return;
             case 190: case 202: {
                 unsigned n=ordinal==190?9:6;Check(cpu,n);
                 auto status=files_.Open(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),
