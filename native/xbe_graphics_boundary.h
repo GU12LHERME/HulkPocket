@@ -50,6 +50,21 @@ constexpr uint32_t kSoundStreamHeadroom=0x10428;
 constexpr uint32_t kSoundStreamFormat=0x10429;
 constexpr uint32_t kSoundBufferMixBins=0x1042a,kSoundBufferMixBinVolumes=0x1042b;
 constexpr uint32_t kSoundStreamMixBins=0x1042c,kSoundStreamMixBinVolumes=0x1042d;
+constexpr uint32_t kSoundListenerPosition=0x1042e;
+constexpr uint32_t kSoundListenerVelocity=0x1042f;
+constexpr uint32_t kSoundListenerOrientation=0x10430;
+constexpr uint32_t kSoundListenerDistance=0x10431;
+constexpr uint32_t kSoundListenerRolloff=0x10432;
+constexpr uint32_t kSoundListenerDoppler=0x10433;
+constexpr uint32_t kSoundCommit3d=0x10434;
+constexpr uint32_t kSoundBufferSpatialPosition=0x10435;
+constexpr uint32_t kSoundBufferVelocity=0x10436;
+constexpr uint32_t kSoundBufferMinDistance=0x10437;
+constexpr uint32_t kSoundBufferMaxDistance=0x10438;
+constexpr uint32_t kSoundStreamSpatialPosition=0x10439;
+constexpr uint32_t kSoundStreamVelocity=0x1043a;
+constexpr uint32_t kSoundStreamMinDistance=0x1043b;
+constexpr uint32_t kSoundStreamMaxDistance=0x1043c;
 constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture=0x10102,
     kDefaultMakeSpace=0x10103,kDefaultComplexBase=0x10200;
 // Bounded experimental presentation loop; the final swap is presented

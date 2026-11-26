@@ -589,6 +589,13 @@ private:
         }
 #endif
         switch(ordinal) {
+            case kSoundListenerPosition:case kSoundListenerVelocity:case kSoundListenerOrientation:
+            case kSoundListenerDistance:case kSoundListenerRolloff:case kSoundListenerDoppler:case kSoundCommit3d:{
+                unsigned n=ordinal==kSoundCommit3d?1:ordinal==kSoundListenerOrientation?8:
+                    (ordinal==kSoundListenerPosition||ordinal==kSoundListenerVelocity)?5:3;
+                Check(cpu,n);std::array<uint32_t,8> a{};for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
+                sound_.Pump();Ret(cpu,n,sound_.Listener3d(a[0],ordinal,a));return;
+            }
             case kSoundCreate:Check(cpu,3);Ret(cpu,3,sound_.Create(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)));return;
             case kSoundReleaseDevice:Check(cpu,1);Ret(cpu,1,sound_.ReleaseDevice(Arg(cpu,0)));return;
             case kSoundSpeaker:Check(cpu,2);Ret(cpu,2,sound_.Speaker(Arg(cpu,0),Arg(cpu,1)));return;
@@ -603,11 +610,13 @@ private:
                 if(n==4&&(!sound_.Device(Arg(cpu,0))||Arg(cpu,3))){Ret(cpu,n,0x88780032u);return;}
                 Ret(cpu,n,sound_.NewStream(Arg(cpu,n==2?0:1),Arg(cpu,n==2?1:2),cpu.ecx,cpu.edx));return;
             }
+            case kSoundStreamSpatialPosition:case kSoundStreamVelocity:case kSoundStreamMinDistance:case kSoundStreamMaxDistance:
             case kSoundStreamAddRef:case kSoundStreamRelease:case kSoundStreamInfo:
             case kSoundStreamStatus:case kSoundStreamProcess:case kSoundStreamDiscontinuity:
             case kSoundStreamFlush:case kSoundStreamFlushEx:case kSoundStreamPause:
             case kSoundStreamVolume:case kSoundStreamFrequency:case kSoundStreamHeadroom:case kSoundStreamMixBins:case kSoundStreamMixBinVolumes:case kSoundStreamFormat:{
-                unsigned n=ordinal==kSoundStreamFlushEx?4:ordinal==kSoundStreamProcess?3:
+                unsigned n=(ordinal==kSoundStreamSpatialPosition||ordinal==kSoundStreamVelocity)?5:ordinal==kSoundStreamFlushEx?4:
+                    (ordinal==kSoundStreamProcess||ordinal==kSoundStreamMinDistance||ordinal==kSoundStreamMaxDistance)?3:
                     (ordinal==kSoundStreamAddRef||ordinal==kSoundStreamRelease||ordinal==kSoundStreamDiscontinuity||ordinal==kSoundStreamFlush)?1:2;
                 Check(cpu,n);std::array<uint32_t,8> a{};for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
                 if(ordinal==kSoundStreamProcess&&!sound_.HasStreamCallback(a[0])&&a[1]&&mem_.IsCommitted(a[1],20)){
@@ -623,6 +632,7 @@ private:
             }
             case kSoundNewBuffer:Check(cpu,2);Ret(cpu,2,sound_.NewBuffer(Arg(cpu,0),Arg(cpu,1)));return;
             case kSoundNewDeviceBuffer:Check(cpu,4);Ret(cpu,4,sound_.Device(Arg(cpu,0))&&!Arg(cpu,3)?sound_.NewBuffer(Arg(cpu,1),Arg(cpu,2)):0x88780032u);return;
+            case kSoundBufferSpatialPosition:case kSoundBufferVelocity:case kSoundBufferMinDistance:case kSoundBufferMaxDistance:
             case kSoundBufferRelease:
             case kSoundBufferData:
             case kSoundBufferPlay:
@@ -641,8 +651,8 @@ private:
             case kSoundBufferPlayRegion:
             case kSoundBufferLoopRegion:
             case kSoundBufferGetPosition: {
-                unsigned n=ordinal==kSoundBufferLock?8:ordinal==kSoundBufferUnlock?5:ordinal==kSoundBufferPlay?4:
-                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition||ordinal==kSoundBufferPlayRegion||ordinal==kSoundBufferLoopRegion)?3:
+                unsigned n=ordinal==kSoundBufferLock?8:(ordinal==kSoundBufferUnlock||ordinal==kSoundBufferSpatialPosition||ordinal==kSoundBufferVelocity)?5:ordinal==kSoundBufferPlay?4:
+                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition||ordinal==kSoundBufferPlayRegion||ordinal==kSoundBufferLoopRegion||ordinal==kSoundBufferMinDistance||ordinal==kSoundBufferMaxDistance)?3:
                     (ordinal==kSoundBufferRelease||ordinal==kSoundBufferStop)?1:2;
                 Check(cpu,n);
                 sound_.Pump();

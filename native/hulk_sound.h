@@ -2,6 +2,7 @@
 #include "xbe_kernel_pool.h"
 #include "hulk_audio_queue.h"
 #include "hulk_android_audio.h"
+#include "hulk_sound_spatial.h"
 #include <memory>
 #include <deque>
 #include "xbe_graphics_boundary.h"
@@ -46,6 +47,8 @@ private:
         uint32_t play_start=0,play_length=0,loop_start=0,loop_length=0;
         float gain=1,headroom=1;
         Routing routing{};
+        bool is3d=false;
+        spatial::Deferred<spatial::Source> space{};
         bool locked=false;
         uint32_t lock_ptr=0,lock_bytes=0,lock_ptr2=0,lock_bytes2=0;
         uint64_t phase=0;
@@ -57,6 +60,8 @@ private:
         uint32_t limit=0,callback=0,context=0,frequency=0,refs=1;
         float gain=1,headroom=1;
         Routing routing{};
+        bool is3d=false;
+        spatial::Deferred<spatial::Source> space{};
         bool paused=false,sync=false,ending=false;
         uint64_t phase=0;
         std::deque<Packet> packets;
@@ -84,6 +89,7 @@ private:
     }
     uint32_t device_=0,refs_=0;
     bool full_hrtf_requested_=false;
+    spatial::Deferred<spatial::Listener> listener_{};
     struct EffectSegment {uint32_t address=0,size=0;};
     std::vector<uint32_t> effect_allocations_;
     std::vector<EffectSegment> effect_states_;
@@ -149,6 +155,25 @@ private:
         if(r.mask&16)out[0]+=value[0]*r.gains[4]*fold;
         if(r.mask&32)out[1]+=value[0]*r.gains[5]*fold;
     }
+    uint32_t Source3d(spatial::Deferred<spatial::Source>& d,bool enabled,uint32_t op,const std::array<uint32_t,8>& a){
+        if(!enabled)return bad;
+        bool vector=op==kSoundBufferSpatialPosition||op==kSoundStreamSpatialPosition||op==kSoundBufferVelocity||op==kSoundStreamVelocity;
+        auto apply=a[vector?4:2];if(apply>1)return bad;
+        if(vector){
+            spatial::Vec v{spatial::Float(a[1]),spatial::Float(a[2]),spatial::Float(a[3])};
+            if(!spatial::Valid(v))return bad;
+            bool position=op==kSoundBufferSpatialPosition||op==kSoundStreamSpatialPosition;
+            d.Set(position?1:2,apply!=0,[&](auto& x){if(position)x.position=v;else x.velocity=v;});
+        }else{
+            float value=spatial::Float(a[1]);if(!spatial::Finite(value)||value<=0)return bad;
+            bool minimum=op==kSoundBufferMinDistance||op==kSoundStreamMinDistance;
+            // Validate both effective and queued ranges before updating.
+            auto valid=[&](const auto& x){return minimum?value<=x.maximum:value>=x.minimum;};
+            if(!valid(d.next)||(!apply&&!valid(d.live)))return bad;
+            d.Set(minimum?4:8,apply!=0,[&](auto& x){if(minimum)x.minimum=value;else x.maximum=value;});
+        }
+        return 0;
+    }
     void Capture(const std::vector<int16_t>& samples){
         if(!capture_attempted_){
             capture_attempted_=true;
@@ -200,16 +225,49 @@ public:
         if(!voices_.empty()||!streams_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
         StopAndroidOutput();FreeEffects();pool_.Free(device_);device_=0;return 0;
     }
-    // Upstream 767a818 dsound.cpp uses a zero-argument HLE for this
-    // selector. Record the request; our current 2D-only mixer never
-    // claims to reproduce HRTF, nor accepts unsupported 3D voices.
+    // Full HRTF remains a request only; the 3D adapter provides stereo panning.
     void SelectFullHrtf(){
         full_hrtf_requested_=true;
-        std::fprintf(stderr,"HULK DSOUND FULL HRTF REQUEST (recorded; 3D processing not implemented)\n");
+        std::fprintf(stderr,"HULK DSOUND FULL HRTF REQUEST (stereo spatial approximation; HRTF not implemented)\n");
     }
     bool FullHrtfRequested()const{return full_hrtf_requested_;}
     void AttachOutput(HulkAudioQueue<>* output){output_=output;}
     bool Device(uint32_t id)const{return id&&id==device_;}
+    uint32_t Listener3d(uint32_t id,uint32_t op,const std::array<uint32_t,8>& a){
+        if(!Device(id))return bad;
+        if(op==kSoundCommit3d){
+            spatial::Commit(listener_);
+            for(auto& item:voices_)spatial::Commit(item.second.space);
+            for(auto& item:streams_)spatial::Commit(item.second.space);
+            return 0;
+        }
+        unsigned index=op==kSoundListenerOrientation?7:
+            (op==kSoundListenerPosition||op==kSoundListenerVelocity)?4:2;
+        if(a[index]>1)return bad;
+        bool deferred=a[index]!=0;
+        if(index>=4){
+            spatial::Vec v{spatial::Float(a[1]),spatial::Float(a[2]),spatial::Float(a[3])};
+            if(!spatial::Valid(v))return bad;
+            if(op==kSoundListenerOrientation){
+                spatial::Vec top{spatial::Float(a[4]),spatial::Float(a[5]),spatial::Float(a[6])};
+                if(!spatial::Valid(top)||spatial::Length(v)<1e-6f||spatial::Length(top)<1e-6f)return bad;
+                v=spatial::Unit(v);top=spatial::Unit(top);
+                if(spatial::Length(spatial::Cross(top,v))<1e-4f)return bad;
+                listener_.Set(4,deferred,[&](auto& x){x.front=v;x.top=top;});
+            }else{
+                bool pos=op==kSoundListenerPosition;
+                listener_.Set(pos?1:2,deferred,[&](auto& x){if(pos)x.position=v;else x.velocity=v;});
+            }
+        }else{
+            float v=spatial::Float(a[1]);
+            if(!spatial::Finite(v)||v<0||(op==kSoundListenerDistance&&v==0))return bad;
+            if(op==kSoundListenerDistance)listener_.Set(8,deferred,[&](auto& x){x.distance=v;});
+            else if(op==kSoundListenerRolloff)listener_.Set(16,deferred,[&](auto& x){x.rolloff=v;});
+            else if(op==kSoundListenerDoppler)listener_.Set(32,deferred,[&](auto& x){x.doppler=v;});
+            else return bad;
+        }
+        return 0;
+    }
     uint32_t Speaker(uint32_t id,uint32_t out){
         if(!Device(id)||!Range(out,4))return bad;
         mem_.Write32(out,0);return 0; // Xbox DSSPEAKER_STEREO
@@ -282,14 +340,14 @@ public:
         if(!device_||!Range(desc,20)||!Range(out,4)||voices_.size()>=192)return bad;
         auto bytes=mem_.Read32(desc+8),flags=mem_.Read32(desc+4);
         Format f{};
-        // Accept only plain 2D voices; no unimplemented 3D or custom bins.
-        if(mem_.Read32(desc)<20||flags&0x10u||
-           !Parse(mem_.Read32(desc+12),f)||bytes>kMaxBytes||bytes%f.align)return bad;
-        Routing routing{};if(!SetRouting(routing,mem_.Read32(desc+16),f.channels,false))return bad;
+        // CTRL3D voices must be mono. Explicit DSP send routing remains unsupported.
+        if(mem_.Read32(desc)<20||!Parse(mem_.Read32(desc+12),f)||bytes>kMaxBytes||bytes%f.align||
+           ((flags&0x10u)&&f.channels!=1))return bad;
+        Routing routing{};if(!SetRouting(routing,mem_.Read32(desc+16),f.channels,false)||((flags&0x10u)&&routing.mask))return bad;
         auto obj=pool_.Allocate(0x40);if(!obj)return oom;
         auto data=bytes?pool_.Allocate(bytes):0;
         if(bytes&&!data){pool_.Free(obj);return oom;}
-        Voice v{};v.fmt=f;v.routing=routing;v.data=v.owned=data;v.bytes=bytes;v.play_length=v.loop_length=bytes;
+        Voice v{};v.fmt=f;v.is3d=(flags&0x10u)!=0;v.routing=routing;v.data=v.owned=data;v.bytes=bytes;v.play_length=v.loop_length=bytes;
         voices_.emplace(obj,v);mem_.Write32(out,obj);
         std::fprintf(stderr,"HULK DSOUND BUFFER PASS obj=%08X tag=%04X channels=%u rate=%u bytes=%u flags=%08X\n",
             obj,f.tag,f.channels,f.rate,bytes,flags);return 0;
@@ -338,12 +396,18 @@ public:
             if(!v.locked||a[1]!=v.lock_ptr||a[2]!=v.lock_bytes||
                a[3]!=v.lock_ptr2||a[4]!=v.lock_bytes2)return bad;
             v.locked=false;return 0;
+        case kSoundBufferSpatialPosition:
+        case kSoundBufferVelocity:
+        case kSoundBufferMinDistance:
+        case kSoundBufferMaxDistance:
+            return Source3d(v.space,v.is3d,op,a);
         case kSoundBufferMixBins:
         case kSoundBufferMixBinVolumes:
+            if(v.is3d&&a[1])return bad;
             return SetRouting(v.routing,a[1],v.fmt.channels,op==kSoundBufferMixBinVolumes)?0:bad;
         case kSoundBufferFormat:{
             Format f{};
-            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align||(f.channels==2&&(v.routing.mask&~3u)))return bad;
+            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align||(f.channels==2&&(v.is3d||(v.routing.mask&~3u))))return bad;
             // Reset regions and phase when the unit of a sample changes.
             v.fmt=f;v.frequency=0;v.phase=0;v.paused=v.sync=false;
             v.play_start=v.loop_start=0;v.play_length=v.loop_length=v.bytes;
@@ -401,12 +465,12 @@ public:
         if(!device_||!Range(desc,24)||!Range(out,4)||!Range(vt,4)||!Range(vt2,4)||vt==vt2||streams_.size()>=64)return bad;
         Format f{};auto flags=mem_.Read32(desc),limit=mem_.Read32(desc+4);
         auto callback=mem_.Read32(desc+12),context=mem_.Read32(desc+16);
-        if((flags&0x10u)||limit>32||!Parse(mem_.Read32(desc+8),f)||
+        if(limit>32||!Parse(mem_.Read32(desc+8),f)||((flags&0x10u)&&f.channels!=1)||
            (callback&&!Range(callback,1)))return bad;
-        Routing routing{};if(!SetRouting(routing,mem_.Read32(desc+20),f.channels,false))return bad;
+        Routing routing{};if(!SetRouting(routing,mem_.Read32(desc+20),f.channels,false)||((flags&0x10u)&&routing.mask))return bad;
         auto obj=pool_.Allocate(0x80);if(!obj)return oom;
         mem_.Write32(obj,vt);mem_.Write32(obj+4,vt2);
-        StreamVoice v{};v.fmt=f;v.routing=routing;v.limit=std::max(limit,1u);v.callback=callback;v.context=context;
+        StreamVoice v{};v.fmt=f;v.is3d=(flags&0x10u)!=0;v.routing=routing;v.limit=std::max(limit,1u);v.callback=callback;v.context=context;
         streams_.emplace(obj,std::move(v));mem_.Write32(out,obj);
         std::fprintf(stderr,"HULK DSOUND STREAM PASS obj=%08X tag=%04X channels=%u packets=%u callback=%08X\n",obj,f.tag,f.channels,limit,callback);
         return 0;
@@ -463,11 +527,17 @@ public:
         case kSoundStreamHeadroom:
             if(a[1]>10000)return bad;
             v.headroom=std::pow(10.0f,-float(a[1])/2000.0f);return 0;
+        case kSoundStreamSpatialPosition:
+        case kSoundStreamVelocity:
+        case kSoundStreamMinDistance:
+        case kSoundStreamMaxDistance:
+            return Source3d(v.space,v.is3d,op,a);
         case kSoundStreamMixBins:
         case kSoundStreamMixBinVolumes:
+            if(v.is3d&&a[1])return bad;
             return SetRouting(v.routing,a[1],v.fmt.channels,op==kSoundStreamMixBinVolumes)?0:bad;
         case kSoundStreamFormat:{
-            Format f{};if(!Parse(a[1],f)||(f.channels==2&&(v.routing.mask&~3u)))return bad;
+            Format f{};if(!Parse(a[1],f)||(f.channels==2&&(v.is3d||(v.routing.mask&~3u))))return bad;
             FlushStream(v);v.fmt=f;v.frequency=0;return 0;
         }
         default:throw std::logic_error("Unsupported stream operation");
@@ -495,6 +565,8 @@ public:
             if(!total){v.playing=false;continue;}
             std::array<int16_t,128> decoded{};
             uint32_t cached=UINT32_MAX;
+            auto spatial_gains=v.is3d?spatial::Calculate(v.space.live,listener_.live):spatial::Gains{};
+            auto step=uint32_t(std::max(1.0f,float(v.frequency?v.frequency:v.fmt.rate)*spatial_gains.pitch));
             for(unsigned i=0;i<frames;++i){
                 if(v.phase>=end){
                     if(v.loop&&loop_span)v.phase=loop_begin+(v.phase-loop_begin)%loop_span;
@@ -515,8 +587,10 @@ public:
                     else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
                     sample[ch]=float(value)*v.gain*v.headroom;
                 }
-                Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
-                v.phase+=v.frequency?v.frequency:v.fmt.rate;
+                sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
+                if(v.is3d){mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];}
+                else Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
+                v.phase+=step;
             }
             if(!v.loop&&v.phase>=uint64_t(total)*kRate){v.phase=uint64_t(total)*kRate;v.playing=false;}
         }
@@ -524,6 +598,8 @@ public:
             auto& v=item.second;
             if(v.paused||v.sync)continue;
             uint32_t cached_data=0,cached_block=UINT32_MAX;
+            auto spatial_gains=v.is3d?spatial::Calculate(v.space.live,listener_.live):spatial::Gains{};
+            auto step=uint32_t(std::max(1.0f,float(v.frequency?v.frequency:v.fmt.rate)*spatial_gains.pitch));
             std::array<int16_t,128> decoded{};
             auto advance=[&]{
                 while(!v.packets.empty()){
@@ -554,8 +630,10 @@ public:
                     else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
                     sample[ch]=float(value)*v.gain*v.headroom;
                 }
-                Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
-                v.phase+=v.frequency?v.frequency:v.fmt.rate;
+                sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
+                if(v.is3d){mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];}
+                else Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
+                v.phase+=step;
             }
             advance();
         }

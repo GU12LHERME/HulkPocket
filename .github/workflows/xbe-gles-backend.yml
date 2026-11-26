@@ -12,6 +12,7 @@ on:
       - 'native/xbe_d3d8_default_trace.h'
       - 'native/xbe_kernel_session.h'
       - 'native/hulk_sound.h'
+      - 'native/hulk_sound_spatial.h'
       - 'native/hulk_audio_queue.h'
       - 'native/hulk_android_audio.h'
       - 'native/hulk_xbe_local_diagnostic.cpp'

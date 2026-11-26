@@ -435,10 +435,10 @@ SOUND_HOOK(CDirectSoundStream_SetHeadroom,kSoundStreamHeadroom,2)
 SOUND_STOP(CDirectSoundStream_SetI3DL2Source)
 #endif
 #if HAS_CDirectSoundStream_SetMaxDistance
-SOUND_STOP(CDirectSoundStream_SetMaxDistance)
+SOUND_HOOK(CDirectSoundStream_SetMaxDistance,kSoundStreamMaxDistance,3)
 #endif
 #if HAS_CDirectSoundStream_SetMinDistance
-SOUND_STOP(CDirectSoundStream_SetMinDistance)
+SOUND_HOOK(CDirectSoundStream_SetMinDistance,kSoundStreamMinDistance,3)
 #endif
 #if HAS_CDirectSoundStream_SetMixBins
 SOUND_HOOK(CDirectSoundStream_SetMixBins,kSoundStreamMixBins,2)
@@ -447,10 +447,10 @@ SOUND_HOOK(CDirectSoundStream_SetMixBins,kSoundStreamMixBins,2)
 SOUND_HOOK(CDirectSoundStream_SetMixBinVolumes,kSoundStreamMixBinVolumes,2)
 #endif
 #if HAS_CDirectSoundStream_SetPosition
-SOUND_STOP(CDirectSoundStream_SetPosition)
+SOUND_HOOK(CDirectSoundStream_SetPosition,kSoundStreamSpatialPosition,5)
 #endif
 #if HAS_CDirectSoundStream_SetVelocity
-SOUND_STOP(CDirectSoundStream_SetVelocity)
+SOUND_HOOK(CDirectSoundStream_SetVelocity,kSoundStreamVelocity,5)
 #endif
 #if HAS_CDirectSoundStream_SetVolume
 SOUND_HOOK(CDirectSoundStream_SetVolume,kSoundStreamVolume,2)
@@ -481,7 +481,7 @@ SOUND_HOOK(CDirectSoundStream_Release,kSoundStreamRelease,1)
 SOUND_HOOK(DirectSoundUseFullHRTF,kSoundFullHrtf,0)
 #endif
 #if HAS_IDirectSound_CommitDeferredSettings
-SOUND_STOP(IDirectSound_CommitDeferredSettings)
+SOUND_HOOK(IDirectSound_CommitDeferredSettings,kSoundCommit3d,1)
 #endif
 #if HAS_IDirectSound_CommitEffectData
 SOUND_STOP(IDirectSound_CommitEffectData)
@@ -499,10 +499,10 @@ SOUND_HOOK(IDirectSound_GetEffectData,kSoundGetEffectData,5)
 SOUND_STOP(IDirectSound_GetOutputLevels)
 #endif
 #if HAS_IDirectSound_SetDistanceFactor
-SOUND_STOP(IDirectSound_SetDistanceFactor)
+SOUND_HOOK(IDirectSound_SetDistanceFactor,kSoundListenerDistance,3)
 #endif
 #if HAS_IDirectSound_SetDopplerFactor
-SOUND_STOP(IDirectSound_SetDopplerFactor)
+SOUND_HOOK(IDirectSound_SetDopplerFactor,kSoundListenerDoppler,3)
 #endif
 #if HAS_IDirectSound_SetEffectData
 SOUND_HOOK(IDirectSound_SetEffectData,kSoundSetEffectData,6)
@@ -514,16 +514,16 @@ SOUND_STOP(IDirectSound_SetI3DL2Listener)
 SOUND_STOP(IDirectSound_SetMixBinHeadroom)
 #endif
 #if HAS_IDirectSound_SetOrientation
-SOUND_STOP(IDirectSound_SetOrientation)
+SOUND_HOOK(IDirectSound_SetOrientation,kSoundListenerOrientation,8)
 #endif
 #if HAS_IDirectSound_SetPosition
-SOUND_STOP(IDirectSound_SetPosition)
+SOUND_HOOK(IDirectSound_SetPosition,kSoundListenerPosition,5)
 #endif
 #if HAS_IDirectSound_SetRolloffFactor
-SOUND_STOP(IDirectSound_SetRolloffFactor)
+SOUND_HOOK(IDirectSound_SetRolloffFactor,kSoundListenerRolloff,3)
 #endif
 #if HAS_IDirectSound_SetVelocity
-SOUND_STOP(IDirectSound_SetVelocity)
+SOUND_HOOK(IDirectSound_SetVelocity,kSoundListenerVelocity,5)
 #endif
 #if HAS_IDirectSound_SynchPlayback
 SOUND_HOOK(IDirectSound_SynchPlayback,kSoundSynchPlayback,1)
@@ -556,10 +556,10 @@ SOUND_STOP(IDirectSoundBuffer_SetI3DL2Source)
 SOUND_HOOK(IDirectSoundBuffer_SetLoopRegion,kSoundBufferLoopRegion,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetMaxDistance
-SOUND_STOP(IDirectSoundBuffer_SetMaxDistance)
+SOUND_HOOK(IDirectSoundBuffer_SetMaxDistance,kSoundBufferMaxDistance,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetMinDistance
-SOUND_STOP(IDirectSoundBuffer_SetMinDistance)
+SOUND_HOOK(IDirectSoundBuffer_SetMinDistance,kSoundBufferMinDistance,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetMixBins
 SOUND_HOOK(IDirectSoundBuffer_SetMixBins,kSoundBufferMixBins,2)
@@ -574,13 +574,13 @@ SOUND_STOP(IDirectSoundBuffer_SetOutputBuffer)
 SOUND_HOOK(IDirectSoundBuffer_SetPlayRegion,kSoundBufferPlayRegion,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetPosition
-SOUND_STOP(IDirectSoundBuffer_SetPosition)
+SOUND_HOOK(IDirectSoundBuffer_SetPosition,kSoundBufferSpatialPosition,5)
 #endif
 #if HAS_IDirectSoundBuffer_SetRolloffCurve
 SOUND_STOP(IDirectSoundBuffer_SetRolloffCurve)
 #endif
 #if HAS_IDirectSoundBuffer_SetVelocity
-SOUND_STOP(IDirectSoundBuffer_SetVelocity)
+SOUND_HOOK(IDirectSoundBuffer_SetVelocity,kSoundBufferVelocity,5)
 #endif
 #if HAS_IDirectSoundBuffer_StopEx
 SOUND_STOP(IDirectSoundBuffer_StopEx)

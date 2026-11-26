@@ -131,6 +131,29 @@ int main(){
     assert(s.Stream(stream,kSoundStreamAddRef,{stream})==2);
     assert(s.Stream(stream,kSoundStreamRelease,{stream})==1);
     assert(s.Stream(stream,kSoundStreamRelease,{stream})==0);
+    // 3D mono source with distance, orientation and deferred updates.
+    auto bits=[](float x){uint32_t b;std::memcpy(&b,&x,4);return b;};
+    mem.Write(0x10100,fmt,sizeof(fmt));mem.Write(0x10300,pcm,sizeof(pcm));
+    mem.Write(0x10200,desc,sizeof(desc));mem.Write32(0x10204,0x10);
+    assert(s.NewBuffer(0x10200,0x10008)==0);v=mem.Read32(0x10008);
+    assert(s.Buffer(v,kSoundBufferData,{v,0x10300,8})==0);
+    assert(s.Buffer(v,kSoundBufferSpatialPosition,{v,bits(1),0,0,0})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==1000);
+    assert(s.Buffer(v,kSoundBufferSpatialPosition,{v,bits(-1),0,0,1})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==1000);
+    assert(s.Listener3d(ds,kSoundCommit3d,{ds})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==1000&&got[1]==0);
+    assert(s.Buffer(v,kSoundBufferSpatialPosition,{v,bits(-2),0,0,0})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==500&&got[1]==0);
+    assert(s.Listener3d(ds,kSoundListenerOrientation,{ds,0,0,bits(-1),0,bits(1),0,0})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==500);
+    assert(s.Buffer(v,kSoundBufferMinDistance,{v,0,0})==0x88780032u);
+    assert(s.Buffer(v,kSoundBufferRelease,{v})==0);
     // XDK 5849 synthetic image with one real state segment and three
     // reserved DSP regions. Verify offset arithmetic and actual bytes.
     constexpr uint32_t img=0x12000,table=0x824;
