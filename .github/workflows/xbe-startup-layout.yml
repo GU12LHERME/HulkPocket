@@ -63,11 +63,13 @@ jobs:
           bash -n tools/run_hulk_next.sh
       - name: Verify strong generated graphics override
         run: |
-          printf '#define HAS_Direct3D_CreateDevice 1\n#define SYM_Direct3D_CreateDevice 0037D900\n#define HAS_XLaunchNewImageA 1\n#define SYM_XLaunchNewImageA 00209C04\n' > /tmp/hulk-sdk/image_symbols.h
+          printf '#define HAS_Direct3D_CreateDevice 1\n#define SYM_Direct3D_CreateDevice 0037D900\n#define HAS_XLaunchNewImageA 1\n#define SYM_XLaunchNewImageA 00209C04\n#define HAS_XInitDevices 1\n#define SYM_XInitDevices 003EAC33\n#define HAS_XPP_GamepadType 1\n#define SYM_XPP_GamepadType 003EA774\n#define HAS_XPP_MemoryUnitType 1\n#define SYM_XPP_MemoryUnitType 003EA820\n#define HAS_XInputOpen 1\n#define SYM_XInputOpen 003EB6E5\n' > /tmp/hulk-sdk/image_symbols.h
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_graphics_boundary.cpp native/xbe_d3d8_entry_guard.cpp -o /tmp/graphics-boundary
           /tmp/graphics-boundary
           nm /tmp/graphics-boundary | grep ' T sub_0037D900$'
           nm /tmp/graphics-boundary | grep ' T sub_00209C04$'
+          nm /tmp/graphics-boundary | grep ' T sub_003EAC33$'
+          nm /tmp/graphics-boundary | grep ' T sub_003EB6E5$'
           python3 -m py_compile tools/link_hulk_cached.py tools/report_hulk_allocator.py
           python3 tools/report_hulk_allocator.py --self-test
           python3 tools/report_missing_guest.py --self-test

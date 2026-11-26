@@ -49,6 +49,8 @@ private:
     struct ThreadSettings {int32_t priority=0;bool disable_boost=false;};
     std::map<uint32_t,ThreadSettings> thread_settings_;
     std::map<uint32_t,uint32_t> object_references_;
+    uint32_t gamepad_type_=0,memory_unit_type_=0;
+    std::map<uint32_t,uint32_t> input_handles_;
     // Objects remain owned by the session until shutdown, including bodies
     // held by in-flight waits. References are tracked independently of handles.
     struct Event { uint32_t body; bool manual; };
@@ -389,6 +391,45 @@ private:
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
         switch(ordinal) {
+            case kXapiInitDevices: {
+                Check(cpu,2);
+                auto pad=cpu.ecx,mu=cpu.edx;
+                // XDK 5849 layout.toml: Current +0, Changed +4, Previous +8.
+                if(!pad||pad%4||!mem_.IsCommitted(pad,12)||
+                    (mu&&(mu%4||!mem_.IsCommitted(mu,12)||
+                    (uint64_t(mu)<uint64_t(pad)+12&&uint64_t(pad)<uint64_t(mu)+12))))
+                    throw std::runtime_error("Invalid generated XPP device records");
+                if(gamepad_type_&&(gamepad_type_!=pad||memory_unit_type_!=mu))
+                    throw std::runtime_error("XPP device records changed");
+                gamepad_type_=pad;memory_unit_type_=mu;
+                const uint32_t zero[3]={};
+                mem_.Write(pad,zero,sizeof(zero));
+                if(mu)mem_.Write(mu,zero,sizeof(zero));
+                std::fprintf(stderr,"XAPI device initialization: pad=%08X memory_unit=%08X connected=0 (headless diagnostic)\n",pad,mu);
+                Ret(cpu,2,0);return;
+            }
+            case kXapiInputOpen: {
+                Check(cpu,4);
+                if(!gamepad_type_||Arg(cpu,0)!=gamepad_type_||Arg(cpu,1)>3){
+                    Ret(cpu,4,0);return;
+                }
+                if(input_handles_.size()>=64){Ret(cpu,4,0);return;}
+                // Match upstream's per-port handle even if no device is connected.
+                auto h=pool_.Allocate(16);
+                if(h)input_handles_.emplace(h,Arg(cpu,1));
+                Ret(cpu,4,h);return;
+            }
+            case kXapiInputClose: {
+                Check(cpu,1);auto h=Arg(cpu,0);
+                if(input_handles_.erase(h))pool_.Free(h);
+                Ret(cpu,1,0);return;
+            }
+            case kXapiInputGetState: case kXapiInputSetState: case kXapiInputGetCapabilities: {
+                Check(cpu,2);
+                // No Android input provider is connected to this CLI yet.
+                // Neither write fictional input state nor report successful rumble.
+                Ret(cpu,2,input_handles_.count(Arg(cpu,0))?1167u:6u);return;
+            }
             case kMissingGuestEntry: {
                 Check(cpu,0);
                 std::fprintf(stderr,"MISSING GUEST target=%08X caller=%08X ESP=%08X EAX=%08X EBX=%08X ECX=%08X EDX=%08X ESI=%08X EDI=%08X\n",

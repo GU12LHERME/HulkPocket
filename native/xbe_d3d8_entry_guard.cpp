@@ -62,3 +62,46 @@ void GUEST(XLaunchNewImageA)(X86Context& ctx,uint8_t* base){
     hulkpocket::graphics_callback(ctx,base,hulkpocket::kXapiLaunchImage);
 }
 #endif
+
+/* XAPI high-level replacement, based on the pinned XboxXBERecomp xapi.cpp.
+ * The diagnostic host has no controller provider; report disconnected ports.
+ * Never execute USB/OHCI hardware initialization on the Android host. */
+#define XAPI_HOOK(name,id) extern "C" __attribute__((visibility("default"))) \
+    void GUEST(name)(X86Context& ctx,uint8_t* base){ \
+        if(!Stdcall(#name)||!hulkpocket::graphics_callback) \
+            throw std::runtime_error("XAPI requires a checked host adapter: " #name); \
+        hulkpocket::graphics_callback(ctx,base,id); \
+    }
+#define GUEST_VA_(x) 0x##x##u
+#define GUEST_VA(x) GUEST_VA_(x)
+#if HAS_XInitDevices && HAS_XPP_GamepadType
+extern "C" __attribute__((visibility("default")))
+void GUEST(XInitDevices)(X86Context& ctx,uint8_t* base){
+    if(!Stdcall("XInitDevices")||!hulkpocket::graphics_callback)
+        throw std::runtime_error("XInitDevices requires a checked host adapter");
+    // Pass generated, region-specific data addresses in volatile registers.
+    // No change to the original guest stdcall stack layout.
+    ctx.ecx=GUEST_VA(SYM_XPP_GamepadType);
+#if HAS_XPP_MemoryUnitType
+    ctx.edx=GUEST_VA(SYM_XPP_MemoryUnitType);
+#else
+    ctx.edx=0;
+#endif
+    hulkpocket::graphics_callback(ctx,base,hulkpocket::kXapiInitDevices);
+}
+#endif
+#if HAS_XInputOpen
+XAPI_HOOK(XInputOpen,hulkpocket::kXapiInputOpen)
+#endif
+#if HAS_XInputClose
+XAPI_HOOK(XInputClose,hulkpocket::kXapiInputClose)
+#endif
+#if HAS_XInputGetState
+XAPI_HOOK(XInputGetState,hulkpocket::kXapiInputGetState)
+#endif
+#if HAS_XInputSetState
+XAPI_HOOK(XInputSetState,hulkpocket::kXapiInputSetState)
+#endif
+#if HAS_XInputGetCapabilities
+XAPI_HOOK(XInputGetCapabilities,hulkpocket::kXapiInputGetCapabilities)
+#endif

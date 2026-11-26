@@ -62,6 +62,26 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     memory->Write32(0x12a0c,0xaabbccdd);
     call(*c,base,cb,44,{5,0x12a0c});
     assert(c->eax==0x35&&memory->Read32(0x12a0c)==0xaabbcc05);
+    // Real XDK records are cleared by the headless high-level input adapter.
+    for(unsigned i=0;i<3;++i){
+        memory->Write32(0x12b00+4*i,0xdeadbeef);
+        memory->Write32(0x12b20+4*i,0xdeadbeef);
+    }
+    memory->Write32(0x12b0c,0x11223344);
+    c->ecx=0x12b00;c->edx=0x12b20;
+    call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
+    for(unsigned i=0;i<3;++i)assert(!memory->Read32(0x12b00+4*i)&&!memory->Read32(0x12b20+4*i));
+    assert(memory->Read32(0x12b0c)==0x11223344);
+    call(*c,base,cb,kXapiInputOpen,{0x12b20,0,0,0});assert(!c->eax);
+    call(*c,base,cb,kXapiInputOpen,{0x12b00,4,0,0});assert(!c->eax);
+    call(*c,base,cb,kXapiInputOpen,{0x12b00,0,0,0});auto pad_handle=c->eax;assert(pad_handle);
+    memory->Write32(0x12b40,0xdeadbeef);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==1167&&memory->Read32(0x12b40)==0xdeadbeef);
+    call(*c,base,cb,kXapiInputGetCapabilities,{pad_handle,0x12b40});assert(c->eax==1167);
+    call(*c,base,cb,kXapiInputSetState,{pad_handle,0x12b40});assert(c->eax==1167);
+    call(*c,base,cb,kXapiInputClose,{pad_handle});assert(!c->eax);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});assert(c->eax==6);
     // Main-thread settings and fastcall object references.
     const auto main_body=memory->Read32(c->fs_base+0x28);
     call(*c,base,cb,246,{0xfffffffeu,0,0x10f00});
