@@ -106,7 +106,8 @@ inline std::shared_ptr<gpu::PixelShader> CaptureNv2aCombiner(const gpu::State& s
     // Compare/dot/other-stage inputs do not affect 2D projection or pass-through.
     for(unsigned i=0;i<4;++i){
         auto mode=(d[54]>>(5*i))&31;
-        if(mode!=0&&mode!=1&&mode!=4)throw std::logic_error("Unintegrated captured pixel texture mode");
+        if(mode!=0&&mode!=1&&mode!=4&&mode!=5)throw std::logic_error("Unintegrated captured pixel texture mode");
+        if(mode==5)d[42]=get(kMPsCompareMode);
     }
     for(unsigned i=0;i<n;++i){
         d[i]=get(kMPsAlphaInputs+4*i);d[26+i]=get(kMPsAlphaOutputs+4*i);

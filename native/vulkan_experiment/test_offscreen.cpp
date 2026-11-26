@@ -299,6 +299,57 @@ int main(int argc,char** argv){
                    bridge.Present(surface)!=3||bridge_mem.Read32(0x80110000+(32*64+32)*4)!=0x80ff00ff)
                     throw std::runtime_error("Vulkan restored frame mismatch");
             }
+            // Feed two actual Xbox texture headers and a final combiner
+            // through the live capture path, not direct fixture bindings.
+            {
+                using namespace gpu;
+                gpu::ScopedGuestMemory scope(bridge_mem);
+                constexpr uint32_t device=0x24000,decl=0x27000,ps=0x27200,scratch=0x28000;
+                constexpr uint32_t tex0=0x20300,tex1=0x20400;
+                constexpr uint32_t format=0x01110629;
+                for(unsigned st=0;st<2;++st){
+                    auto tex=st?tex1:tex0,physical=0x115000+st*0x100;
+                    bridge_mem.Write32(tex,0x40000);bridge_mem.Write32(tex+4,physical);bridge_mem.Write32(tex+12,format);
+                    uint32_t colors[4];std::fill_n(colors,4,st?0xff80ffff:0xffff8040);
+                    bridge_mem.Write(0x80000000|physical,colors,sizeof(colors));
+                    bridge_mem.Write32(device+0xf88+4*st,tex);
+                }
+                bridge_mem.Write32(device+0x794,decl);bridge_mem.Write32(device+0x784,ps);
+                bridge_mem.Write32(decl+4,0x400);
+                gpu::VertexShader layout;gpu::FvfInputs(0x142,layout);
+                for(unsigned k=0;k<16;++k)if(layout.inputs[k].stream>=0){
+                    auto at=decl+0x14+16*k;auto in=layout.inputs[k];
+                    bridge_mem.Write32(at,uint32_t(in.stream));bridge_mem.Write32(at+4,in.offset);bridge_mem.Write32(at+8,in.type);
+                }
+                for(unsigned tr:{0u,1u,6u})for(unsigned k=0;k<4;++k)
+                    bridge_mem.Write32(device+0xc60+64*tr+20*k,std::bit_cast<uint32_t>(1.f));
+                bridge_mem.Write32(device+0xee8,64);bridge_mem.Write32(device+0xeec,64);
+                bridge_mem.Write32(device+0xef4,std::bit_cast<uint32_t>(1.f));
+                bridge_mem.Write32(device+0xef8,std::bit_cast<uint32_t>(.53125f));bridge_mem.Write32(device+0xefc,std::bit_cast<uint32_t>(.53125f));
+                const Vertex tri[]={{-.75f,-.75f,.5f,0xffffffff,0,1},{.75f,-.75f,.5f,0xffffffff,1,1},{0,.75f,.5f,0xffffffff,.5f,0}};
+                bridge_mem.Write(0x80114000,tri,sizeof(tri));call("D3DDevice_SetStreamSource",{0,buffer,sizeof(Vertex)});
+                auto state=bridge.Snapshot();
+                for(unsigned st=0;st<2;++st){
+                    auto& t=state.tss[st];t[kTssAddressU]=t[kTssAddressV]=3;
+                    t[kTssMinFilter]=t[kTssMagFilter]=1;
+                }
+                bridge.AdoptLiveSetters(state);
+                std::vector<hulkpocket::Nv2aMethod> packet={{0x1b00,0x115000},{0x1b04,format},
+                    {0x1b40,0x115100},{0x1b44,format},{kMPsCombinerCount,0},{kMPsFinalAbcd,0x08090000},
+                    {kMPsFinalEfgh,0x1800},{kMPsFinalConstant0,0},{kMPsFinalConstant1,0},{0x1e70,0x21}};
+                for(unsigned k=0;k<packet.size();++k){
+                    bridge_mem.Write32(scratch+8*k,(1u<<18)|packet[k].method);bridge_mem.Write32(scratch+8*k+4,packet[k].value);
+                }
+                bridge.ApplyPush(scratch,scratch+8*packet.size(),true);
+                if(bridge.SyncFixedDiffuseShader(device,true)!=0x142)throw std::runtime_error("Multi-stage capture declaration mismatch");
+                if(bridge.VerifyGuestGeometry(5,0,3,0)!=3)throw std::runtime_error("Multi-stage geometry mismatch");
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("live two-stage captured combiner",backend.ReadPixel(32,32),{128,128,64,255});
+                bridge_mem.Write32(tex1+4,0x115200);
+                bool mismatched=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){mismatched=true;}
+                if(!mismatched)throw std::runtime_error("Mismatched stage one NV2A texture accepted");
+            }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
         std::puts("PASS Vulkan draws, Xbox depth/stencil, checked guest vertex/index assembly, BGRA and DXT1 staging, guest surface readback");

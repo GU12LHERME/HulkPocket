@@ -310,38 +310,37 @@ public:
             throw std::logic_error("Unsupported guest shader program or flags");
         if(capture_pixel&&!programmable&&push_constants_.execution_mode_seen&&push_constants_.execution_mode==2)
             throw std::logic_error("NV2A program selected without supported vertex declaration");
+        // Additional stages are admitted only with a captured programmable
+        // pixel shader. Keep the existing GLES/fixed replay profile unchanged.
         std::array<uint32_t,4> textures{};
         for(unsigned st=0;st<4;++st){
             textures[st]=Read(uint64_t(device)+0xf88+4*st);
-            if(Read(uint64_t(device)+0xf98+4*st)||(st&&textures[st]))
-                throw std::logic_error("Fixed diffuse path requires at most one nonpaletted texture");
-        }
-        if(textures[0]){
+            if(Read(uint64_t(device)+0xf98+4*st)||(st&&textures[st]&&!(capture_pixel&&pixel)))
+                throw std::logic_error("Unsupported original texture stage or palette");
+            if(!textures[st])continue;
             gpu::TextureDesc d{};
-            if(!gpu::Describe(textures[0],d)||d.depth!=1||d.cube||
-               Read(uint64_t(textures[0])+8)||!SupportedDiffuseTexture(d))
+            if(!gpu::Describe(textures[st],d)||d.depth!=1||d.cube||
+               Read(uint64_t(textures[st])+8)||!SupportedDiffuseTexture(d))
                 throw std::logic_error("Unsupported original texture resource");
-            if(push_constants_.texture_words[0]!=3||
-               Read(uint64_t(textures[0])+4)!=state_.simple[0x1b00>>2]||
-               Read(uint64_t(textures[0])+12)!=state_.simple[0x1b04>>2])
+            auto base=0x1b00+st*0x40;
+            if(push_constants_.texture_words[st]!=3||
+               Read(uint64_t(textures[st])+4)!=state_.simple[base/4]||
+               Read(uint64_t(textures[st])+12)!=state_.simple[(base+4)/4])
                 throw std::logic_error("Guest texture header disagrees with NV2A binding");
             if(d.linear){
-                // NV097_SET_TEXTURE_CONTROL1 image pitch, IMAGE_RECT width/height.
-                if((state_.simple[0x1b10>>2]>>16)!=d.pitch||
-                   state_.simple[0x1b1c>>2]!=((d.width<<16)|d.height))
+                if((state_.simple[(base+0x10)/4]>>16)!=d.pitch||
+                   state_.simple[(base+0x1c)/4]!=((d.width<<16)|d.height))
                     throw std::logic_error("Linear texture header disagrees with NV2A pitch or extent");
             }else if(gpu::Format(d.format).swizzled){
-                (void)DescribeNv2aSwizzledTexture(state_.simple[0x1b00>>2],state_.simple[0x1b04>>2]);
+                (void)DescribeNv2aSwizzledTexture(state_.simple[base/4],state_.simple[(base+4)/4]);
             }
-            // DecodeGuestLevel validates complete storage, sizes and layout.
-            // Actual decoding is done once in UploadTexture, not here.
         }
         uint32_t fvf=0;
         for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u}){
             if(flags!=0x400)continue;
             // A declaration can retain UVs after SetTexture(0,null).
             // Only a bound texture requires UV; keep the original stride.
-            if(textures[0]&&!(candidate&0x100u))continue;
+            if(std::any_of(textures.begin(),textures.end(),[](auto t){return t!=0;})&&!(candidate&0x100u))continue;
             gpu::VertexShader layout;
             gpu::FvfInputs(candidate,layout);
             bool match=true;
@@ -422,6 +421,10 @@ public:
             gpu::CheckedGuestRange(pixel,4);
             next.ps=CaptureNv2aCombiner(next,push_constants_,pixel);
             next.rs[gpu::kRsPsTextureModes]=next.ps->def[54];
+            for(unsigned st=0;st<4;++st){
+                auto mode=(next.ps->def[54]>>(5*st))&31;
+                if((mode==1)!=bool(textures[st]))throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
+            }
         }
         next.textures=textures;next.palettes.fill(0);
         next.base_vertex=Read(uint64_t(device)+0x1c);
@@ -637,6 +640,11 @@ public:
         if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height)
             throw std::logic_error("Captured pixel replay requires full viewport");
         auto replay=state_;replay.rs.fill(0);replay.simple.fill(0);
+        if(!program){
+            for(unsigned st=0;st<4;++st)if(state_.textures[st]&&
+                (state_.tss[st][gpu::kTssTexCoordIndex]||state_.tss[st][gpu::kTssTextureTransformFlags]))
+                throw std::logic_error("Captured fixed vertex path requires UV set zero without transform");
+        }
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable})replay.rs[r]=state_.rs[r];
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
                     gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
