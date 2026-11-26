@@ -17,6 +17,7 @@ on:
       - 'tools/extend_hulk_generated.py'
       - 'tools/discover_hulk_xpp.py'
       - 'tools/audit_hulk_stream_vtables.py'
+      - 'tools/generate_audio_hook_fixture.py'
       - 'tools/run_hulk_next.sh'
       - 'native/test_xbe_supplemental_mapping.cpp'
       - 'native/portable_xbe_dispatch.cpp'
@@ -82,6 +83,12 @@ jobs:
           python3 tools/discover_hulk_xpp.py --self-test
           python3 tools/audit_hulk_stream_vtables.py --self-test
           python3 tools/discover_hulk_fvf.py --self-test
+      - name: Compile every conditional DirectSound hook
+        run: |
+          python3 tools/generate_audio_hook_fixture.py /tmp/hulk-audio-fixture/image_symbols.h
+          g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-audio-fixture -I/tmp/hulk-sdk -c native/xbe_d3d8_entry_guard.cpp -o /tmp/audio-hooks.o
+          python3 tools/generate_audio_hook_fixture.py /tmp/hulk-audio-fixture/image_symbols.h --named
+          g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-audio-fixture -I/tmp/hulk-sdk -c native/xbe_d3d8_entry_guard.cpp -o /tmp/audio-hooks-named.o
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout
