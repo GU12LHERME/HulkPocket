@@ -81,6 +81,7 @@ private:
     std::map<uint32_t,uint32_t> dpc_routines_;
     std::deque<uint32_t> dpc_queue_;
     bool dpc_running_=false;
+    bool sound_callback_running_=false;
     std::map<uint32_t,uint8_t> irql_;
     uint8_t& Irql(const X86Context& cpu){return irql_[cpu.thread_handle];}
     std::map<uint32_t,uint32_t> system_allocations_;
@@ -527,6 +528,30 @@ private:
                 r.ordinal,r.thread,r.ret,r.esp,r.returned?"result":"entry-eax",r.eax);
         }
     }
+    void ServiceSoundDone(X86Context& cpu,std::unique_lock<std::mutex>& lock){
+        if(sound_callback_running_)return;
+        HulkSound::StreamDone d{};
+        for(unsigned i=0;i<1024&&sound_.TakeStreamDone(d);++i){
+            if(!d.callback){
+                auto e=events_.find(d.packet_context);
+                if(e==events_.end()||semaphore_limits_.count(e->second.body)||timer_types_.count(e->second.body))
+                    throw std::runtime_error("Invalid stream completion event");
+                mem_.Write32(e->second.body+4,1);cv_.notify_all();continue;
+            }
+            if(!entry_||!mem_.IsCommitted(d.callback,1)||cpu.esp<16||!mem_.IsCommitted(cpu.esp-16,16))
+                throw std::runtime_error("Invalid stream completion callback");
+            X86Context nested=cpu;nested.esp-=16;
+            const uint32_t args[]={0,d.context,d.packet_context,d.status};
+            mem_.Write(nested.esp,args,sizeof(args));sound_callback_running_=true;
+            auto old_ordinal=fault_ordinal,old_return=fault_return,old_stack=fault_stack;
+            lock.unlock();int result=0;
+            try{result=entry_(&nested,mem_.Base(),d.callback,Dispatch);}
+            catch(...){lock.lock();sound_callback_running_=false;throw;}
+            lock.lock();sound_callback_running_=false;
+            fault_ordinal=old_ordinal;fault_return=old_return;fault_stack=old_stack;
+            if(result||nested.esp!=cpu.esp)throw std::runtime_error("Stream callback violated guest ABI");
+        }
+    }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
@@ -572,7 +597,30 @@ private:
             case kSoundFullHrtf:Check(cpu,0);sound_.SelectFullHrtf();Ret(cpu,0,0);return;
             case kSoundSetEffectData:Check(cpu,6);Ret(cpu,6,sound_.SetEffectData(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5)));return;
             case kSoundSynchPlayback:Check(cpu,1);sound_.Pump();Ret(cpu,1,sound_.SynchPlayback(Arg(cpu,0)));return;
-            case kSoundPump:Check(cpu,0);sound_.Pump();Ret(cpu,0,0);return;
+            case kSoundPump:Check(cpu,0);sound_.Pump();Ret(cpu,0,0);ServiceSoundDone(cpu,lock);return;
+            case kSoundNewStream:case kSoundNewDeviceStream:{
+                unsigned n=ordinal==kSoundNewStream?2:4;Check(cpu,n);
+                if(n==4&&(!sound_.Device(Arg(cpu,0))||Arg(cpu,3))){Ret(cpu,n,0x88780032u);return;}
+                Ret(cpu,n,sound_.NewStream(Arg(cpu,n==2?0:1),Arg(cpu,n==2?1:2),cpu.ecx,cpu.edx));return;
+            }
+            case kSoundStreamAddRef:case kSoundStreamRelease:case kSoundStreamInfo:
+            case kSoundStreamStatus:case kSoundStreamProcess:case kSoundStreamDiscontinuity:
+            case kSoundStreamFlush:case kSoundStreamFlushEx:case kSoundStreamPause:
+            case kSoundStreamVolume:case kSoundStreamFrequency:case kSoundStreamHeadroom:case kSoundStreamFormat:{
+                unsigned n=ordinal==kSoundStreamFlushEx?4:ordinal==kSoundStreamProcess?3:
+                    (ordinal==kSoundStreamAddRef||ordinal==kSoundStreamRelease||ordinal==kSoundStreamDiscontinuity||ordinal==kSoundStreamFlush)?1:2;
+                Check(cpu,n);std::array<uint32_t,8> a{};for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
+                if(ordinal==kSoundStreamProcess&&!sound_.HasStreamCallback(a[0])&&a[1]&&mem_.IsCommitted(a[1],20)){
+                    auto e=mem_.Read32(a[1]+16);
+                    if(e&&(!events_.count(e)||semaphore_limits_.count(events_.at(e).body)||timer_types_.count(events_.at(e).body))){
+                        Ret(cpu,n,0x88780032u);return;
+                    }
+                }
+                sound_.Pump();auto result=sound_.Stream(a[0],ordinal,a);Ret(cpu,n,result);
+                if(ordinal==kSoundStreamFlush||ordinal==kSoundStreamFlushEx||ordinal==kSoundStreamRelease||ordinal==kSoundStreamFormat)
+                    ServiceSoundDone(cpu,lock);
+                return;
+            }
             case kSoundNewBuffer:Check(cpu,2);Ret(cpu,2,sound_.NewBuffer(Arg(cpu,0),Arg(cpu,1)));return;
             case kSoundNewDeviceBuffer:Check(cpu,4);Ret(cpu,4,sound_.Device(Arg(cpu,0))&&!Arg(cpu,3)?sound_.NewBuffer(Arg(cpu,1),Arg(cpu,2)):0x88780032u);return;
             case kSoundBufferRelease:

@@ -3,6 +3,7 @@
 #include "hulk_audio_queue.h"
 #include "hulk_android_audio.h"
 #include <memory>
+#include <deque>
 #include "xbe_graphics_boundary.h"
 #include "../third_party/xboxxberecomp/audio/adpcm.h"
 #include <array>
@@ -21,6 +22,9 @@ namespace hulkpocket {
 // session lock. No APU MMIO, no synthetic completion for unimplemented APIs.
 // Headless by default; Android diagnostic output is explicitly opt-in.
 class HulkSound {
+public:
+    struct StreamDone {uint32_t callback,context,packet_context,status;};
+private:
     XboxGuestAddressSpace& mem_;
     XbeKernelPool& pool_;
     struct Format {
@@ -39,6 +43,36 @@ class HulkSound {
         uint64_t phase=0;
     };
     std::map<uint32_t,Voice> voices_;
+    struct Packet {uint32_t data,bytes,completed,status,context;};
+    struct StreamVoice {
+        Format fmt{};
+        uint32_t limit=0,callback=0,context=0,frequency=0,refs=1;
+        float gain=1,headroom=1;
+        bool paused=false,sync=false,ending=false;
+        uint64_t phase=0;
+        std::deque<Packet> packets;
+    };
+    std::map<uint32_t,StreamVoice> streams_;
+    std::deque<StreamDone> stream_done_;
+    static constexpr uint32_t pending=0x8000000au,aborted=0x80004004u;
+    void Complete(StreamVoice& v,const Packet& p,uint32_t status,uint32_t used){
+        if((p.completed&&!Range(p.completed,4))||(p.status&&!Range(p.status,4)))
+            throw std::runtime_error("Stream completion pointer no longer committed");
+        if((v.callback||p.context)&&stream_done_.size()>=1024)
+            throw std::runtime_error("Stream completion queue exhausted");
+        if(p.completed)mem_.Write32(p.completed,used);
+        if(p.status)mem_.Write32(p.status,status);
+        if(v.callback||p.context)stream_done_.push_back({v.callback,v.context,p.context,status});
+    }
+    void FlushStream(StreamVoice& v){
+        bool first=true;
+        while(!v.packets.empty()){
+            auto p=v.packets.front();
+            uint32_t used=first?std::min(p.bytes,v.fmt.Bytes(uint32_t(v.phase/kRate))):0;
+            Complete(v,p,aborted,used);v.packets.pop_front();first=false;
+        }
+        v.phase=0;v.ending=false;
+    }
     uint32_t device_=0,refs_=0;
     bool full_hrtf_requested_=false;
     struct EffectSegment {uint32_t address=0,size=0;};
@@ -124,7 +158,7 @@ public:
     uint32_t ReleaseDevice(uint32_t id){
         if(!id||id!=device_||!refs_)return bad;
         if(--refs_)return refs_;
-        if(!voices_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
+        if(!voices_.empty()||!streams_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
         StopAndroidOutput();FreeEffects();pool_.Free(device_);device_=0;return 0;
     }
     // Upstream 767a818 dsound.cpp uses a zero-argument HLE for this
@@ -318,9 +352,84 @@ public:
         default:throw std::logic_error("Unsupported software buffer operation");
         }
     }
+    // Pinned XDK 5849 layout: two vtable pointers at offsets 0 and 4.
+    // The caller supplies original symbol addresses; no synthetic vtables.
+    uint32_t NewStream(uint32_t desc,uint32_t out,uint32_t vt,uint32_t vt2){
+        if(!device_||!Range(desc,24)||!Range(out,4)||!Range(vt,4)||!Range(vt2,4)||vt==vt2||streams_.size()>=64)return bad;
+        Format f{};auto flags=mem_.Read32(desc),limit=mem_.Read32(desc+4);
+        auto callback=mem_.Read32(desc+12),context=mem_.Read32(desc+16);
+        if((flags&0x10u)||mem_.Read32(desc+20)||limit>32||!Parse(mem_.Read32(desc+8),f)||
+           (callback&&!Range(callback,1)))return bad;
+        auto obj=pool_.Allocate(0x80);if(!obj)return oom;
+        mem_.Write32(obj,vt);mem_.Write32(obj+4,vt2);
+        StreamVoice v{};v.fmt=f;v.limit=std::max(limit,1u);v.callback=callback;v.context=context;
+        streams_.emplace(obj,std::move(v));mem_.Write32(out,obj);
+        std::fprintf(stderr,"HULK DSOUND STREAM PASS obj=%08X tag=%04X channels=%u packets=%u callback=%08X\n",obj,f.tag,f.channels,limit,callback);
+        return 0;
+    }
+    bool HasStreamCallback(uint32_t id)const{
+        auto it=streams_.find(id);return it!=streams_.end()&&it->second.callback;
+    }
+    bool TakeStreamDone(StreamDone& out){
+        if(stream_done_.empty())return false;
+        out=stream_done_.front();stream_done_.pop_front();return true;
+    }
+    uint32_t Stream(uint32_t id,uint32_t op,const std::array<uint32_t,8>& a){
+        auto it=streams_.find(id);if(it==streams_.end())return bad;
+        auto& v=it->second;
+        switch(op){
+        case kSoundStreamAddRef:if(v.refs==UINT32_MAX)return bad;return ++v.refs;
+        case kSoundStreamRelease:
+            if(v.refs>1)return --v.refs;
+            FlushStream(v);streams_.erase(it);pool_.Free(id);return 0;
+        case kSoundStreamInfo:
+            if(!Range(a[1],16))return bad;
+            mem_.Write32(a[1],3);mem_.Write32(a[1]+4,v.fmt.align);
+            mem_.Write32(a[1]+8,0);mem_.Write32(a[1]+12,0);return 0;
+        case kSoundStreamStatus:
+            if(!Range(a[1],4))return bad;
+            mem_.Write32(a[1],v.packets.size()<v.limit?1:0);return 0;
+        case kSoundStreamProcess:{
+            if(a[2]||!Range(a[1],20)||v.packets.size()>=v.limit)return bad;
+            auto p=a[1];
+            Packet pk{mem_.Read32(p),mem_.Read32(p+4),mem_.Read32(p+8),mem_.Read32(p+12),mem_.Read32(p+16)};
+            if(!pk.bytes||pk.bytes>kMaxBytes||pk.bytes%v.fmt.align||!Range(pk.data,pk.bytes)||
+               (pk.completed&&!Range(pk.completed,4))||(pk.status&&!Range(pk.status,4))||
+               (pk.completed&&pk.completed==pk.status))return bad;
+            v.packets.push_back(pk);v.ending=false;
+            if(pk.completed)mem_.Write32(pk.completed,0);
+            if(pk.status)mem_.Write32(pk.status,pending);
+            return 0;
+        }
+        case kSoundStreamDiscontinuity:v.ending=!v.packets.empty();return 0;
+        case kSoundStreamFlush:FlushStream(v);return 0;
+        case kSoundStreamFlushEx:
+            if(a[1]||a[2]||a[3])return bad; // no scheduled/envelope flush yet
+            FlushStream(v);return 0;
+        case kSoundStreamPause:
+            if(a[1]>2)return bad;
+            v.paused=a[1]==1;v.sync=a[1]==2;return 0;
+        case kSoundStreamVolume:{
+            auto mb=static_cast<int32_t>(a[1]);if(mb< -10000||mb>0)return bad;
+            v.gain=mb==-10000?0.0f:std::pow(10.0f,float(mb)/2000.0f);return 0;
+        }
+        case kSoundStreamFrequency:
+            if(a[1]&&(a[1]<100||a[1]>200000))return bad;
+            v.frequency=a[1];return 0;
+        case kSoundStreamHeadroom:
+            if(a[1]>10000)return bad;
+            v.headroom=std::pow(10.0f,-float(a[1])/2000.0f);return 0;
+        case kSoundStreamFormat:{
+            Format f{};if(!Parse(a[1],f))return bad;
+            FlushStream(v);v.fmt=f;v.frequency=0;return 0;
+        }
+        default:throw std::logic_error("Unsupported stream operation");
+        }
+    }
     uint32_t SynchPlayback(uint32_t id){
         if(!Device(id))return bad;
         for(auto& entry:voices_)entry.second.sync=false;
+        for(auto& entry:streams_)entry.second.sync=false;
         return 0;
     }
     // Render exactly n frames. A single checked snapshot per voice per
@@ -362,6 +471,43 @@ public:
             }
             if(!v.loop&&v.phase>=uint64_t(total)*kRate){v.phase=uint64_t(total)*kRate;v.playing=false;}
         }
+        for(auto& item:streams_){
+            auto& v=item.second;
+            if(v.paused||v.sync)continue;
+            uint32_t cached_data=0,cached_block=UINT32_MAX;
+            std::array<int16_t,128> decoded{};
+            auto advance=[&]{
+                while(!v.packets.empty()){
+                    auto p=v.packets.front();
+                    const uint64_t end=uint64_t(v.fmt.Frames(p.bytes))*kRate;
+                    if(v.phase<end)break;
+                    Complete(v,p,0,p.bytes);v.phase-=end;v.packets.pop_front();
+                    cached_data=0;cached_block=UINT32_MAX;
+                }
+                if(v.packets.empty()){v.phase=0;v.ending=false;}
+            };
+            for(unsigned i=0;i<frames;++i){
+                advance();if(v.packets.empty())break;
+                auto p=v.packets.front();
+                if(!Range(p.data,p.bytes))throw std::runtime_error("Playing stream packet outside committed memory");
+                const uint32_t frame=uint32_t(v.phase/kRate);
+                const uint8_t* data=mem_.Base()+p.data;
+                if(v.fmt.tag==0x69&&(cached_data!=p.data||cached_block!=frame/64)){
+                    cached_data=p.data;cached_block=frame/64;
+                    audio::DecodeXboxAdpcm(data+cached_block*v.fmt.align,v.fmt.align,v.fmt.channels,
+                        decoded.data(),size_t(64)*v.fmt.channels);
+                }
+                for(unsigned ch=0;ch<2;++ch){
+                    unsigned c=std::min(ch,v.fmt.channels-1);int16_t value=0;
+                    if(v.fmt.tag==0x69)value=decoded[(frame%64)*v.fmt.channels+c];
+                    else if(v.fmt.bits==8)value=int16_t((int(data[frame*v.fmt.align+c])-128)*256);
+                    else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
+                    mix[2*i+ch]+=float(value)*v.gain*v.headroom;
+                }
+                v.phase+=v.frequency?v.frequency:v.fmt.rate;
+            }
+            advance();
+        }
         std::vector<int16_t> pcm(mix.size());
         for(size_t i=0;i<mix.size();++i)pcm[i]=int16_t(std::clamp(mix[i],-32768.0f,32767.0f));
         for(unsigned i=0;i<frames;++i)if(pcm[2*i]||pcm[2*i+1])++nonzero_;
@@ -377,7 +523,7 @@ public:
         uint32_t frames=uint32_t(std::min<int64_t>(elapsed,100000)*kRate/1000000);
         last_=now;
         if(rendered_+frames>uint64_t(kRate)*120)throw std::runtime_error("Audio diagnostic capture budget reached");
-        if(!voices_.empty()||output_){
+        if(!voices_.empty()||!streams_.empty()||output_){
             auto pcm=Render(frames);
             Capture(pcm);
             if(output_)output_->Push(pcm.data(),frames);

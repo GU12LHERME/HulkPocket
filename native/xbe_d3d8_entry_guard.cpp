@@ -399,37 +399,37 @@ SOUND_HOOK(IDirectSoundBuffer_SetCurrentPosition,kSoundBufferSetPosition,2)
 SOUND_HOOK(IDirectSoundBuffer_GetCurrentPosition,kSoundBufferGetPosition,3)
 #endif
 #if HAS_CDirectSoundStream_Discontinuity
-SOUND_STOP(CDirectSoundStream_Discontinuity)
+SOUND_HOOK(CDirectSoundStream_Discontinuity,kSoundStreamDiscontinuity,1)
 #endif
 #if HAS_CDirectSoundStream_Flush
-SOUND_STOP(CDirectSoundStream_Flush)
+SOUND_HOOK(CDirectSoundStream_Flush,kSoundStreamFlush,1)
 #endif
 #if HAS_CDirectSoundStream_FlushEx
-SOUND_STOP(CDirectSoundStream_FlushEx)
+SOUND_HOOK(CDirectSoundStream_FlushEx,kSoundStreamFlushEx,4)
 #endif
 #if HAS_CDirectSoundStream_GetInfo
-SOUND_STOP(CDirectSoundStream_GetInfo)
+SOUND_HOOK(CDirectSoundStream_GetInfo,kSoundStreamInfo,2)
 #endif
 #if HAS_CDirectSoundStream_GetStatus
-SOUND_STOP(CDirectSoundStream_GetStatus)
+SOUND_HOOK(CDirectSoundStream_GetStatus,kSoundStreamStatus,2)
 #endif
 #if HAS_CDirectSoundStream_Pause
-SOUND_STOP(CDirectSoundStream_Pause)
+SOUND_HOOK(CDirectSoundStream_Pause,kSoundStreamPause,2)
 #endif
 #if HAS_CDirectSoundStream_Process
-SOUND_STOP(CDirectSoundStream_Process)
+SOUND_HOOK(CDirectSoundStream_Process,kSoundStreamProcess,3)
 #endif
 #if HAS_CDirectSoundStream_SetFilter
 SOUND_STOP(CDirectSoundStream_SetFilter)
 #endif
 #if HAS_CDirectSoundStream_SetFormat
-SOUND_STOP(CDirectSoundStream_SetFormat)
+SOUND_HOOK(CDirectSoundStream_SetFormat,kSoundStreamFormat,2)
 #endif
 #if HAS_CDirectSoundStream_SetFrequency
-SOUND_STOP(CDirectSoundStream_SetFrequency)
+SOUND_HOOK(CDirectSoundStream_SetFrequency,kSoundStreamFrequency,2)
 #endif
 #if HAS_CDirectSoundStream_SetHeadroom
-SOUND_STOP(CDirectSoundStream_SetHeadroom)
+SOUND_HOOK(CDirectSoundStream_SetHeadroom,kSoundStreamHeadroom,2)
 #endif
 #if HAS_CDirectSoundStream_SetI3DL2Source
 SOUND_STOP(CDirectSoundStream_SetI3DL2Source)
@@ -453,11 +453,30 @@ SOUND_STOP(CDirectSoundStream_SetPosition)
 SOUND_STOP(CDirectSoundStream_SetVelocity)
 #endif
 #if HAS_CDirectSoundStream_SetVolume
-SOUND_STOP(CDirectSoundStream_SetVolume)
+SOUND_HOOK(CDirectSoundStream_SetVolume,kSoundStreamVolume,2)
+#endif
+#if HAS_DSound_StreamVtable && HAS_DSound_StreamVtable2
+#define STREAM_CREATE(name,id,n) extern "C" __attribute__((visibility("default"))) \
+void GUEST(name)(X86Context& ctx,uint8_t* base){ \
+    ctx.ecx=GUEST_VA(SYM_DSound_StreamVtable);ctx.edx=GUEST_VA(SYM_DSound_StreamVtable2); \
+    SoundBoundary(ctx,base,hulkpocket::id,n,#name); \
+}
+#else
+#define STREAM_CREATE(name,id,n) SOUND_STOP(name)
 #endif
 #if HAS_DirectSoundCreateStream
-SOUND_STOP(DirectSoundCreateStream)
+STREAM_CREATE(DirectSoundCreateStream,kSoundNewStream,2)
 #endif
+#if HAS_IDirectSound_CreateSoundStream
+STREAM_CREATE(IDirectSound_CreateSoundStream,kSoundNewDeviceStream,4)
+#endif
+#if HAS_CDirectSoundStream_AddRef
+SOUND_HOOK(CDirectSoundStream_AddRef,kSoundStreamAddRef,1)
+#endif
+#if HAS_CDirectSoundStream_Release
+SOUND_HOOK(CDirectSoundStream_Release,kSoundStreamRelease,1)
+#endif
+#undef STREAM_CREATE
 #if HAS_DirectSoundUseFullHRTF
 SOUND_HOOK(DirectSoundUseFullHRTF,kSoundFullHrtf,0)
 #endif

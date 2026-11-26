@@ -85,6 +85,36 @@ int main(){
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,0})==0);
     got=s.Render(64);for(auto x:got)assert(x==0x1234);
     assert(s.Buffer(v,kSoundBufferRelease,{v})==0);
+    // Streaming PCM: two packets, exact samples, capacity, pause, completion and flush.
+    mem.Write(0x10100,fmt,sizeof(fmt));mem.Write(0x10300,pcm,sizeof(pcm));
+    uint32_t stream_desc[]={0,2,0x10100,0,0,0};
+    mem.Write(0x10400,stream_desc,sizeof(stream_desc));
+    mem.Write32(0x10500,0x10580);mem.Write32(0x10510,0x10584);
+    assert(s.NewStream(0x10400,0x10008,0x10500,0x10510)==0);
+    auto stream=mem.Read32(0x10008);
+    assert(mem.Read32(stream)==0x10500&&mem.Read32(stream+4)==0x10510);
+    uint32_t pk1[]={0x10300,4,0x10600,0x10604,0x77};
+    uint32_t pk2[]={0x10304,4,0x10608,0x1060c,0x88};
+    mem.Write(0x10440,pk1,sizeof(pk1));mem.Write(0x10460,pk2,sizeof(pk2));
+    assert(s.Stream(stream,kSoundStreamInfo,{stream,0x10700})==0&&mem.Read32(0x10704)==2);
+    assert(s.Stream(stream,kSoundStreamProcess,{stream,0x10440,0})==0);
+    assert(s.Stream(stream,kSoundStreamProcess,{stream,0x10460,0})==0);
+    assert(s.Stream(stream,kSoundStreamProcess,{stream,0x10460,0})==0x88780032u);
+    assert(s.Stream(stream,kSoundStreamStatus,{stream,0x10700})==0&&mem.Read32(0x10700)==0);
+    assert(mem.Read32(0x10604)==0x8000000au);
+    assert(s.Stream(stream,kSoundStreamPause,{stream,1})==0);
+    got=s.Render(2);for(auto x:got)assert(x==0);
+    assert(s.Stream(stream,kSoundStreamPause,{stream,0})==0);
+    got=s.Render(3);assert(got[0]==1000&&got[2]==-2000&&got[4]==3000);
+    assert(mem.Read32(0x10600)==4&&mem.Read32(0x10604)==0&&mem.Read32(0x1060c)==0x8000000au);
+    HulkSound::StreamDone done{};assert(s.TakeStreamDone(done)&&done.packet_context==0x77&&done.status==0);
+    assert(s.Stream(stream,kSoundStreamFlush,{stream})==0);
+    assert(mem.Read32(0x10608)==2&&mem.Read32(0x1060c)==0x80004004u);
+    assert(s.TakeStreamDone(done)&&done.packet_context==0x88&&done.status==0x80004004u);
+    assert(!s.TakeStreamDone(done));
+    assert(s.Stream(stream,kSoundStreamAddRef,{stream})==2);
+    assert(s.Stream(stream,kSoundStreamRelease,{stream})==1);
+    assert(s.Stream(stream,kSoundStreamRelease,{stream})==0);
     // XDK 5849 synthetic image with one real state segment and three
     // reserved DSP regions. Verify offset arithmetic and actual bytes.
     constexpr uint32_t img=0x12000,table=0x824;
