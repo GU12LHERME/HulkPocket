@@ -374,8 +374,9 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     const bool textured=s.textures[0]!=0;
     const bool packed=bool(s.vs);
     const bool transformed=!packed&&(s.vs_handle&0xe)==4;
-    const uint32_t expected=(textured?0x140u:0x40u)|(transformed?4u:2u);
-    if((!packed&&s.vs_handle!=expected)||(packed&&(!textured||!(s.vs_handle&1)))||s.ps||s.scissor_count||
+    const bool has_uv=packed||(s.vs_handle&0x100u)!=0;
+    const uint32_t expected=(has_uv?0x140u:0x40u)|(transformed?4u:2u);
+    if((!packed&&(s.vs_handle!=expected||(textured&&!has_uv)))||(packed&&(!textured||!(s.vs_handle&1)))||s.ps||s.scissor_count||
        s.ss_offset_x!=0||s.ss_offset_y!=0||
        std::any_of(s.textures.begin()+1,s.textures.end(),[](auto v){return v!=0;})||
        std::any_of(s.tss.begin()+1,s.tss.end(),[](const auto& stage){return std::any_of(stage.begin(),stage.end(),[](auto v){return v!=0;});}))
@@ -412,10 +413,10 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     if(prim<1||prim>10)throw std::invalid_argument("Invalid Xbox primitive");
     gpu::Assembled a;
     if(!gpu::Assemble(s,prim,start,count,indices,a))throw std::runtime_error("Vertex assembly failed");
-    if(a.regs!=(packed?0x205u:(textured?0x209u:9u))||a.pretransformed!=transformed||
+    if(a.regs!=(packed?0x205u:(has_uv?0x209u:9u))||a.pretransformed!=transformed||
        a.elements[0].format!=(transformed?gpu::kVertexR32G32B32A32_FLOAT:gpu::kVertexR32G32B32_FLOAT)||
        (packed?a.elements[2].format!=gpu::kVertexR32_UINT:a.elements[3].format!=gpu::kVertexB8G8R8A8_UNORM)||
-       (textured&&a.elements[9].format!=gpu::kVertexR32G32_FLOAT))Unsupported("Unsupported GLES vertex layout");
+       (has_uv&&a.elements[9].format!=gpu::kVertexR32G32_FLOAT))Unsupported("Unsupported GLES vertex layout");
     uint32_t n=a.index_count?a.index_count:a.draw_count;
     GLenum mode=GL_TRIANGLES;
     switch(a.topology){

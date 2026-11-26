@@ -62,7 +62,7 @@ public:
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||
                            (line.starts_with("D3D LIGHT ")&&(!line.starts_with("D3D LIGHT OBSERVE")||line.ends_with("accepted=0")))||
                            line.starts_with("HULK CRT MATH ")||
-                           line.starts_with("D3D PACKED NORMAL ")||line.starts_with("D3D INVALID POSITION")||
+                           line.starts_with("D3D PACKED NORMAL ")||line.starts_with("D3D INVALID POSITION")||line.starts_with("D3D UNTEXTURED DIFFUSE ")||
                            line.starts_with("D3D XYZ ISOLATION")||line.starts_with("Guest entry status:")){
                             events.push_back(line);if(events.size()>256)events.pop_front();
                         }

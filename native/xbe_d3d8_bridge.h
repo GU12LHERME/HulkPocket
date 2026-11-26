@@ -334,7 +334,9 @@ public:
         uint32_t fvf=0;
         for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u}){
             if(flags!=0x400)continue;
-            if(bool(candidate&0x100u)!=bool(textures[0]))continue;
+            // A declaration can retain UVs after SetTexture(0,null).
+            // Only a bound texture requires UV; keep the original stride.
+            if(textures[0]&&!(candidate&0x100u))continue;
             gpu::VertexShader layout;
             gpu::FvfInputs(candidate,layout);
             bool match=true;
@@ -404,7 +406,7 @@ public:
             throw std::invalid_argument("Invalid guest geometry request");
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         gpu::Assembled a;
-        const auto regs=state_.vs?0x205u:(state_.textures[0]?0x209u:9u);
+        const auto regs=state_.vs?0x205u:((state_.vs_handle&0x100u)?0x209u:9u);
         if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=regs)
             throw std::runtime_error("Guest diffuse geometry assembly failed");
         return a.vertex_count;
@@ -515,7 +517,7 @@ public:
         if(packed&&(!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))
             throw std::logic_error("Packed normal lighting requires captured material and enabled light records");
         if(!initialized_||(!packed&&state_.vs_handle!=0x142)||state_.ps||
-           !state_.textures[0]||!count||count>262144||
+           (packed&&!state_.textures[0])||!count||count>262144||
            !((prim==5&&count%3==0)||(prim==6&&count>=3))||state_.scissor_count||
            state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||
            state_.viewport.max_z!=1||state_.ss_offset_x||state_.ss_offset_y||
@@ -527,13 +529,14 @@ public:
             throw std::logic_error("Unsupported original textured quad profile");
         gpu::TextureDesc desc{},tex{};
         if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height||
-           !gpu::Describe(state_.textures[0],tex)||!SupportedDiffuseTexture(tex))
+           (state_.textures[0]&&(!gpu::Describe(state_.textures[0],tex)||!SupportedDiffuseTexture(tex))))
             throw std::logic_error("Textured diffuse draw requires full target and supported color texture");
         const auto& st=state_.tss[0];
         // RP6 stage 0: clamp, bilinear, modulate diffuse * texture for
         // both RGB and alpha. Arg0 is unused by a two-input modulate.
         auto address_ok=[](uint32_t mode){return mode>=1&&mode<=3;};
-        if(!address_ok(st[gpu::kTssAddressU])||!address_ok(st[gpu::kTssAddressV])||
+        const bool textured=state_.textures[0]!=0;
+        if(textured&&(!address_ok(st[gpu::kTssAddressU])||!address_ok(st[gpu::kTssAddressV])||
            !address_ok(st[gpu::kTssAddressW])||
            (st[gpu::kTssMinFilter]!=1&&st[gpu::kTssMinFilter]!=2)||
            (st[gpu::kTssMagFilter]!=1&&st[gpu::kTssMagFilter]!=2)||st[gpu::kTssMipFilter]>2||
@@ -542,8 +545,10 @@ public:
            st[gpu::kTssColorSign]||st[gpu::kTssAlphaKill]||
            st[gpu::kTssColorOp]!=4||st[gpu::kTssColorArg1]!=0||st[gpu::kTssColorArg2]!=2||
            st[gpu::kTssAlphaOp]!=4||st[gpu::kTssAlphaArg1]!=0||st[gpu::kTssAlphaArg2]!=2||
-           st[gpu::kTssResultArg]!=1||st[gpu::kTssTextureTransformFlags]||st[gpu::kTssTexCoordIndex])
+           st[gpu::kTssResultArg]!=1||st[gpu::kTssTextureTransformFlags]||st[gpu::kTssTexCoordIndex]))
             throw std::logic_error("Unsupported original quad texture combiner");
+        if(!textured&&(st[gpu::kTssColorOp]!=1||st[gpu::kTssAlphaOp]!=1))
+            throw std::logic_error("Unbound texture requires disabled color and alpha stages");
         for(unsigned i=1;i<4;++i)
             if(state_.tss[i][gpu::kTssColorOp]>1||state_.tss[i][gpu::kTssAlphaOp]>1)
                 throw std::logic_error("Additional active texture stage");
@@ -563,11 +568,12 @@ public:
                     gpu::kMDitherEnable,gpu::kMShadeMode})
             replay.simple[m>>2]=state_.simple[m>>2];
         auto& dst=replay.tss[0];
-        for(auto k:{gpu::kTssAddressU,gpu::kTssAddressV,gpu::kTssMinFilter,gpu::kTssMagFilter,
-                    gpu::kTssMipFilter,gpu::kTssColorOp,gpu::kTssAlphaOp})dst[k]=st[k];
-        // Multiplication commutes; normalize argument order to the GLES
-        // implementation without changing the guest's stored state.
-        dst[gpu::kTssColorArg1]=dst[gpu::kTssAlphaArg1]=2;
+        if(textured){
+            for(auto k:{gpu::kTssAddressU,gpu::kTssAddressV,gpu::kTssMinFilter,gpu::kTssMagFilter,
+                        gpu::kTssMipFilter,gpu::kTssColorOp,gpu::kTssAlphaOp})dst[k]=st[k];
+            // Multiplication commutes; normalize argument order.
+            dst[gpu::kTssColorArg1]=dst[gpu::kTssAlphaArg1]=2;
+        }
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         backend_.Draw(replay,prim,start,count,ip);backend_.Flush();
     }

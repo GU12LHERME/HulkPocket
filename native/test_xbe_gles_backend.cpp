@@ -504,6 +504,33 @@ int main(){
         assert(bridge.VerifyGuestGeometry(6,0,4,0x11880)==4);
         bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
         assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,0,255,255}));
+        // RP6 after x87 fix: same XYZ/DIFFUSE/UV declaration, 24-byte
+        // stride, but all textures unbound and all stages disabled.
+        // Preserve UV in assembly; it is unused in the fragment shader.
+        mem.Write32(dev+0xf88,0);
+        auto solid=mip;solid.tss[0][gpu::kTssColorOp]=solid.tss[0][gpu::kTssAlphaOp]=1;
+        solid.simple[gpu::kMBlendEnable>>2]=1;
+        solid.simple[gpu::kMSrcBlend>>2]=0x302;
+        solid.simple[gpu::kMDestBlend>>2]=0x303;
+        solid.simple[gpu::kMBlendOp>>2]=0x8006;
+        solid.simple[gpu::kMAlphaTestEnable>>2]=0;
+        bridge.AdoptLiveSetters(solid);
+        auto colored=std::array<QuadVertex,4>{minified[0],minified[1],minified[2],minified[3]};
+        for(auto& v:colored){v.color=0x80ff0000;v.u=std::bit_cast<float>(0x7fc00000u);}
+        mem.Write(0x80105000,colored.data(),sizeof(colored));
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x142);
+        assert(bridge.VerifyGuestGeometry(6,0,4,0x11880)==4);
+        call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
+        bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
+        auto blend=backend.ReadPixel(32,32);
+        assert(blend[0]>=127&&blend[0]<=129&&blend[1]==0&&blend[2]>=126&&blend[2]<=128);
+        solid.tss[0][gpu::kTssColorOp]=4;bridge.AdoptLiveSetters(solid);
+        bool missing_texture=false;
+        try{bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);}catch(const std::logic_error&){missing_texture=true;}
+        assert(missing_texture);
+        mem.Write32(dev+0xf88,0x10400);bridge.AdoptLiveSetters(mip);
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x142);
+        mem.Write(0x80105000,minified,sizeof(minified));
         // A malformed nonindexed XYZ triangle must not be forwarded to
         // the GPU; strict mode stops, preview isolation retains good triangles.
         std::array<QuadVertex,6> mixed{minified[0],minified[1],minified[2],minified[1],minified[3],minified[2]};

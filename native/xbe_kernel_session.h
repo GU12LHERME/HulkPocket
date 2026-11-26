@@ -1171,9 +1171,11 @@ private:
                     if(!gpu::DescribeSurface(synced.rt,desc))
                         throw std::runtime_error("Textured quad target description failed");
                     gpu::TextureDesc tex{};
-                    if(!gpu::Describe(synced.textures[0],tex))throw std::runtime_error("Invalid capture texture");
+                    const bool has_texture=synced.textures[0]!=0;
+                    if(has_texture&&!gpu::Describe(synced.textures[0],tex))throw std::runtime_error("Invalid capture texture");
+                    const uint32_t capture_format=has_texture?tex.format:0xffffffffu;
                     const bool capture=live.detailed_draws||!live.diagnostic_texture_returns||(synced.vs&&!live.diagnostic_lit_returns)||
-                        live.last_capture_format!=tex.format||live.last_capture_primitive!=Arg(cpu,0);
+                        live.last_capture_format!=capture_format||live.last_capture_primitive!=Arg(cpu,0);
                     // Keep first-draw pixel proof and capture each new texture
                     // format/primitive. Normal repeated draws are read back at swap.
                     std::vector<uint8_t> before;
@@ -1190,7 +1192,8 @@ private:
                             size_t at=size_t(y)*desc.pitch+4*x;
                             if(std::memcmp(before.data()+at,pixels+at,4))++changed;
                         }
-                        live.last_capture_format=tex.format;live.last_capture_primitive=Arg(cpu,0);
+                        live.last_capture_format=capture_format;live.last_capture_primitive=Arg(cpu,0);
+                        if(!has_texture)std::fprintf(stderr,"D3D UNTEXTURED DIFFUSE DRAW PASS vertices=%u changed_pixels=%u\n",vertices,changed);
                         std::fprintf(stderr,"D3D ORIGINAL TEXTURED QUAD REPLAY: vertices=%u changed_pixels=%u (reduced state; not presented)\n",vertices,changed);
                         if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path)
                             WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
