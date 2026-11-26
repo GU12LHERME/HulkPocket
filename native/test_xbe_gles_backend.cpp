@@ -514,7 +514,7 @@ int main(){
         try{bridge.ReplayTexturedDiffuseDiagnostic(5,0,6);}catch(const std::invalid_argument&){invalid_xyz=true;}
         assert(invalid_xyz);
         setenv("HULK_ISOLATE_INVALID_XYZ","1",1);
-        backend.Clear(bridge.Snapshot(),0,nullptr,0xf0,0xff000000,1,0);
+        call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
         bridge.ReplayTexturedDiffuseDiagnostic(5,0,6);
         assert((backend.ReadPixel(8,8)==std::array<uint8_t,4>{0,0,0,255}));
         assert((backend.ReadPixel(56,56)==std::array<uint8_t,4>{0,0,255,255}));
