@@ -53,7 +53,7 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
             third_party/xboxxberecomp/kernel/crypto.cpp \
             native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp \
             third_party/xboxxberecomp/gpu/vertex.cpp \
-            -ldl -lEGL -lGLESv3 -o "$out"
+            -ldl -lEGL -lGLESv3 -landroid -o "$out"
     fi
     args=()
     if [[ -n "$disc" ]]; then args+=(--disc-root "$disc"); fi

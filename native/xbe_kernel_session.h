@@ -14,6 +14,7 @@
 #include "xbe_graphics_boundary.h"
 #include "hulk_sound.h"
 #include "hulk_pad_script.h"
+#include "hulk_preview_host.h"
 #include "xbe_resident_sections.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
@@ -68,6 +69,15 @@ private:
     std::map<uint32_t,InputHandle> input_handles_;
     HulkPadScript pad_script_;
     unsigned input_frame_=0;
+    void RefreshPreviewPorts(){
+        if(!gamepad_type_||!preview_host.enabled.load())return;
+        const uint32_t current=preview_host.Poll().first?1u:0u;
+        const auto old=mem_.Read32(gamepad_type_);
+        if(old!=current){
+            mem_.Write32(gamepad_type_,current);
+            mem_.Write32(gamepad_type_+4,mem_.Read32(gamepad_type_+4)|(old^current));
+        }
+    }
     // Objects remain owned by the session until shutdown, including bodies
     // held by in-flight waits. References are tracked independently of handles.
     struct Event { uint32_t body; bool manual; };
@@ -616,6 +626,8 @@ private:
         }
     }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
+        if(preview_host.enabled.load()&&preview_host.stop.load())
+            throw std::runtime_error("Android preview stop requested");
         Pause(cpu,lock);
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
         if(live_d3d_&&live_d3d_->owner==cpu.thread_handle)
@@ -744,11 +756,12 @@ private:
                 gamepad_type_=pad;memory_unit_type_=mu;
                 pad_script_.Configure(std::getenv("HULK_INPUT_SCRIPT"),DiagnosticFrameLimit());
                 const uint32_t zero[3]={};
-                const uint32_t ports[3]={uint32_t(pad_script_.Enabled()),uint32_t(pad_script_.Enabled()),0};
+                const bool connected=preview_host.enabled.load()?preview_host.Poll().first:pad_script_.Enabled();
+                const uint32_t ports[3]={uint32_t(connected),uint32_t(connected),0};
                 mem_.Write(pad,ports,sizeof(ports));
                 if(mu)mem_.Write(mu,zero,sizeof(zero));
                 std::fprintf(stderr,"HULK INPUT initialization: pad=%08X memory_unit=%08X connected=%u provider=%s\n",
-                    pad,mu,ports[0],pad_script_.Enabled()?"scripted diagnostic":"none");
+                    pad,mu,ports[0],preview_host.enabled.load()?"Android physical input":pad_script_.Enabled()?"scripted diagnostic":"none");
                 Ret(cpu,2,0);return;
             }
             case kXapiInputOpen: {
@@ -772,11 +785,14 @@ private:
                 auto it=input_handles_.find(Arg(cpu,0));
                 if(it==input_handles_.end()){Ret(cpu,2,6);return;}
                 auto& h=it->second;
-                if(!pad_script_.Enabled()||h.port!=0){Ret(cpu,2,1167);return;}
+                RefreshPreviewPorts();
+                const auto physical=preview_host.Poll();
+                const bool live_input=preview_host.enabled.load();
+                if(h.port!=0||!(live_input?physical.first:pad_script_.Enabled())){Ret(cpu,2,1167);return;}
                 const auto out=Arg(cpu,1);
                 if(ordinal==kXapiInputGetState){
                     if(!out||!mem_.IsCommitted(out,22)){Ret(cpu,2,87);return;}
-                    auto state=pad_script_.At(input_frame_);
+                    auto state=live_input?physical.second:pad_script_.At(input_frame_);
                     if(!h.polled||h.last!=state){
                         ++h.packet;h.last=state;h.polled=true;
                         std::fprintf(stderr,"HULK INPUT state frame=%u packet=%u buttons=%02X analogA=%u analogB=%u lx=%02X%02X ly=%02X%02X\n",
@@ -1316,6 +1332,8 @@ private:
                 }
                 live.backend.ReadbackColor(state.rt);
                 auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
+                if(preview_host.enabled.load())preview_host.Present(pixels,desc.width,desc.height,desc.pitch);
+                RefreshPreviewPorts();
                 if(live.compact_capture){
                     live.last_presented_pixels.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
                     live.last_presented_width=desc.width;live.last_presented_height=desc.height;live.last_presented_pitch=desc.pitch;

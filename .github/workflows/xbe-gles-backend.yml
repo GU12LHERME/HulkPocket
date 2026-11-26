@@ -14,6 +14,8 @@ on:
       - 'native/xbe_d3d8_entry_guard.cpp'
       - 'native/xbe_graphics_boundary.h'
       - 'tools/generate_audio_hook_fixture.py'
+      - 'native/hulk_preview_host.h'
+      - 'native/hulk_pad_script.h'
       - 'native/hulk_sound.h'
       - 'native/hulk_sound_spatial.h'
       - 'native/hulk_sound_reverb.h'
@@ -77,7 +79,7 @@ jobs:
           "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -I/tmp/hulk-audio-fixture -I/tmp/hulk-sdk -c native/xbe_d3d8_entry_guard.cpp -o /tmp/audio-hooks-android.o
           mkdir -p build/gles
           "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv3 -o build/gles/hulk-gles-smoke
-          "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp third_party/xboxxberecomp/kernel/crypto.cpp native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -ldl -lEGL -lGLESv3 -o build/gles/hulk-live-diagnostic
+          "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp third_party/xboxxberecomp/kernel/crypto.cpp native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -ldl -lEGL -lGLESv3 -landroid -o build/gles/hulk-live-diagnostic
           "$TOOL/llvm-readelf" -h -d build/gles/hulk-gles-smoke | tee build/gles/elf.txt
           grep -q AArch64 build/gles/elf.txt
           git rev-parse HEAD > build/gles/revision.txt

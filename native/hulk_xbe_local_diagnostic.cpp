@@ -169,7 +169,14 @@ int main(int argc,char** argv) {
                 auto entry=native.ResolveKernelEntry();
                 std::cout << "Starting isolated guest entry diagnostic" << std::endl;
                 std::cerr.flush();
+#ifdef HULK_ANDROID_PREVIEW
+                // This Activity runs in a dedicated app process. Never fork
+                // the multithreaded Android VM; native faults terminate only
+                // the preview process.
+                const auto pid=0;
+#else
                 auto pid=fork();
+#endif
                 if(pid<0) throw std::runtime_error("fork failed");
                 if(pid==0) {
                     try {
@@ -189,12 +196,21 @@ int main(int argc,char** argv) {
                             status=session.Run(entry,cpu,loaded.entry);
                         } // stop audio and release session before _exit
                         std::cerr << "Guest entry status: " << status << std::endl;
+#ifdef HULK_ANDROID_PREVIEW
+                        alarm(0);return status==0?0:5;
+#else
                         _exit(status==0?0:5);
+#endif
                     } catch(const std::exception& ex) {
                         std::cerr << ex.what() << std::endl;
+#ifdef HULK_ANDROID_PREVIEW
+                        alarm(0);return 5;
+#else
                         _exit(5);
+#endif
                     }
                 }
+#ifndef HULK_ANDROID_PREVIEW
                 int status=0;
                 if(waitpid(pid,&status,0)!=pid) throw std::runtime_error("waitpid failed");
                 if(WIFSIGNALED(status)) {
@@ -202,6 +218,7 @@ int main(int argc,char** argv) {
                     return 6;
                 }
                 return WIFEXITED(status)?WEXITSTATUS(status):6;
+#endif
             }
 #endif
         } else {
