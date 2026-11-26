@@ -3,7 +3,8 @@
 // commit 767a81837fba2d86913f6af81a10b33661d35518, MIT. See LICENSE in this directory.
 #include <algorithm>
 #include <cstdint>
-#include <span>
+#include <array>
+#include <cstddef>
 #include <stdexcept>
 namespace hulkpocket::audio {
 namespace detail {
@@ -40,12 +41,17 @@ inline void DecodeBlock(const uint8_t* b, int ch, int16_t* out) {
 // An Xbox ADPCM block stores 65 decoded frames, of which the Xbox
 // voice consumes 64. Explicit sizes prevent malformed guest buffers
 // reaching the upstream decoder with insufficient storage.
-inline void DecodeXboxAdpcm(std::span<const uint8_t> block,unsigned channels,
-                            std::span<int16_t> pcm){
-    if(channels<1||channels>8||block.size()!=36u*channels||
-       pcm.size()!=64u*channels)throw std::invalid_argument("Invalid Xbox ADPCM block size");
+inline void DecodeXboxAdpcm(const uint8_t* block,std::size_t block_size,unsigned channels,
+                            int16_t* pcm,std::size_t pcm_size){
+    if(!block||!pcm||channels<1||channels>8||block_size!=36u*channels||
+       pcm_size!=64u*channels)throw std::invalid_argument("Invalid Xbox ADPCM block size");
     int16_t scratch[65*8]{};
-    detail::DecodeBlock(block.data(),int(channels),scratch);
-    std::copy_n(scratch,pcm.size(),pcm.data());
+    detail::DecodeBlock(block,int(channels),scratch);
+    std::copy_n(scratch,pcm_size,pcm);
+}
+template<std::size_t N,std::size_t M>
+inline void DecodeXboxAdpcm(const std::array<uint8_t,N>& block,unsigned channels,
+                            std::array<int16_t,M>& pcm){
+    DecodeXboxAdpcm(block.data(),N,channels,pcm.data(),M);
 }
 }

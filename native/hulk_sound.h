@@ -4,6 +4,7 @@
 #include "../third_party/xboxxberecomp/audio/adpcm.h"
 #include <array>
 #include <chrono>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -182,8 +183,8 @@ public:
                 const uint8_t* data=mem_.Base()+v.data;
                 if(v.fmt.tag==0x69&&cached!=frame/64){
                     cached=frame/64;
-                    audio::DecodeXboxAdpcm({data+cached*v.fmt.align,v.fmt.align},v.fmt.channels,
-                        {decoded.data(),size_t(64)*v.fmt.channels});
+                    audio::DecodeXboxAdpcm(data+cached*v.fmt.align,v.fmt.align,v.fmt.channels,
+                        decoded.data(),size_t(64)*v.fmt.channels);
                 }
                 for(unsigned ch=0;ch<2;++ch){
                     unsigned c=std::min(ch,v.fmt.channels-1);int16_t value=0;

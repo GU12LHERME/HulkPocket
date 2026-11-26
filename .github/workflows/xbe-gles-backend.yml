@@ -41,7 +41,7 @@ jobs:
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Validate software DirectSound mixing and guest memory
         run: |
-          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_hulk_sound.cpp native/xbox_guest_address_space.cpp -o /tmp/hulk-sound
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_hulk_sound.cpp native/xbox_guest_address_space.cpp -o /tmp/hulk-sound
           /tmp/hulk-sound
       - name: Compile and render with real GLES
         run: |
