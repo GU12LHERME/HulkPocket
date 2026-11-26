@@ -173,7 +173,8 @@ public:
     }
     int Run(Entry entry,X86Context& cpu,uint32_t address) {
         if(!entry || active_ || entry_) throw std::runtime_error("Invalid kernel session");
-        struct Reset { ~Reset(){active_=nullptr;} } reset;
+        struct Reset { XbeKernelSession& s; ~Reset(){s.entry_=nullptr; active_=nullptr;} } reset{*this};
+        stopping_=false; worker_failure_=0;
         active_=this; entry_=entry;
         int result=0;
         try { result=entry(&cpu,mem_.Base(),address,Dispatch); }
