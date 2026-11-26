@@ -4,6 +4,7 @@
 // device mirrors, reference ownership and pushbuffer walking belong to the next layer.
 #include "gpu/backend.h"
 #include "xbe_nv2a_push.h"
+#include "xbe_nv2a_texture.h"
 #include "gpu/guest_memory.h"
 #include "gpu/texture.h"
 #include "gpu/vertex.h"
@@ -381,7 +382,37 @@ public:
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");
-        ApplyNv2aState(state_,push_constants_,DecodeNv2aMethods(mem_,begin,end));
+        // Validate and decode newly complete raw texture bindings before
+        // committing the scratch batch. Do not enable a draw just because
+        // the image data decodes; sampler, shader and raster state still matter.
+        auto methods=DecodeNv2aMethods(mem_,begin,end);
+        auto next=state_;auto cursor=push_constants_;
+        ApplyNv2aState(next,cursor,methods);
+        gpu::ScopedGuestMemory scope(mem_);
+        std::array<uint8_t,4> changed{};
+        for(auto [m,v]:methods){
+            (void)v;
+            if(m>=0x1b00&&m<0x1c00&&(m&0x3f)<=4)
+                changed[(m-0x1b00)/0x40]|=(m&0x3f)==0?1u:2u;
+        }
+        for(unsigned stage=0;stage<4;++stage){
+            if(changed[stage]!=3)continue;
+            const auto base=0x1b00+stage*0x40;
+            auto offset=next.simple[base>>2],format=next.simple[(base+4)>>2];
+            // Only decode the verified swizzled 2D family here; preserve
+            // all other bindings for explicit validation at the draw boundary.
+            if((format&3)==1&&!(format&4)&&((format>>4)&15)==2&&
+               gpu::Format((format>>8)&255).swizzled&&
+               gpu::Format((format>>8)&255).host==gpu::Host::BGRA8&&((format>>8)&255)!=0xb){
+                auto probe=ProbeNv2aSwizzledTexture(offset,format);
+                std::fprintf(stderr,"D3D RAW TEXTURE DECODE PASS stage=%u physical=%08X format=%08X %ux%u mips=%u hash=%016llX (not sampled)\n",
+                    stage,offset,format,probe.desc.width,probe.desc.height,probe.desc.levels,
+                    static_cast<unsigned long long>(probe.hash));
+            }else{
+                std::fprintf(stderr,"D3D RAW TEXTURE PENDING stage=%u physical=%08X format=%08X\n",stage,offset,format);
+            }
+        }
+        state_=std::move(next);push_constants_=cursor;
     }
     uint32_t Call(std::string_view name,X86Context& cpu,const D3dAbi& abi) {
         std::lock_guard guard(lock_);

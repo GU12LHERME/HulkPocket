@@ -59,6 +59,9 @@ inline bool IsPendingRawConfiguration(uint32_t m){
 struct Nv2aConstantCursor {
     uint32_t reg=0,component=0;
     bool loaded=false,pending_raw_configuration=false;
+    // Offset and format may arrive in separate packets. Retain per-stage
+    // presence independently of their values (physical offset zero is legal).
+    std::array<uint8_t,4> texture_words{};
 };
 // State-only method subset, based on XboxXBERecomp ApplyConstant/SetSimple.
 // Entire batch validated before committing; do not silently drop a method.
@@ -88,6 +91,24 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         }
         if(IsPendingRawConfiguration(m)){
             simple[m>>2]=v;next.pending_raw_configuration=true;continue;
+        }
+        // NV097 texture registers, four units at stride 0x40. Keep
+        // actual words and presence; resource decoding happens in the bridge.
+        // These are state writes, not proof of a translated sampler.
+        if(m>=0x1b00&&m<0x1c00){
+            auto stage=(m-0x1b00)/0x40,off=m&0x3f;
+            if(off==0||off==4){
+                next.texture_words[stage]|=off==0?1u:2u;
+                simple[m>>2]=v;next.pending_raw_configuration=true;continue;
+            }
+            if(off==8||off==0x10||off==0x14||off==0x1c||off==0x20||off==0x24){
+                simple[m>>2]=v;next.pending_raw_configuration=true;continue;
+            }
+            if(off==0xc&&v){
+                if(next.texture_words[stage]!=3)
+                    throw std::logic_error("Enabled raw texture without offset and format");
+                simple[m>>2]=v;next.pending_raw_configuration=true;continue;
+            }
         }
         if(IsDisabledTextureMethod(m)){
             if(v)throw std::logic_error("Enabled raw NV2A texture control/texgen not integrated");

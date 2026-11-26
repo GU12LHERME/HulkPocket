@@ -76,6 +76,25 @@ int main(){
         assert(pushed.simple[0x1bf0>>2]==0x3f800000&&pushed.simple[0x0398>>2]==0x4b7fffff);
         ApplyNv2aState(pushed,cursor,{{0x1ea4,8}});
         assert(cursor.pending_raw_configuration);
+        // Actual RP6 first texture packet, including disabled sampler.
+        ApplyNv2aState(pushed,cursor,{{0x1b00,0x03ae0000},{0x1b04,0x08810629},{0x1b0c,0}});
+        assert(cursor.texture_words[0]==3&&pushed.simple[0x1b00>>2]==0x03ae0000);
+        assert(pushed.simple[0x1b04>>2]==0x08810629&&cursor.pending_raw_configuration);
+        {
+            guest.Commit(0x83ae0000,0x40000);
+            guest.Write32(0x83ae0000,0xff123456);
+            gpu::ScopedGuestMemory scoped(guest);
+            auto p=ProbeNv2aSwizzledTexture(0x03ae0000,0x08810629);
+            assert(p.desc.width==256&&p.desc.height==256&&p.desc.levels==1&&p.row_pitch==1024);
+            guest.Write32(0x83ae0000,0xffabcdef);
+            assert(ProbeNv2aSwizzledTexture(0x03ae0000,0x08810629).hash!=p.hash);
+            bool rejected=false;
+            try{(void)ProbeNv2aSwizzledTexture(0x03ad0000,0x08810629);}
+            catch(const std::out_of_range&){rejected=true;}
+            assert(rejected);
+        }
+        ApplyNv2aState(pushed,cursor,{{0x1b0c,0x40000000}});
+        assert(cursor.pending_raw_configuration&&pushed.simple[0x1b0c>>2]==0x40000000);
         ApplyNv2aState(pushed,cursor,{{0x1710,0},{0x1950,0},{0x195c,0xffffffff},{0x1960,0}});
         assert(pushed.simple[0x195c>>2]==0xffffffff&&cursor.pending_raw_configuration);
         bool invalid_cache=false;
