@@ -8,6 +8,7 @@
 #include "xbe_kernel_virtual_memory.h"
 #include "xbe_kernel_physical_memory.h"
 #include "xbe_kernel_files.h"
+#include "xbe_fault_diagnostic.h"
 #include <map>
 #include <chrono>
 #include <array>
@@ -125,6 +126,9 @@ private:
         w.suspend=ordinal==255 && (Arg(cpu,7)&255u)?1u:0u;
         const auto target=system?system:start;
         w.host=std::thread([this,&w,child,target]() mutable {
+            GuestFaultStack fault_stack_scope;
+            fault_thread=static_cast<sig_atomic_t>(child.thread_handle);
+            fault_ordinal=0;fault_return=0;fault_stack=static_cast<sig_atomic_t>(child.esp);
             active_=this;
             int result=0;
             try {
@@ -477,13 +481,21 @@ public:
     static void Dispatch(X86Context& cpu,uint8_t* base,uint32_t ordinal) {
         if(!active_ || active_->mem_.Base()!=base)
             throw std::runtime_error("Invalid kernel session");
+        fault_thread=static_cast<sig_atomic_t>(cpu.thread_handle);
+        fault_ordinal=static_cast<sig_atomic_t>(ordinal);
+        fault_stack=static_cast<sig_atomic_t>(cpu.esp);
+        fault_return=0;
         std::unique_lock<std::mutex> lock(active_->lock_);
+        if(active_->mem_.IsCommitted(cpu.esp,4)) fault_return=static_cast<sig_atomic_t>(active_->mem_.Read32(cpu.esp));
         active_->Call(cpu,ordinal,lock);
     }
     int Run(Entry entry,X86Context& cpu,uint32_t address) {
         if(!entry || active_ || entry_) throw std::runtime_error("Invalid kernel session");
         struct Reset { XbeKernelSession& s; ~Reset(){s.entry_=nullptr; active_=nullptr;} } reset{*this};
         stopping_=false; worker_failure_=0;
+        GuestFaultStack fault_stack_scope;
+        fault_thread=static_cast<sig_atomic_t>(cpu.thread_handle);
+        fault_ordinal=0;fault_return=0;fault_stack=static_cast<sig_atomic_t>(cpu.esp);
         active_=this; entry_=entry;
         int result=0;
         try { result=entry(&cpu,mem_.Base(),address,Dispatch); }

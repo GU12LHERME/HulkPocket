@@ -7,6 +7,8 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <dlfcn.h>
+#include "xbe_fault_diagnostic.h"
 #endif
 #include "xbe_bootstrap.h"
 #include "xbe_kernel_imports.h"
@@ -159,6 +161,9 @@ int main(int argc,char** argv) {
                 if(pid==0) {
                     alarm(15);
                     try {
+                        Dl_info module_info{};
+                        dladdr(reinterpret_cast<void*>(entry),&module_info);
+                        InstallGuestFaultHandler(guest.Base(),reinterpret_cast<uintptr_t>(module_info.dli_fbase));
                         XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root);
                         int status=session.Run(entry,cpu,loaded.entry);
                         std::cerr << "Guest entry status: " << status << std::endl;
