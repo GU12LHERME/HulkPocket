@@ -37,7 +37,12 @@ int main(int argc,char** argv) {
         hulkpocket::ScopedXbeDispatch scope(dispatcher);
         x86_icall(ctx,mem.Base(),xbe.entry);
     }
-    if(ctx.eax!=12 || ctx.esp!=esp) return 6;
+    if(ctx.eax!=12 || ctx.esp!=esp) {
+        std::fprintf(stderr,
+            "CALL/RET guest state mismatch: eax=%08X expected=0000000C; esp=%08X expected=%08X; stack=%08X\\n",
+            ctx.eax,ctx.esp,esp,mem.Read32(esp));
+        return 6;
+    }
     std::puts("Original x86 caller->callee->return stack semantics recompiled to ARM64: passed");
     return 0;
 }
