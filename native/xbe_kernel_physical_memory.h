@@ -2,12 +2,25 @@
 #include "xbox_guest_address_space.h"
 #include <map>
 #include <algorithm>
+#include <stdexcept>
 namespace hulkpocket {
+// XboxXBERecomp memory.h reserves the first physical MiB for kernel data.
+inline constexpr uint32_t kXboxPhysicalBase=0x80000000u;
+inline constexpr uint32_t kXboxKernelReservedBytes=0x00100000u;
+inline void InitializeXboxKernelPhysicalRegion(XboxGuestAddressSpace& mem) {
+    const auto page=mem.PageSize();
+    for(uint64_t offset=0;offset<kXboxKernelReservedBytes;offset+=page)
+        if(mem.IsCommitted(kXboxPhysicalBase+static_cast<uint32_t>(offset),1))
+            throw std::runtime_error("Xbox kernel physical region overlaps guest mapping");
+    // Anonymous zeroed RAM, like the upstream runtime before kernel data is initialized.
+    // This is deliberately NOT a fabricated xboxkrnl PE image or executable firmware.
+    mem.Commit(kXboxPhysicalBase,kXboxKernelReservedBytes);
+}
 // Original Xbox physical-address convention; no GPU/MMIO or write-combine alias.
 class XbePhysicalMemory {
     XboxGuestAddressSpace& mem_;
     std::map<uint32_t,uint32_t> live_;
-    static constexpr uint32_t base=0x80000000, first=0x00100000, limit=0x04000000;
+    static constexpr uint32_t base=kXboxPhysicalBase, first=kXboxKernelReservedBytes, limit=0x04000000;
 public:
     explicit XbePhysicalMemory(XboxGuestAddressSpace& mem):mem_(mem) {}
     uint32_t Allocate(uint32_t bytes,uint32_t lowest,uint32_t highest,uint32_t alignment) {

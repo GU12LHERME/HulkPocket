@@ -123,6 +123,8 @@ int main(int argc,char** argv) {
 #ifdef HULK_ENABLE_ENTRY_DIAGNOSTIC
             if(execute_requested) {
                 using namespace hulkpocket;
+                InitializeXboxKernelPhysicalRegion(guest);
+                std::cout << "Xbox kernel physical RAM: 0x80000000-0x800FFFFF (zero-initialized, no firmware image)" << '\n';
                 HulkKernelDataRegistry registry;
                 auto imports=ScanXbeKernelImports(loaded,guest);
                 if(!imports.complete) throw std::runtime_error(imports.error);

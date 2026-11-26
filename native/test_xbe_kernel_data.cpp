@@ -1,6 +1,7 @@
 #include "hulk_kernel_clock.h"
 #include "hulk_kernel_profile.h"
 #include "hulk_kernel_objects.h"
+#include "xbe_kernel_physical_memory.h"
 #include "hulk_kernel_launch_data.h"
 #include <cassert>
 #include <cstring>
@@ -8,6 +9,15 @@ using namespace hulkpocket;
 int main() {
     XboxGuestAddressSpace m;
     m.Commit(0x10000,0x10000);
+    InitializeXboxKernelPhysicalRegion(m);
+    assert(m.IsCommitted(0x8001003c,4) && m.Read32(0x8001003c)==0);
+    assert(m.IsCommitted(0x800ffffc,4) && !m.IsCommitted(0x80100000,1));
+    XbePhysicalMemory physical(m);
+    assert(physical.Allocate(4096,0,0xfffff,4096)==0);
+    assert(!physical.Free(0x80010000));
+    bool duplicate=false;
+    try { InitializeXboxKernelPhysicalRegion(m); } catch(const std::runtime_error&) { duplicate=true; }
+    assert(duplicate);
     HulkKernelDataRegistry r;
     HulkKernelClock clock(m,r,0x10000,10000);
     assert(m.Read32(0x10004)==10000);
