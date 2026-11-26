@@ -14,6 +14,7 @@
 #include "xbe_kernel_calendar.h"
 #include <map>
 #include <deque>
+#include <cstring>
 #include <chrono>
 #include <array>
 #include <condition_variable>
