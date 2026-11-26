@@ -453,13 +453,6 @@ public:
         // This does not translate hardware clip, multisample or raster hints.
         replay.rs.fill(0);replay.tss={};replay.simple.fill(0);
         replay.rs[gpu::kRsZEnable]=state_.rs[gpu::kRsZEnable];
-        if(packed){
-            for(auto i:{gpu::kRsLighting,gpu::kRsSpecularEnable,gpu::kRsLocalViewer,gpu::kRsColorVertex,
-                        gpu::kRsNormalizeNormals,gpu::kRsDiffuseMaterialSource,gpu::kRsSpecularMaterialSource,
-                        gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient,
-                        gpu::kRsFrontFace,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode})
-                replay.rs[i]=state_.rs[i];
-        }
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,
                     gpu::kMBlendEnable,gpu::kMSrcBlend,gpu::kMDestBlend,gpu::kMBlendOp,
                     gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
@@ -557,6 +550,13 @@ public:
         auto replay=state_;
         replay.rs.fill(0);replay.tss={};replay.simple.fill(0);
         replay.rs[gpu::kRsZEnable]=state_.rs[gpu::kRsZEnable];
+        if(packed){
+            for(auto i:{gpu::kRsLighting,gpu::kRsSpecularEnable,gpu::kRsLocalViewer,gpu::kRsColorVertex,
+                        gpu::kRsNormalizeNormals,gpu::kRsDiffuseMaterialSource,gpu::kRsSpecularMaterialSource,
+                        gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient,
+                        gpu::kRsFrontFace,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode})
+                replay.rs[i]=state_.rs[i];
+        }
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,
                     gpu::kMBlendEnable,gpu::kMSrcBlend,gpu::kMDestBlend,gpu::kMBlendOp,
                     gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
