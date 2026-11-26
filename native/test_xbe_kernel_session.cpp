@@ -255,6 +255,26 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,0,0x40});
     assert(c->eax==0);
     auto file=memory->Read32(0x10960);
+    // Real completion FIFO and actual disc read through class 30.
+    call(*c,base,cb,191,{0x12e00,0,0,0});assert(c->eax==0);
+    auto port=memory->Read32(0x12e00);
+    const uint64_t poll=0;memory->Write(0x12e20,&poll,8);
+    call(*c,base,cb,223,{port,0x12e04,0x12e08,0x12e10,0x12e20});assert(c->eax==0x102);
+    call(*c,base,cb,227,{port,0x111,0x222,0xc0000011u,7});assert(c->eax==0);
+    call(*c,base,cb,227,{port,0x333,0x444,0,9});assert(c->eax==0);
+    call(*c,base,cb,223,{port,0x12e04,0x12e08,0x12e10,0x12e20});
+    assert(c->eax==0&&memory->Read32(0x12e04)==0x111&&memory->Read32(0x12e08)==0x222&&memory->Read32(0x12e10)==0xc0000011u&&memory->Read32(0x12e14)==7);
+    call(*c,base,cb,223,{port,0x12e04,0x12e08,0x12e10,0x12e20});
+    assert(c->eax==0&&memory->Read32(0x12e04)==0x333&&memory->Read32(0x12e14)==9);
+    memory->Write32(0x12e30,port);memory->Write32(0x12e34,0x9876);
+    call(*c,base,cb,226,{file,0x10968,0x12e30,8,30});assert(c->eax==0);
+    call(*c,base,cb,219,{file,0,0,0x1234,0x10968,0x10980,4,0x12e20});
+    assert(c->eax==0&&memory->Read32(0x10980)==0x6b6c7548);
+    call(*c,base,cb,223,{port,0x12e04,0x12e08,0x12e10,0x12e20});
+    assert(c->eax==0&&memory->Read32(0x12e04)==0x9876&&memory->Read32(0x12e08)==0x1234&&memory->Read32(0x12e10)==0&&memory->Read32(0x12e14)==4);
+    call(*c,base,cb,226,{file,0x10968,0x12e20,8,14});assert(c->eax==0);
+    call(*c,base,cb,187,{port});assert(c->eax==0);
+    call(*c,base,cb,227,{port,0,0,0,0});assert(c->eax==0xc0000008u);
     call(*c,base,cb,210,{0x10950,0x12c00});assert(c->eax==0);
     assert(memory->Read32(0x12c28)==4&&memory->Read32(0x12c30)==1);
     call(*c,base,cb,198,{file,0x10968});assert(c->eax==0&&memory->Read32(0x10968)==0);

@@ -1,7 +1,7 @@
 name: XBE GLES renderer smoke
 on:
   push:
-    branches: [experiment-xbe-recomp-android]
+    branches: [experiment-xbe-recomp-android, experiment-runtime-integration]
     paths:
       - 'native/*xbe_gles_backend*'
       - 'native/xbe_bc_decode.h'

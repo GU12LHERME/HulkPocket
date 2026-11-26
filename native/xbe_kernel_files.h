@@ -1,4 +1,5 @@
 #pragma once
+#include "xbe_kernel_io_completion.h"
 #include "xbox_guest_address_space.h"
 #include <algorithm>
 #include <array>
@@ -29,6 +30,8 @@ class XbeDiscFiles {
     struct File {
         int fd; bool directory,partition1; uint64_t pos=0;
         bool metadata_write=false;
+        std::shared_ptr<XbeIoCompletion> completion;
+        uint32_t completion_key=0;
         bool listed=false;
         size_t next_entry=0;
         std::vector<DirEntry> entries;
@@ -336,6 +339,20 @@ public:
         if(!p||!mem_.IsCommitted(p,n))return invalid;
         mem_.Write(p,it->second.data(),n);mem_.Write32(desc,(max<<16)|n);
         return 0;
+    }
+    // Only regular read handles are supported here; duplicate handles
+    // share the File object and therefore its completion association.
+    uint32_t AssociateCompletion(uint32_t h,uint32_t iosb,std::shared_ptr<XbeIoCompletion> port,uint32_t key){
+        if(!mem_.IsCommitted(iosb,8))return invalid;
+        auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
+        if(it->second->directory||it->second->metadata_write||!port)return Finish(iosb,invalid);
+        if(it->second->completion)return Finish(iosb,invalid);
+        it->second->completion=std::move(port);it->second->completion_key=key;
+        return Finish(iosb,0);
+    }
+    std::shared_ptr<XbeIoCompletion> Completion(uint32_t h,uint32_t& key)const{
+        auto it=files_.find(h);if(it==files_.end())return {};
+        key=it->second->completion_key;return it->second->completion;
     }
     bool Close(uint32_t h) {
         if(link_handles_.erase(h))return true;

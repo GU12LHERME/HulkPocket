@@ -1,0 +1,10 @@
+# Runtime integration experiment
+
+Base: 859f55f. No changes to the original experiment branch or generated-code cache.
+Reference: [Hulk Windows kernel patch](https://github.com/lookingcoding/hulk-ultimate-destruction-recomp-xbox-ver-/blob/6603e8a4021a06331f63310ce47b42315d9dbfc6/patches/z-kernel-io.patch) (MIT; license in third_party/hulk-windows-reference/LICENSE).
+Adapted ABI and FIFO behavior to the existing checked guest memory and cooperative scheduler.
+Implemented 191, 223, 227 and file class 30 association for read-only regular files. Completion packets reflect real synchronous read results. No APC, named ports, generic dispatcher waits, access-mask enforcement, or asynchronous disk thread yet. Queue bounded to 256 packets; no invented I/O. Synthetic tests cover FIFO, poll, actual bytes, association and invalid closed handle; device validation pending.
+
+Android reference: SCDA-XBERecomp-android a81808004c397cbee282031933cdda2972ffad4e (MIT), src/android/audio.cpp and ANDROID_PORT_NOTES.md. Its SDL audio callback expects a different mixer interface; bridge a bounded stereo queue, then migrate stream packet/callback lifecycle and 3D mixing. Do not directly call guest memory from SDL audio callback. Its Vulkan backend is a candidate for a separate measured comparison, not a replacement for the working GLES path yet.
+
+Remaining same-title Windows kernel group: ObOpenObjectByName, NtUserIoApcDispatcher, IoQueryVolumeInformation; validate object identity and guest callback ABI before adapting. Do not copy Windows host dependencies or bypass missing services.

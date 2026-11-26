@@ -1,7 +1,7 @@
 name: XBE startup layout
 on:
   push:
-    branches: [experiment-xbe-recomp-android]
+    branches: [experiment-xbe-recomp-android, experiment-runtime-integration]
     paths:
       - 'native/hulk_xbe_local_diagnostic.cpp'
       - 'tools/run_hulk_diagnostic.sh'

@@ -70,6 +70,8 @@ private:
     std::map<uint32_t,uint32_t> semaphore_limits_;
     std::map<uint32_t,Event> events_;
     uint32_t next_event_=0x2000;
+    uint32_t next_completion_=0x60000000;
+    std::map<uint32_t,std::shared_ptr<XbeIoCompletion>> completions_;
     std::map<uint32_t,uint32_t> critical_;
     std::map<uint32_t,uint32_t> shutdown_notifications_;
     struct Timer {std::chrono::steady_clock::time_point due;uint32_t dpc;uint32_t period;};
@@ -1319,12 +1321,71 @@ private:
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,3),Arg(cpu,4),status);
                 Ret(cpu,5,status);return;
             }
+            // Same-title Windows runtime identifies these ordinals.
+            // Use the existing cooperative lock/deadline scheduler, not
+            // its Windows object table. No fabricated I/O or APC delivery.
+            case 191: {
+                Check(cpu,4);auto out=Arg(cpu,0);
+                if(!out||!mem_.IsCommitted(out,4)||Arg(cpu,2)){
+                    Ret(cpu,4,0xc000000du);return;
+                }
+                if(completions_.size()>=256||next_completion_>=0x60010000){
+                    Ret(cpu,4,0xc000011fu);return;
+                }
+                auto h=next_completion_++;completions_.emplace(h,std::make_shared<XbeIoCompletion>());
+                Output(out,h);Ret(cpu,4,0);return;
+            }
+            case 227: {
+                Check(cpu,5);auto it=completions_.find(Arg(cpu,0));
+                if(it==completions_.end()){Ret(cpu,5,0xc0000008u);return;}
+                if(it->second->Full()){Ret(cpu,5,0xc000009au);return;}
+                it->second->packets.push_back({Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)});
+                cv_.notify_all();Ret(cpu,5,0);return;
+            }
+            case 223: {
+                Check(cpu,5);auto it=completions_.find(Arg(cpu,0));
+                if(it==completions_.end()){Ret(cpu,5,0xc0000008u);return;}
+                auto port=it->second;
+                auto key=Arg(cpu,1),context=Arg(cpu,2),iosb=Arg(cpu,3),timeout=Arg(cpu,4);
+                if(!key||!context||!iosb||!mem_.IsCommitted(key,4)||!mem_.IsCommitted(context,4)||
+                   !mem_.IsCommitted(iosb,8)||(timeout&&!mem_.IsCommitted(timeout,8))){
+                    Ret(cpu,5,0xc000000du);return;
+                }
+                auto deadline=Deadline(timeout);
+                while(port->packets.empty()){
+                    Pause(cpu,lock);ServiceDpc(cpu,lock);
+                    if(!port->packets.empty())break;
+                    if(Steady::now()>=deadline){Ret(cpu,5,0x102);return;}
+                    if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
+                    cv_.wait_until(lock,NextTimer(deadline));
+                }
+                // Guest memory could change while waiting.
+                if(!mem_.IsCommitted(key,4)||!mem_.IsCommitted(context,4)||!mem_.IsCommitted(iosb,8)){
+                    Ret(cpu,5,0xc000000du);return;
+                }
+                auto packet=port->packets.front();port->packets.pop_front();
+                Output(key,packet.key);Output(context,packet.context);
+                Output(iosb,packet.status);Output(iosb+4,packet.information);
+                Ret(cpu,5,0);return;
+            }
             case 219: {
                 Check(cpu,8);
                 if(Arg(cpu,2)) throw std::runtime_error("File APC not implemented");
                 auto event=Arg(cpu,1);
                 if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
-                auto status=files_.Read(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
+                uint32_t completion_key=0;
+                auto port=files_.Completion(Arg(cpu,0),completion_key);
+                auto context=Arg(cpu,3),iosb=Arg(cpu,4);
+                if(port&&context){
+                    if(port->Full()){Ret(cpu,8,0xc000009au);return;}
+                    if(!mem_.IsCommitted(iosb,8)||!mem_.IsCommitted(Arg(cpu,5),Arg(cpu,6))||
+                        Arg(cpu,6)>64u*1024*1024){Ret(cpu,8,0xc000000du);return;}
+                }
+                auto status=files_.Read(Arg(cpu,0),iosb,Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
+                if(port&&context){
+                    port->packets.push_back({completion_key,context,status,mem_.Read32(iosb+4)});
+                    cv_.notify_all();
+                }
                 if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
                 std::fprintf(stderr,"DISC READ caller=%08X handle=%08X requested=%u status=%08X\n",
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,6),status);
@@ -1346,7 +1407,19 @@ private:
             case 198: Check(cpu,2);Ret(cpu,2,files_.Flush(Arg(cpu,0),Arg(cpu,1)));return;
             case 210: Check(cpu,2);Ret(cpu,2,files_.FullAttributes(Arg(cpu,0),Arg(cpu,1)));return;
             case 211: Check(cpu,5);Ret(cpu,5,files_.Query(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
-            case 226: Check(cpu,5);Ret(cpu,5,files_.Set(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
+            case 226: {
+                Check(cpu,5);
+                if(Arg(cpu,4)==30){
+                    auto in=Arg(cpu,2);
+                    if(Arg(cpu,3)<8||!mem_.IsCommitted(in,8)||!mem_.IsCommitted(Arg(cpu,1),8)){
+                        Ret(cpu,5,0xc000000du);return;
+                    }
+                    auto port=completions_.find(mem_.Read32(in));
+                    if(port==completions_.end()){Ret(cpu,5,0xc0000008u);return;}
+                    Ret(cpu,5,files_.AssociateCompletion(Arg(cpu,0),Arg(cpu,1),port->second,mem_.Read32(in+4)));return;
+                }
+                Ret(cpu,5,files_.Set(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
+            }
             case 184: case 199: {
                 unsigned n=ordinal==184?5:3;Check(cpu,n);
                 auto bp=Arg(cpu,0), sp=Arg(cpu,ordinal==184?2:1);
@@ -1692,6 +1765,7 @@ private:
             }
             case 187: {
                 Check(cpu,1);auto h=Arg(cpu,0);
+                if(completions_.erase(h)){Ret(cpu,1,0);return;}
                 if(files_.Close(h)){Ret(cpu,1,0);return;}
                 auto it=events_.find(h);
                 // Keep event body alive until session end (in-flight waits may refer to it).
