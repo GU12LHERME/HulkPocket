@@ -4,6 +4,8 @@ on:
     branches: [experiment-xbe-recomp-android]
     paths:
       - 'native/xbe_startup_layout.h'
+      - 'native/xbe_tls.h'
+      - 'native/test_xbe_tls.cpp'
       - 'native/xbe_startup_memory.h'
       - 'native/test_xbe_startup_memory.cpp'
       - 'native/xbox_guest_address_space.*'
@@ -22,6 +24,8 @@ jobs:
           /tmp/layout
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_memory.cpp native/xbox_guest_address_space.cpp -o /tmp/startup-memory
           /tmp/startup-memory
+          g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_tls.cpp native/xbox_guest_address_space.cpp -o /tmp/tls
+          /tmp/tls
       - name: Install ARM64 tools
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu qemu-user
       - name: ARM64 tests
@@ -30,3 +34,5 @@ jobs:
           qemu-aarch64 /tmp/layout-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_memory.cpp native/xbox_guest_address_space.cpp -o /tmp/startup-memory-arm64
           qemu-aarch64 /tmp/startup-memory-arm64
+          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_tls.cpp native/xbox_guest_address_space.cpp -o /tmp/tls-arm64
+          qemu-aarch64 /tmp/tls-arm64
