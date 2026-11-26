@@ -191,6 +191,9 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
             case gpu::kMBlendEnable:case gpu::kMSrcBlend:case gpu::kMDestBlend:case gpu::kMBlendOp:
             case gpu::kMZFunc:case gpu::kMZWriteEnable:case gpu::kMColorWriteEnable:
             case gpu::kMAlphaTestEnable:case gpu::kMAlphaFunc:case gpu::kMAlphaRef:break;
+            case gpu::kMDitherEnable:
+                if(s.simple[i]>1)Unsupported("Invalid dither enable");
+                break;
             case gpu::kMStencilWriteMask:case gpu::kMStencilFunc:case gpu::kMStencilRef:
             case gpu::kMStencilMask:case gpu::kMStencilZFail:case gpu::kMStencilPass:break;
             case gpu::kMShadeMode:
@@ -202,6 +205,7 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
             }
         }
     }
+    if(simple(gpu::kMDitherEnable))glEnable(GL_DITHER);else glDisable(GL_DITHER);
     if(s.rs[gpu::kRsZEnable]>1)Unsupported("W-buffer not implemented");
     if(s.rs[gpu::kRsZEnable]){
         DepthTarget(s.zs);

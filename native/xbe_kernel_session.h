@@ -807,15 +807,67 @@ private:
                 std::fprintf(stderr,"D3D LIVE CLEAR caller=%08X rects=%u flags=%08X color=%08X z=%08X stencil=%08X\n",
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5));
                 live.bridge.Call("D3DDevice_Clear",cpu,D3dAbi::Stdcall(6));
+                {
+                    gpu::ScopedGuestMemory scope(mem_);
+                    auto state=live.bridge.Snapshot();
+                    live.backend.ReadbackColor(state.rt);
+                    auto pixel=live.backend.ReadPixel(0,0);
+                    std::fprintf(stderr,"D3D LIVE CLEAR READBACK RGBA=%02X%02X%02X%02X\n",pixel[0],pixel[1],pixel[2],pixel[3]);
+                }
                 std::fprintf(stderr,"D3D LIVE CLEAR PASS (offscreen)\n");return;
 #else
                 throw std::runtime_error("D3D clear requires GLES backend");
 #endif
             }
+            case kGraphicsDraw|0x1000u: case kGraphicsDrawIndexed|0x1000u: {
+                Check(cpu,3);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D draw without owned live device");
+                auto& live=*live_d3d_;
+                live.buffers.VerifyInitialTargets();
+                auto dev=live.buffers.DeviceAddress();
+                std::fprintf(stderr,"D3D FIRST DRAW caller=%08X prim=%u arg1=%08X arg2=%08X streams=%08X rs=%08X tss=%08X\n",
+                    mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),cpu.eax,cpu.ecx,cpu.edx);
+                // Capture actual shader object, viewport, texture bindings and
+                // streams before draining the scratch buffer; a pending packet
+                // must not hide the rest of this first-draw evidence.
+                for(auto off:{0x8u,0x1cu,0x784u,0x794u,0x7a0u,0x948u,0x95cu,0x960u,0xee0u,0xee4u,0xee8u,0xeecu,0xef0u,0xef4u,0xef8u,0xefcu})
+                    std::fprintf(stderr,"D3D DEVICE +%04X=%08X\n",off,mem_.Read32(dev+off));
+                for(auto off:{0x784u,0x794u}){
+                    auto p=mem_.Read32(dev+off);
+                    if(p&&mem_.IsCommitted(p,64))
+                        for(unsigned i=0;i<16;++i)std::fprintf(stderr,"D3D SHADER %04X +%02X=%08X\n",off,4*i,mem_.Read32(p+4*i));
+                }
+                for(unsigned st=0;st<4;++st){
+                    auto p=mem_.Read32(dev+0xf88+4*st);
+                    std::fprintf(stderr,"D3D TEXTURE %u=%08X palette=%08X\n",st,p,mem_.Read32(dev+0xf98+4*st));
+                    if(p&&mem_.IsCommitted(p,20))
+                        for(unsigned i=0;i<5;++i)std::fprintf(stderr,"D3D TEXTURE %u +%02X=%08X\n",st,4*i,mem_.Read32(p+4*i));
+                }
+                live.bridge.SyncGuestDrawTables(cpu.eax,cpu.ecx,cpu.edx);
+                auto state=live.bridge.Snapshot();
+                for(unsigned i=0;i<16;++i){
+                    auto st=state.streams[i];
+                    std::fprintf(stderr,"D3D STREAM %u vb=%08X stride=%u\n",i,st.vb,st.stride);
+                    if(st.vb)for(unsigned j=0;j<3;++j)std::fprintf(stderr,"D3D VB %u +%02X=%08X\n",i,j*4,mem_.Read32(st.vb+j*4));
+                }
+                for(unsigned i=gpu::kRsDeferredFirst;i<gpu::kRsMax;++i)
+                    std::fprintf(stderr,"D3D DRAW RS %u=%08X\n",i,state.rs[i]);
+                for(unsigned st=0;st<4;++st)for(unsigned i=0;i<gpu::kTssCount;++i)
+                    std::fprintf(stderr,"D3D DRAW TSS %u %u=%08X\n",st,i,state.tss[st][i]);
+                DrainLivePush(live);
+                // Do not execute with an invented FVF or shader. Device
+                // texture/viewport/shader semantics still need translation.
+                throw std::runtime_error("D3D first draw tables synchronized; shader and raw configuration translation pending");
+#else
+                throw std::runtime_error("D3D draw requires GLES backend");
+#endif
+            }
             case kGraphicsDraw: case kGraphicsDrawIndexed: case kGraphicsSwap: {
                 Check(cpu,ordinal==kGraphicsSwap?1:3);
-                std::fprintf(stderr,"D3D8 draw/swap boundary id=%X first=%08X\n",ordinal,Arg(cpu,0));
-                throw std::runtime_error("D3D8 draw/swap guest integration pending");
+                std::fprintf(stderr,"D3D8 draw/swap boundary id=%X caller=%08X first=%08X\n",ordinal,mem_.Read32(cpu.esp),Arg(cpu,0));
+                throw std::runtime_error("D3D8 draw/swap guest integration pending (generated tables unavailable or swap)");
             }
             case 103: case 129: case 130: case 160: case 161: {
                 Check(cpu,0);

@@ -95,6 +95,7 @@ public:
         Set(0x794,shader);
     }
     uint32_t Depth()const{return resources_[3].header;}
+    uint32_t DeviceAddress()const{return device_;}
     void VerifyInitialTargets()const{
         if(!device_||mem_.Read32(device_+0x1a04)!=BackBuffer(0)||
             mem_.Read32(device_+0x1a08)!=Depth())

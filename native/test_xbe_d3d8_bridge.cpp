@@ -134,6 +134,24 @@ int main(){
     };
     mem.Write32(0x10100,0x50000);mem.Write32(0x10104,0x100000);mem.Write32(0x1010c,0x00011221);
     call("D3DDevice_SetRenderTarget",{0x10100,0});
+    // Inline guest stores, not intercepted API setters, are the source of
+    // deferred states and stream bindings at the first draw.
+    mem.Write32(0x12000+4*gpu::kRsFogEnable,1);
+    mem.Write32(0x13000+4*(2*gpu::kTssCount+gpu::kTssColorOp),4);
+    mem.Write32(0x14000+12*3,20);mem.Write32(0x14000+12*3+8,0x15000);
+    bridge.SyncGuestDrawTables(0x14000,0x12000,0x13000);
+    auto synced=bridge.Snapshot();
+    assert(synced.rs[gpu::kRsFogEnable]==1&&synced.tss[2][gpu::kTssColorOp]==4);
+    assert(synced.streams[3].vb==0x15000&&synced.streams[3].stride==20);
+    mem.Write32(0x14000+12*3,0);
+    bool invalid_stream=false;
+    try{bridge.SyncGuestDrawTables(0x14000,0x12000,0x13000);}
+    catch(const std::invalid_argument&){invalid_stream=true;}
+    assert(invalid_stream&&bridge.Snapshot().streams[3].stride==20);
+    mem.Write32(0x14000+12*3+8,0);
+    mem.Write32(0x12000+4*gpu::kRsFogEnable,0);
+    mem.Write32(0x13000+4*(2*gpu::kTssCount+gpu::kTssColorOp),0);
+    bridge.SyncGuestDrawTables(0x14000,0x12000,0x13000);
     // Verify default-state handoff preserves target/viewport and raw NV2A
     // values, and rejects an unknown packet without partial mutation.
     gpu::State captured{};

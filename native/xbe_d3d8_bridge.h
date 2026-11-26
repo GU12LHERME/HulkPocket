@@ -230,6 +230,33 @@ public:
         if(!initialized_||!state_.rt.header)throw std::logic_error("D3D targets not initialized");
         state_.simple=captured.simple;state_.rs=captured.rs;state_.tss=captured.tss;
     }
+    // XDK 5849 SyncDeferred plus the verified 12-byte stream table.
+    // Read all ranges before committing. Do not infer a shader handle
+    // from the CDevice shader object address.
+    void SyncGuestDrawTables(uint32_t streams,uint32_t render,uint32_t texture){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!initialized_||!streams||!render||!texture)
+            throw std::invalid_argument("Missing generated draw tables");
+        gpu::CheckedGuestRange(streams,16*12);
+        gpu::CheckedGuestRange(render,gpu::kRsComplexFirst*4);
+        gpu::CheckedGuestRange(texture,4*gpu::kTssCount*4);
+        auto next=state_;
+        for(uint32_t i=gpu::kRsDeferredFirst;i<gpu::kRsComplexFirst;++i)
+            next.rs[i]=Read(uint64_t(render)+i*4);
+        for(unsigned st=0;st<4;++st)
+            for(unsigned i=0;i<gpu::kTssBumpEnvMat00;++i)
+                next.tss[st][i]=Read(uint64_t(texture)+(st*gpu::kTssCount+i)*4);
+        for(unsigned i=0;i<16;++i){
+            auto base=uint64_t(streams)+12*i;
+            next.streams[i]={Read(base+8),Read(base)};
+            if(next.streams[i].vb){
+                gpu::CheckedGuestRange(next.streams[i].vb,12);
+                if(!next.streams[i].stride||next.streams[i].stride>65536)
+                    throw std::invalid_argument("Invalid guest stream stride");
+            }
+        }
+        state_=std::move(next);
+    }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");

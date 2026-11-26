@@ -49,6 +49,17 @@ int main(){
     call("D3DDevice_DrawIndexedVertices",{5,3,0x10300});
     assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{255,0,0,255}));
     assert((backend.ReadPixel(1,1)==std::array<uint8_t,4>{0,0,255,255}));
+    // First real Hulk draw requests primitive 2 (line list).
+    // Verify actual GLES line coverage, allowing the rasterization edge rule.
+    const V line[]={{8,32,.5,1,0xffffff00},{56,32,.5,1,0xffffff00}};
+    mem.Write(0x80105000,line,sizeof(line));
+    call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+    call("D3DDevice_DrawVertices",{2,0,2});
+    bool line_pixel=false;
+    for(unsigned y=30;y<=33;++y)
+        if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,255,0,255})line_pixel=true;
+    assert(line_pixel);
+    assert((backend.ReadPixel(32,20)==std::array<uint8_t,4>{0,0,0,255}));
     // Quad conversion and native strips exercise the Xbox primitive assembler.
     const V quad[]={{8,8,.5,1,0xff00ff00},{56,8,.5,1,0xff00ff00},
                     {56,56,.5,1,0xff00ff00},{8,56,.5,1,0xff00ff00}};

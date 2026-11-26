@@ -66,11 +66,28 @@ void GUEST(Direct3D_CreateDevice)(X86Context& ctx,uint8_t* base){
 #if HAS_D3DDevice_Clear
 HOOK(D3DDevice_Clear,hulkpocket::kGraphicsClear)
 #endif
+// Supply verified generated data symbols, not guessed USA addresses.
+// The guest draw ABI remains three stack arguments.
+#define DRAW_HOOK(name,id) extern "C" __attribute__((visibility("default"))) \
+void GUEST(name)(X86Context& ctx,uint8_t* base){ \
+    std::fprintf(stderr,"D3D DRAW ORIGINAL REGISTERS EAX=%08X ECX=%08X EDX=%08X\n",ctx.eax,ctx.ecx,ctx.edx); \
+    ctx.eax=GUEST_VA(SYM_D3D_Streams);ctx.ecx=GUEST_VA(SYM_D3D_RenderState); \
+    ctx.edx=GUEST_VA(SYM_D3D_DeferredTextureState); \
+    Boundary(ctx,base,id,#name,Stdcall(#name)); \
+}
 #if HAS_D3DDevice_DrawVertices
+#if HAS_D3D_Streams && HAS_D3D_RenderState && HAS_D3D_DeferredTextureState
+DRAW_HOOK(D3DDevice_DrawVertices,hulkpocket::kGraphicsDraw|0x1000u)
+#else
 HOOK(D3DDevice_DrawVertices,hulkpocket::kGraphicsDraw)
 #endif
+#endif
 #if HAS_D3DDevice_DrawIndexedVertices
+#if HAS_D3D_Streams && HAS_D3D_RenderState && HAS_D3D_DeferredTextureState
+DRAW_HOOK(D3DDevice_DrawIndexedVertices,hulkpocket::kGraphicsDrawIndexed|0x1000u)
+#else
 HOOK(D3DDevice_DrawIndexedVertices,hulkpocket::kGraphicsDrawIndexed)
+#endif
 #endif
 #if HAS_D3DDevice_Swap
 HOOK(D3DDevice_Swap,hulkpocket::kGraphicsSwap)
