@@ -115,7 +115,7 @@ private:
         uint64_t last_frame_hash=0;
         unsigned identical_frames=0;
         const unsigned diagnostic_draw_limit=DiagnosticBudget("HULK_DRAW_LIMIT",kDiagnosticDrawsPerFrame,512);
-        const unsigned frame_limit=DiagnosticBudget("HULK_FRAME_LIMIT",kDiagnosticFrameLimit,1800);
+        const unsigned frame_limit=DiagnosticFrameLimit();
         const bool detailed_draws=std::getenv("HULK_FULL_DRAW_CAPTURE")&&
             std::strcmp(std::getenv("HULK_FULL_DRAW_CAPTURE"),"1")==0;
         uint32_t last_capture_format=0xffffffffu,last_capture_primitive=0xffffffffu;

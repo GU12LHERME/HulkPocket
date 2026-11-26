@@ -31,7 +31,7 @@ constexpr bool Stdcall(std::string_view name){
     if((id==hulkpocket::kGraphicsCreate||id==hulkpocket::kGraphicsClear)&&
         uint64_t(original_esp)+28==ctx.esp&&ctx.eax==0)return;
     if(id==hulkpocket::kGraphicsSwap&&uint64_t(original_esp)+8==ctx.esp&&
-        ctx.eax>0&&ctx.eax<hulkpocket::kDiagnosticFrameLimit)return;
+        ctx.eax>0&&ctx.eax<hulkpocket::DiagnosticFrameLimit())return;
     if(id==hulkpocket::kGraphicsVBlank&&uint64_t(original_esp)+4==ctx.esp&&ctx.eax==0)return;
     if(id==hulkpocket::kGraphicsBlockOnTime&&
         uint64_t(original_esp)+12==ctx.esp&&ctx.eax==0)return;

@@ -89,6 +89,10 @@ inline unsigned DiagnosticBudget(const char* name,unsigned fallback,unsigned max
     }
     return n?n:fallback;
 }
+// The guest override and host session must agree on the same frame ceiling.
+inline unsigned DiagnosticFrameLimit(){
+    return DiagnosticBudget("HULK_FRAME_LIMIT",kDiagnosticFrameLimit,1800);
+}
 using GraphicsCallback=void(*)(X86Context&,uint8_t*,uint32_t);
 inline thread_local GraphicsCallback graphics_callback=nullptr;
 class ScopedGraphicsCallback {

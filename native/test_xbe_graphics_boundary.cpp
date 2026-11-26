@@ -9,10 +9,14 @@ extern "C" void __imp__sub_003EAC33(X86Context&,uint8_t*){assert(false&&"origina
 extern "C" void sub_003EAC33(X86Context&,uint8_t*) __attribute__((weak,alias("__imp__sub_003EAC33")));
 extern "C" void __imp__sub_003EB6E5(X86Context&,uint8_t*){assert(false&&"original XInputOpen executed");}
 extern "C" void sub_003EB6E5(X86Context&,uint8_t*) __attribute__((weak,alias("__imp__sub_003EB6E5")));
+extern "C" void sub_00381DF0(X86Context&,uint8_t*);
 using namespace hulkpocket;
+static uint32_t swap_count=0;
+static bool complete_swap=true;
 static bool entered=false,complete_create=false;
 static void callback(X86Context& c,uint8_t*,uint32_t id){
     assert(c.esp==0x1000);
+    if(id==kGraphicsSwap){c.eax=swap_count;if(complete_swap)c.esp+=8;return;}
     if(id==kXapiLaunchImage){c.eax=2;c.esp+=12;return;}
     if(id==kXapiInitDevices){assert(c.ecx==0x3ea774&&c.edx==0x3ea820);c.eax=0;c.esp+=12;return;}
     if(id==kXapiInputOpen){c.eax=0;c.esp+=20;return;}
@@ -30,4 +34,22 @@ int main(){
     sub_00209C04(c,nullptr);assert(c.eax==2&&c.esp==0x100c);
     c.esp=0x1000;sub_003EAC33(c,nullptr);assert(c.eax==0&&c.esp==0x100c);
     c.esp=0x1000;sub_003EB6E5(c,nullptr);assert(c.eax==0&&c.esp==0x1014);
+    auto swap=[&](uint32_t n,bool accept){
+        c.esp=0x1000;swap_count=n;bool rejected=false;
+        try{sub_00381DF0(c,nullptr);}catch(const std::runtime_error&){rejected=true;}
+        assert(rejected!=accept);
+        if(accept)assert(c.eax==n&&c.esp==0x1008);
+    };
+    unsetenv("HULK_FRAME_LIMIT");
+    assert(DiagnosticFrameLimit()==60);
+    swap(59,true);swap(60,false);swap(0,false);
+    assert(setenv("HULK_FRAME_LIMIT","600",1)==0);
+    assert(DiagnosticFrameLimit()==600);
+    swap(60,true);swap(599,true);swap(600,false);
+    complete_swap=false;swap(60,false);complete_swap=true;
+    assert(setenv("HULK_FRAME_LIMIT","1801",1)==0);
+    assert(DiagnosticFrameLimit()==60);swap(60,false);
+    assert(setenv("HULK_FRAME_LIMIT","60oops",1)==0);
+    assert(DiagnosticFrameLimit()==60);
+    unsetenv("HULK_FRAME_LIMIT");
 }
