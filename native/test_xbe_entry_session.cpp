@@ -18,7 +18,13 @@ int main() {
     catch(const std::runtime_error&) { rejected=true; }
     assert(rejected && m.Read32(0x13000)==0x80000011);
     registry.Register(16,0x16000,32,m);
-    auto s=PrepareEntrySession(i,m,registry,0x1000000,0x1200000,0x14000,1,0);
+    auto s=PrepareEntrySession(i,m,registry,0x1000000,0x1200000,0x14000,1,0,0x17000);
+    assert(m.Read32(0x1401c)==0x14000);
+    assert(m.Read32(0x14020)==0x14028);
+    assert(m.Read32(0x14028)==0x17000);
+    assert(m.Read32(0x17024)==s.cpu.esp);
+    assert(m.Read32(0x17028)==s.bootstrap.tls_data);
+    assert(m.Read32(0x1712c)==1);
     assert(s.cpu.esp==s.bootstrap.initial_esp-4);
     assert(s.cpu.fs_base==0x14000 && s.cpu.thread_handle==1);
     assert(s.cpu.fcw==0x037f && s.cpu.mxcsr==0x1f80);
