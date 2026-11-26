@@ -25,7 +25,10 @@ struct VertexBuffer {
     uint32_t bytes = 0, stride = 0;
 };
 
-// where input register r comes from: host vertex format (a DXGI_FORMAT), buffer, byte offset in the vertex
+// Portable format identifiers; the Android backend maps these to its native API.
+enum VertexFormat : uint8_t { kVertexUnknown=0, kVertexR32_FLOAT, kVertexR32G32_FLOAT, kVertexR32G32B32_FLOAT, kVertexR32G32B32A32_FLOAT, kVertexB8G8R8A8_UNORM, kVertexR16_SNORM, kVertexR16G16_SNORM, kVertexR16G16B16A16_SNORM, kVertexR8_UNORM, kVertexR8G8_UNORM, kVertexR8G8B8A8_UNORM, kVertexR16_SINT, kVertexR16G16_SINT, kVertexR16G16B16A16_SINT, kVertexR32_UINT };
+
+// where input register r comes from: portable format, buffer, byte offset
 struct VertexElement {
     uint8_t format = 0, buffer = 0;
     uint16_t offset = 0;
