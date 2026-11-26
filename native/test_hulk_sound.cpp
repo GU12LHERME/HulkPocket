@@ -153,6 +153,17 @@ int main(){
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
     got=s.Render(1);assert(got[0]==0&&got[1]==500);
     assert(s.Buffer(v,kSoundBufferMinDistance,{v,0,0})==0x88780032u);
+    const uint32_t source_env[]={uint32_t(-2000),0,0,0,0,0,0,0,bits(0.25f)};
+    mem.Write(0x10a00,source_env,sizeof(source_env));
+    assert(s.Buffer(v,kSoundBufferI3dl2Source,{v,0x10a00,1})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==500);
+    assert(s.Listener3d(ds,kSoundCommit3d,{ds})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]>=49&&got[1]<=50);
+    assert(s.Buffer(v,kSoundBufferI3dl2Source,{v,0x400000,0})==0x88780032u);
+    mem.Write32(0x10a14,uint32_t(-10000));mem.Write32(0x10a18,bits(2));
+    assert(s.Buffer(v,kSoundBufferI3dl2Source,{v,0x10a00,0})==0x88780032u);
     assert(s.Buffer(v,kSoundBufferRelease,{v})==0);
     // XDK 5849 synthetic image with one real state segment and three
     // reserved DSP regions. Verify offset arithmetic and actual bytes.
@@ -176,7 +187,13 @@ int main(){
     assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x89abcdef);
     assert(s.GetEffectData(ds,0,1,0x10014,4)==0x88780032u);
     mem.Write32(0x10018,0x11223344);
-    assert(s.SetEffectData(ds,0,0,0x10018,4,1)==0x88780032u);
+    assert(s.SetEffectData(ds,0,0,0x10018,4,2)==0x88780032u);
+    assert(s.SetEffectData(ds,0,0,0x10018,4,1)==0);
+    assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x89abcdef);
+    mem.Write32(0x10018,0x55667788);
+    assert(s.CommitEffectData(ds)==0);
+    assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x11223344);
+    mem.Write32(0x10018,0x11223344);
     assert(s.SetEffectData(ds,0,1,0x10018,4,0)==0x88780032u);
     assert(s.SetEffectData(ds,0,0,0x10018,4,0)==0);
     assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x11223344);

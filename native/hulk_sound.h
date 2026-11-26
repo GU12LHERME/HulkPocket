@@ -50,6 +50,8 @@ private:
         Routing routing{};
         bool is3d=false;
         spatial::Deferred<spatial::Source> space{};
+        spatial::Deferred<environment::SourceParameters> environment{};
+        environment::SourceFilter environmental_filter{};
         bool locked=false;
         uint32_t lock_ptr=0,lock_bytes=0,lock_ptr2=0,lock_bytes2=0;
         uint64_t phase=0;
@@ -63,6 +65,8 @@ private:
         Routing routing{};
         bool is3d=false;
         spatial::Deferred<spatial::Source> space{};
+        spatial::Deferred<environment::SourceParameters> environment{};
+        environment::SourceFilter environmental_filter{};
         bool paused=false,sync=false,ending=false;
         uint64_t phase=0;
         std::deque<Packet> packets;
@@ -93,16 +97,21 @@ private:
     spatial::Deferred<spatial::Listener> listener_{};
     std::unique_ptr<environment::Reverb> reverb_;
     environment::Parameters pending_environment_{};
+    float environmental_rolloff_=0;
     bool environment_pending_=false;
     struct EffectSegment {uint32_t address=0,size=0;};
     std::vector<uint32_t> effect_allocations_;
     std::vector<EffectSegment> effect_states_;
+    struct DeferredEffect {uint32_t effect,offset;std::vector<uint8_t> bytes;};
+    std::vector<DeferredEffect> pending_effects_;
+    size_t pending_effect_bytes_=0;
     void ApplyEnvironment(const environment::Parameters& p){
         if(!reverb_)reverb_=std::make_unique<environment::Reverb>();
-        reverb_->Set(p.data());
+        reverb_->Set(p.data());environmental_rolloff_=p[2];
     }
     void FreeEffects(){
-        reverb_.reset();environment_pending_=false;
+        reverb_.reset();environment_pending_=false;environmental_rolloff_=0;
+        pending_effects_.clear();pending_effect_bytes_=0;
         for(auto a:effect_allocations_)pool_.Free(a);
         effect_allocations_.clear();effect_states_.clear();
     }
@@ -182,6 +191,14 @@ private:
             d.Set(minimum?4:8,apply!=0,[&](auto& x){if(minimum)x.minimum=value;else x.maximum=value;});
         }
         return 0;
+    }
+    uint32_t SourceEnvironment(spatial::Deferred<environment::SourceParameters>& d,uint32_t ptr,uint32_t apply){
+        if(!Range(ptr,36)||apply>1)return bad;
+        auto db=[&](unsigned i){return float(static_cast<int32_t>(mem_.Read32(ptr+4*i)));};
+        auto f=[&](unsigned i){return spatial::Float(mem_.Read32(ptr+4*i));};
+        environment::SourceParameters p{db(0),db(1),db(2),db(3),f(4),db(5),f(6),db(7),f(8)};
+        if(!environment::ValidSource(p))return bad;
+        d.Set(1,apply!=0,[&](auto& x){x=p;});return 0;
     }
     void Capture(const std::vector<int16_t>& samples){
         if(!capture_attempted_){
@@ -264,8 +281,8 @@ public:
         if(op==kSoundCommit3d){
             spatial::Commit(listener_);
             if(environment_pending_){ApplyEnvironment(pending_environment_);environment_pending_=false;}
-            for(auto& item:voices_)spatial::Commit(item.second.space);
-            for(auto& item:streams_)spatial::Commit(item.second.space);
+            for(auto& item:voices_){spatial::Commit(item.second.space);item.second.environment.live=item.second.environment.next;item.second.environment.dirty=0;}
+            for(auto& item:streams_){spatial::Commit(item.second.space);item.second.environment.live=item.second.environment.next;item.second.environment.dirty=0;}
             return 0;
         }
         unsigned index=op==kSoundListenerOrientation?7:
@@ -356,12 +373,28 @@ public:
         return 0;
     }
     uint32_t SetEffectData(uint32_t id,uint32_t effect,uint32_t offset,uint32_t src,uint32_t size,uint32_t flags){
-        // Immediate writes only; deferred effect scheduling remains a boundary.
-        if(flags!=0||!Device(id)||effect>=effect_states_.size()||!Range(src,size))return bad;
+        // DSFX_IMMEDIATE=0, DSFX_DEFERRED=1. Snapshot caller bytes at submission.
+        if(flags>1||!Device(id)||effect>=effect_states_.size()||!size||!Range(src,size))return bad;
         auto seg=effect_states_[effect];
         if(offset>seg.size||size>seg.size-offset)return bad;
+        if(flags){
+            if(pending_effects_.size()>=256||size>kMaxBytes-pending_effect_bytes_)return oom;
+            DeferredEffect e{effect,offset,std::vector<uint8_t>(size)};
+            mem_.Read(src,e.bytes.data(),size);
+            pending_effects_.push_back(std::move(e));pending_effect_bytes_+=size;return 0;
+        }
         std::memmove(mem_.Base()+seg.address+offset,mem_.Base()+src,size);
         return 0;
+    }
+    uint32_t CommitEffectData(uint32_t id){
+        if(!Device(id))return bad;
+        for(const auto& e:pending_effects_){
+            if(e.effect>=effect_states_.size())return bad;
+            const auto seg=effect_states_[e.effect];
+            if(e.offset>seg.size||e.bytes.size()>seg.size-e.offset||!Range(seg.address+e.offset,uint32_t(e.bytes.size())))return bad;
+        }
+        for(const auto& e:pending_effects_)mem_.Write(effect_states_[e.effect].address+e.offset,e.bytes.data(),e.bytes.size());
+        pending_effects_.clear();pending_effect_bytes_=0;return 0;
     }
     uint32_t NewBuffer(uint32_t desc,uint32_t out){
         if(!device_||!Range(desc,20)||!Range(out,4)||voices_.size()>=192)return bad;
@@ -423,6 +456,8 @@ public:
             if(!v.locked||a[1]!=v.lock_ptr||a[2]!=v.lock_bytes||
                a[3]!=v.lock_ptr2||a[4]!=v.lock_bytes2)return bad;
             v.locked=false;return 0;
+        case kSoundBufferI3dl2Source:
+            return v.is3d?SourceEnvironment(v.environment,a[1],a[2]):bad;
         case kSoundBufferSpatialPosition:
         case kSoundBufferVelocity:
         case kSoundBufferMinDistance:
@@ -554,6 +589,8 @@ public:
         case kSoundStreamHeadroom:
             if(a[1]>10000)return bad;
             v.headroom=std::pow(10.0f,-float(a[1])/2000.0f);return 0;
+        case kSoundStreamI3dl2Source:
+            return v.is3d?SourceEnvironment(v.environment,a[1],a[2]):bad;
         case kSoundStreamSpatialPosition:
         case kSoundStreamVelocity:
         case kSoundStreamMinDistance:
@@ -595,6 +632,9 @@ public:
             uint32_t cached=UINT32_MAX;
             auto spatial_gains=v.is3d?spatial::Calculate(v.space.live,listener_.live):spatial::Gains{};
             auto step=uint32_t(std::max(1.0f,float(v.frequency?v.frequency:v.fmt.rate)*spatial_gains.pitch));
+            const auto& pos=v.space.live.position;const auto& lp=listener_.live.position;
+            auto distance=spatial::Length({pos[0]-lp[0],pos[1]-lp[1],pos[2]-lp[2]});
+            auto env_gains=environment::SourceFilter::Calculate(v.environment.live,distance,environmental_rolloff_);
             for(unsigned i=0;i<frames;++i){
                 if(v.phase>=end){
                     if(v.loop&&loop_span)v.phase=loop_begin+(v.phase-loop_begin)%loop_span;
@@ -617,8 +657,9 @@ public:
                 }
                 sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
                 if(v.is3d){
+                    auto send=v.environmental_filter.Apply(env_gains,sample);
                     mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];
-                    if(reverb_)environmental_send[i]+=(sample[0]+sample[1])*0.5f;
+                    if(reverb_)environmental_send[i]+=send;
                 }
                 else Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
                 v.phase+=step;
@@ -631,6 +672,9 @@ public:
             uint32_t cached_data=0,cached_block=UINT32_MAX;
             auto spatial_gains=v.is3d?spatial::Calculate(v.space.live,listener_.live):spatial::Gains{};
             auto step=uint32_t(std::max(1.0f,float(v.frequency?v.frequency:v.fmt.rate)*spatial_gains.pitch));
+            const auto& pos=v.space.live.position;const auto& lp=listener_.live.position;
+            auto distance=spatial::Length({pos[0]-lp[0],pos[1]-lp[1],pos[2]-lp[2]});
+            auto env_gains=environment::SourceFilter::Calculate(v.environment.live,distance,environmental_rolloff_);
             std::array<int16_t,128> decoded{};
             auto advance=[&]{
                 while(!v.packets.empty()){
@@ -663,8 +707,9 @@ public:
                 }
                 sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
                 if(v.is3d){
+                    auto send=v.environmental_filter.Apply(env_gains,sample);
                     mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];
-                    if(reverb_)environmental_send[i]+=(sample[0]+sample[1])*0.5f;
+                    if(reverb_)environmental_send[i]+=send;
                 }
                 else Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
                 v.phase+=step;

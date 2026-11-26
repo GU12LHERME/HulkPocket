@@ -155,6 +155,41 @@ struct Reverb {
 };
 
 
+// Per-source I3DL2: four gains, room rolloff, obstruction and occlusion.
+// Approximate low/high band attenuation, not an Xbox APU filter emulation.
+struct SourceParameters {
+    float direct=0,directHF=0,room=0,roomHF=0,rolloff=0;
+    float obstruction=0,obstructionLF=0,occlusion=0,occlusionLF=0.25f;
+};
+inline bool ValidSource(const SourceParameters& p){
+    auto in=[](float v,float low,float high){return std::isfinite(v)&&v>=low&&v<=high;};
+    return in(p.direct,-10000,1000)&&in(p.directHF,-10000,0)&&
+        in(p.room,-10000,1000)&&in(p.roomHF,-10000,0)&&in(p.rolloff,0,10)&&
+        in(p.obstruction,-10000,0)&&in(p.obstructionLF,0,1)&&
+        in(p.occlusion,-10000,0)&&in(p.occlusionLF,0,1);
+}
+struct SourceFilter {
+    float dry[2]{},wet=0;
+    struct Gains {float dryLow,dryHigh,wetLow,wetHigh;};
+    static float Db(float v){return v<=-10000?0.0f:std::pow(10.0f,v/2000.0f);}
+    static Gains Calculate(const SourceParameters& p,float distance,float listenerRolloff){
+        const float attenuation=1.0f/(1.0f+(p.rolloff+listenerRolloff)*std::max(0.0f,distance-1.0f));
+        return {Db(p.direct+p.obstruction*p.obstructionLF+p.occlusion*p.occlusionLF),
+                Db(p.direct+p.directHF+p.obstruction+p.occlusion),
+                attenuation*Db(p.room+p.occlusion*p.occlusionLF),
+                attenuation*Db(p.room+p.roomHF+p.occlusion)};
+    }
+    static float Band(float x,float& low,float lo,float hi){
+        // Fixed 1 kHz split at 48 kHz. No filtering when both gains match.
+        low+=0.122694f*(x-low);
+        return hi*x+(lo-hi)*low;
+    }
+    float Apply(const Gains& g,std::array<float,2>& s){
+        const float input=(s[0]+s[1])*0.5f;
+        for(unsigned ch=0;ch<2;++ch)s[ch]=Band(s[ch],dry[ch],g.dryLow,g.dryHigh);
+        return Band(input,wet,g.wetLow,g.wetHigh);
+    }
+};
 using Parameters=std::array<float,12>;
 // DSI3DL2LISTENER (room, roomHF, rolloff, decay, ratio,
 // reflections, delay, reverb, delay, diffusion, density, HF reference).

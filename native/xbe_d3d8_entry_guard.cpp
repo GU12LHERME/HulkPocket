@@ -432,7 +432,7 @@ SOUND_HOOK(CDirectSoundStream_SetFrequency,kSoundStreamFrequency,2)
 SOUND_HOOK(CDirectSoundStream_SetHeadroom,kSoundStreamHeadroom,2)
 #endif
 #if HAS_CDirectSoundStream_SetI3DL2Source
-SOUND_STOP(CDirectSoundStream_SetI3DL2Source)
+SOUND_HOOK(CDirectSoundStream_SetI3DL2Source,kSoundStreamI3dl2Source,3)
 #endif
 #if HAS_CDirectSoundStream_SetMaxDistance
 SOUND_HOOK(CDirectSoundStream_SetMaxDistance,kSoundStreamMaxDistance,3)
@@ -484,7 +484,7 @@ SOUND_HOOK(DirectSoundUseFullHRTF,kSoundFullHrtf,0)
 SOUND_HOOK(IDirectSound_CommitDeferredSettings,kSoundCommit3d,1)
 #endif
 #if HAS_IDirectSound_CommitEffectData
-SOUND_STOP(IDirectSound_CommitEffectData)
+SOUND_HOOK(IDirectSound_CommitEffectData,kSoundCommitEffectData,1)
 #endif
 #if HAS_IDirectSound_DownloadEffectsImage
 SOUND_HOOK(IDirectSound_DownloadEffectsImage,kSoundDownloadEffects,5)
@@ -550,7 +550,7 @@ SOUND_HOOK(IDirectSoundBuffer_SetFormat,kSoundBufferFormat,2)
 SOUND_HOOK(IDirectSoundBuffer_SetHeadroom,kSoundBufferHeadroom,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetI3DL2Source
-SOUND_STOP(IDirectSoundBuffer_SetI3DL2Source)
+SOUND_HOOK(IDirectSoundBuffer_SetI3DL2Source,kSoundBufferI3dl2Source,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetLoopRegion
 SOUND_HOOK(IDirectSoundBuffer_SetLoopRegion,kSoundBufferLoopRegion,3)
