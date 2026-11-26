@@ -51,7 +51,7 @@ jobs:
           /tmp/kernel-data
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/xbe_first_entry_probe.cpp -o /tmp/xbe_first_entry_probe.o
-          g++ -std=c++17 -Wall -Wextra -Werror -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk -c native/hulk_xbe_local_diagnostic.cpp -o /tmp/hulk-execute-diagnostic.o
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -o /tmp/hulk-execute-diagnostic
       - name: Install ARM64 tools
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu qemu-user
       - name: ARM64 tests
@@ -72,4 +72,4 @@ jobs:
           qemu-aarch64 /tmp/kernel-data-arm64
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/xbe_first_entry_probe.cpp -o /tmp/xbe_first_entry_probe.o
-          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk -c native/hulk_xbe_local_diagnostic.cpp -o /tmp/hulk-execute-diagnostic.o
+          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -o /tmp/hulk-execute-diagnostic
