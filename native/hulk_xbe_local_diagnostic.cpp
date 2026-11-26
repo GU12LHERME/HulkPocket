@@ -16,8 +16,20 @@
 // Supplying an ELF module calls dlopen; only use modules built yourself
 // from your own game and trusted source code.
 int main(int argc,char** argv) {
-    if (argc != 2 && argc != 3) {
-        std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so]\n";
+    std::vector<std::string> paths;
+    bool imports_requested=false;
+    for (int i=1; i<argc; ++i) {
+        const std::string arg(argv[i]);
+        if (arg=="--imports") imports_requested=true;
+        else if (arg.rfind("--",0)==0) {
+            std::cerr << "unknown diagnostic option: " << arg << '\n';
+            return 2;
+        } else {
+            paths.push_back(arg);
+        }
+    }
+    if(paths.size()!=1 && paths.size()!=2) {
+        std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so] [--imports]\n";
         return 2;
     }
     try {
@@ -49,15 +61,15 @@ int main(int argc,char** argv) {
         if(imports_requested) {
             const auto imports=hulkpocket::ScanXbeKernelImports(loaded,guest);
             if(!imports.complete) {
-                std::cerr << "Kernel import inventory unavailable: " << imports.error << '\\n';
+                std::cerr << "Kernel import inventory unavailable: " << imports.error << '\n';
                 return 4;
             }
             std::cout << "Kernel imports: " << imports.entries
                       << " entries, " << imports.ordinals.size()
-                      << " unique kernel ordinals\\n";
+                      << " unique kernel ordinals\n";
             std::cout << "Ordinals:";
             for(auto ordinal:imports.ordinals) std::cout << ' ' << ordinal;
-            std::cout << '\\n';
+            std::cout << '\n';
         }
         if(paths.size() == 2) {
             hulkpocket::PortableXbeImage native(paths[1]);
