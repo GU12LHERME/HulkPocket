@@ -7,6 +7,7 @@ import tempfile
 import hashlib
 from prepare_xbe_elf import prepare
 from build_xbe_android import generated_sources
+from supplemental_guest_mapping import generate
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -35,10 +36,14 @@ def main():
         if not all(o.is_file() for o in objects):
             raise RuntimeError("Matching complete cache not found; no recompilation attempted")
         print(f"Reusing {len(objects)} cached objects", flush=True)
+        # Write outside the prepared input tree: the existing fingerprint
+        # and every cached game object remain unchanged.
+        count = generate(prepared, work / "hulk_extra_mapping.h")
+        print(f"Supplemental verified guest function entries: {count}", flush=True)
         for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe", "xbe_d3d8_entry_guard"):
             obj = work / (name + ".o")
             subprocess.run([str(compiler), "-std=c++20", "-O2", "-fPIC",
-                            "-I", str(prepared), "-I", str(root / "native"),
+                            "-I", str(prepared), "-I", str(work), "-I", str(root / "native"),
                             "-c", str(root / "native" / (name + ".cpp")),
                             "-o", str(obj)], check=True)
             objects.append(obj)

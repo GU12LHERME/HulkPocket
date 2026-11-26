@@ -6,19 +6,40 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <vector>
+#include <stdexcept>
+#if __has_include("hulk_extra_mapping.h")
+#include "hulk_extra_mapping.h"
+#else
+static const X86FuncMapping kHulkExtraMapping[]={{0,nullptr}};
+#endif
 extern "C" {
 extern const uint32_t X86CodeBase, X86CodeEnd, X86EntryPoint;
 extern const X86FuncMapping X86FuncMappings[];
+}
+namespace {
+std::vector<X86FuncMapping> AllMappings(){
+    size_t n=0;
+    while(n<1000000&&X86FuncMappings[n].host)++n;
+    if(!n||n==1000000)throw std::runtime_error("Invalid primary guest function map");
+    std::vector<X86FuncMapping> all(X86FuncMappings,X86FuncMappings+n);
+    for(const auto& extra:kHulkExtraMapping){
+        if(!extra.host)break;
+        if(all.size()>=1000000)throw std::runtime_error("Guest function map capacity exceeded");
+        all.push_back(extra);
+    }
+    return all; // dispatcher validates ranges and rejects duplicates
+}
+}
+extern "C" {
 __attribute__((visibility("default"))) int hulk_entry_probe(uint32_t expected) {
     try {
         if (expected != X86EntryPoint) return 2;
-        size_t n=0;
-        while(n<1000000 && X86FuncMappings[n].host) ++n;
-        if(!n || n==1000000) return 3;
-        hulkpocket::PortableXbeDispatch dispatch(X86FuncMappings,n,X86CodeBase,X86CodeEnd);
+        auto all=AllMappings();
+        hulkpocket::PortableXbeDispatch dispatch(all.data(),all.size(),X86CodeBase,X86CodeEnd);
         hulkpocket::ScopedXbeDispatch scope(dispatch);
         if(!dispatch.Contains(expected)) return 4;
-        std::fprintf(stderr,"In-module dispatcher ready: %zu functions, entry=%08X\n",n,expected);
+        std::fprintf(stderr,"In-module dispatcher ready: %zu functions, entry=%08X\n",all.size(),expected);
         return 0;
     } catch(const std::exception& e) {
         std::fprintf(stderr,"Dispatcher rejected: %s\n",e.what());
@@ -42,11 +63,9 @@ int hulk_entry_execute_with_kernel(X86Context* cpu, uint8_t* base, uint32_t entr
     if(!cpu || !base || !entry || !cpu->esp ||
        !cpu->fs_base || !cpu->thread_handle) return 2;
     try {
-        size_t n=0;
-        while(n<1000000 && X86FuncMappings[n].host) ++n;
-        if(!n || n==1000000) return 3;
+        auto all=AllMappings();
         hulkpocket::PortableXbeDispatch dispatch(
-            X86FuncMappings,n,X86CodeBase,X86CodeEnd,kernel ? kernel : stop_kernel);
+            all.data(),all.size(),X86CodeBase,X86CodeEnd,kernel ? kernel : stop_kernel);
         hulkpocket::ScopedXbeDispatch scope(dispatch);
         hulkpocket::ScopedGraphicsCallback graphics_scope(kernel);
         std::fprintf(stderr,"Entering guest at %08X ESP=%08X\n",entry,cpu->esp);

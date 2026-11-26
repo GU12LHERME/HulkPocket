@@ -13,6 +13,8 @@ on:
       - 'tools/link_hulk_cached.py'
       - 'tools/report_hulk_allocator.py'
       - 'tools/report_missing_guest.py'
+      - 'tools/supplemental_guest_mapping.py'
+      - 'native/test_xbe_supplemental_mapping.cpp'
       - 'native/portable_xbe_dispatch.cpp'
       - 'native/xbe_diagnostic_runtime.cpp'
       - 'native/portable_xbe_cpu_services.*'
@@ -64,6 +66,7 @@ jobs:
           python3 -m py_compile tools/link_hulk_cached.py tools/report_hulk_allocator.py
           python3 tools/report_hulk_allocator.py --self-test
           python3 tools/report_missing_guest.py --self-test
+          python3 tools/supplemental_guest_mapping.py --self-test
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout
@@ -94,6 +97,10 @@ jobs:
           /tmp/d3d8-bridge
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/xbe_first_entry_probe.cpp -o /tmp/xbe_first_entry_probe.o
+          mkdir -p /tmp/hulk-extra-test
+          python3 tools/supplemental_guest_mapping.py --fixture /tmp/hulk-extra-test
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk -I/tmp/hulk-extra-test native/test_xbe_supplemental_mapping.cpp native/xbe_first_entry_probe.cpp native/portable_xbe_dispatch.cpp -o /tmp/hulk-extra-test-host
+          /tmp/hulk-extra-test-host
           g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/hulk-execute-diagnostic
       - name: Install ARM64 tools
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu qemu-user
@@ -129,4 +136,6 @@ jobs:
           qemu-aarch64 /tmp/graphics-boundary-arm64
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/xbe_first_entry_probe.cpp -o /tmp/xbe_first_entry_probe.o
+          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk -I/tmp/hulk-extra-test native/test_xbe_supplemental_mapping.cpp native/xbe_first_entry_probe.cpp native/portable_xbe_dispatch.cpp -o /tmp/hulk-extra-test-arm64
+          qemu-aarch64 /tmp/hulk-extra-test-arm64
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/hulk-execute-diagnostic
