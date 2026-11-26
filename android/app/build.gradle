@@ -7,7 +7,9 @@ android {
  defaultConfig {
   def revision = providers.exec { commandLine 'git', 'rev-parse', 'HEAD' }.standardOutput.asText.get().trim()
   buildConfigField 'String', 'PREVIEW_REVISION', '"' + revision + '"'
-  externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_shared' } }
+  def vkPreview = providers.gradleProperty('hulkVulkanPreview').orElse('false').get() == 'true'
+  buildConfigField 'boolean', 'VULKAN_PREVIEW', vkPreview.toString()
+  externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_shared', "-DHULK_ENABLE_VULKAN_PREVIEW=${vkPreview ? 'ON' : 'OFF'}" } }
   applicationId 'com.hulkpocket.diagnostic'
   minSdk 29
   targetSdk 35

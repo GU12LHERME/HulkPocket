@@ -45,3 +45,7 @@ At implementation time 4f26c57 passed Linux Vulkan draws, SPIR-V validation and 
 ## D3D8 ABI build correction
 
 The d14f5b0 Vulkan workflow stopped at compile time because cpu/x86_context.h is not vendored. The other Android smoke and APK jobs passed. This correction uses the same pinned TGP482 XboxXBERecomp header and Git blob checksum already used by the GLES/APK workflows, passes its include directory to both host and Android CMake builds, and checks the fixture stack and return ABI. No renderer behavior is changed. CI pending.
+
+## APK opt-in integration
+
+2e966b9 passed all four workflows. The Android preview now selects a single backend at guest device creation through XbePreviewBackend. Vulkan builds are enabled on experiment-vulkan-runtime CI with -PhulkVulkanPreview=true, and the launcher exposes an unchecked Vulkan experimental checkbox. GLES remains default; other branches omit glslang. Existing Android window presentation receives checked BGRA readback. Vulkan supports the existing fixed-size linear D24S8 guest attachment identity, explicit color/depth/stencil initialization, backing rotation and checked saved-color restore, with a new rotation pixel regression. Depth guest readback, arbitrary target switching, viewport/scissor variation, programmable shaders and dynamic lighting remain unsupported. This is an experimental APK path, not a gameplay success claim. CI and RP6 execution pending; APK/module revision matching is retained.

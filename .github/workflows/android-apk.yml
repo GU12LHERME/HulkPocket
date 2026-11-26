@@ -33,10 +33,15 @@ jobs:
           test "$(git hash-object android/app/src/main/cpp/sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Validate local preview package metadata
         run: python3 tools/export_hulk_preview.py --self-test
+      - name: Select experimental Vulkan APK only on Vulkan branch
+        run: |
+          if [ "$GITHUB_REF_NAME" = experiment-vulkan-runtime ]; then
+            echo "HULK_GRADLE_VK=-PhulkVulkanPreview=true" >> "$GITHUB_ENV"
+          fi
       - name: Build APK with bounded retries
         run: |
           for attempt in 1 2 3; do
-            if gradle -p android --no-daemon assembleDebug; then exit 0; fi
+            if gradle -p android --no-daemon ${HULK_GRADLE_VK:-} assembleDebug; then exit 0; fi
             if [ "$attempt" -lt 3 ]; then sleep $((attempt * 60)); fi
           done
           exit 1

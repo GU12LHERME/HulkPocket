@@ -18,6 +18,7 @@
 #include "xbe_resident_sections.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
+#include "xbe_preview_backend.h"
 #include "xbe_d3d8_default_trace.h"
 #include "xbe_diagnostic_bitmap.h"
 #endif
@@ -118,7 +119,7 @@ private:
     // EGL objects must be destroyed on the guest host thread that created them.
     struct LiveD3dDevice {
         XbeD3d8DeviceMemory buffers;
-        XbeGlesBackend backend;
+        XbePreviewBackend backend;
         XbeD3d8Bridge bridge;
         uint32_t owner;
         unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0,diagnostic_vblanks=0;

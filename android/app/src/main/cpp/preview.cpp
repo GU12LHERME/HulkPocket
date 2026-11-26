@@ -58,7 +58,7 @@ public:
                         if(line.starts_with("HULK INPUT ")){
                             input_events.push_back(line);if(input_events.size()>256)input_events.pop_front();
                         }
-                        if(line.starts_with("Guest stopped:")||
+                        if(line.starts_with("HULK RENDERER ")||line.starts_with("Guest stopped:")||
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||
                            (line.starts_with("D3D LIGHT ")&&(!line.starts_with("D3D LIGHT OBSERVE")||line.ends_with("accepted=0")))||
                            line.starts_with("HULK CRT MATH ")||
@@ -97,7 +97,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_hulkpocket_diagnostic_GameActivity_na
     hulkpocket::preview_host.Input(connected,s);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_hulkpocket_diagnostic_GameActivity_nativeStop(JNIEnv*,jclass){hulkpocket::preview_host.stop.store(true);}
-extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_nativeRun(JNIEnv* e,jclass,jstring disc,jstring module,jstring partition,jstring log,jstring fvf){
+extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_nativeRun(JNIEnv* e,jclass,jstring disc,jstring module,jstring partition,jstring log,jstring fvf,jboolean vulkan){
     if(running.exchange(true))return 2;
     int result=2;
     try{
@@ -106,6 +106,12 @@ extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_na
         auto f=Str(e,fvf);
         if(f.size()!=8||f.find_first_not_of("0123456789abcdefABCDEF")!=std::string::npos)
             throw std::runtime_error("Invalid FVF in local preview package");
+#ifdef HULK_ENABLE_VULKAN_PREVIEW
+        setenv("HULK_RENDERER",vulkan?"vulkan":"gles",1);
+#else
+        if(vulkan)throw std::runtime_error("Vulkan preview not compiled");
+        setenv("HULK_RENDERER","gles",1);
+#endif
         setenv("HULK_FVF_SHADER",f.c_str(),1);
         setenv("HULK_ISOLATE_INVALID_XYZ","1",1);
         setenv("HULK_CONTINUE_CREATE","1",1);setenv("HULK_CONTINUE_DRAW","1",1);setenv("HULK_CONTINUE_SWAP","1",1);

@@ -36,6 +36,7 @@ public final class PreviewLauncherActivity extends Activity {
         status=new TextView(this);panel.addView(status);
         discButton=new Button(this);discButton.setText("Importar pasta do jogo");panel.addView(discButton);
         moduleButton=new Button(this);moduleButton.setText("Importar HulkPocket-module.zip");panel.addView(moduleButton);
+        CheckBox vulkan=new CheckBox(this);vulkan.setText("Vulkan (experimental)");vulkan.setEnabled(BuildConfig.VULKAN_PREVIEW);panel.addView(vulkan);
         playButton=new Button(this);playButton.setText("Jogar");panel.addView(playButton);
         Button report=new Button(this);report.setText("Exportar último relatório");panel.addView(report);
         report.setOnClickListener(v->{
@@ -52,7 +53,7 @@ public final class PreviewLauncherActivity extends Activity {
             }).show());
         playButton.setOnClickListener(v->{
             Intent i=new Intent(this,GameActivity.class);i.putExtra("disc",disc().getAbsolutePath());i.putExtra("module",module().getAbsolutePath());
-            i.putExtra("fvf",getPreferences(0).getString("moduleFvf",""));startActivity(i);
+            i.putExtra("fvf",getPreferences(0).getString("moduleFvf",""));i.putExtra("vulkan",vulkan.isChecked());startActivity(i);
         });
         update();
     }

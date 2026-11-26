@@ -171,7 +171,7 @@ struct VulkanCore{
         CreateBuffer(uniform,4096,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         CreateBuffer(readback,VkDeviceSize(W)*H*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         CreateBuffer(staging,16,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         for(auto format:{VK_FORMAT_D24_UNORM_S8_UINT,VK_FORMAT_D32_SFLOAT_S8_UINT}){
             VkFormatProperties fp{};vkGetPhysicalDeviceFormatProperties(physical,format,&fp);
             if(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT){depth_format=format;break;}
@@ -356,6 +356,25 @@ struct VulkanCore{
             vkCmdClearAttachments(cmd,n,ca,1,&rect);
         }
         vkCmdEndRenderPass(cmd);ReadbackCommands();Submit();frame_valid=true;
+    }
+    void RestoreColor(const uint8_t* bgra,uint32_t pitch){
+        if(!bgra||pitch<uint64_t(W)*4||frame_valid)throw std::invalid_argument("Invalid Vulkan restored color");
+        ClearFrame(0xf3,0,1,0);
+        EnsureBuffer(staging,VkDeviceSize(W)*H*4,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        auto* dst=static_cast<uint8_t*>(staging.data);
+        for(uint32_t y=0;y<H;++y)for(uint32_t x=0;x<W;++x){
+            auto* p=bgra+size_t(y)*pitch+x*4;auto* q=dst+(size_t(y)*W+x)*4;
+            q[0]=p[2];q[1]=p[1];q[2]=p[0];q[3]=p[3];
+        }
+        Begin();
+        Transition(target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={W,H,1};
+        vkCmdCopyBufferToImage(cmd,staging.b,target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        Transition(target.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+        Submit();
+        std::memcpy(readback.data,staging.data,size_t(W)*H*4);
     }
     void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false,bool preserve=false){
         if(preserve&&!frame_valid)throw std::logic_error("Cannot preserve an uninitialized framebuffer");

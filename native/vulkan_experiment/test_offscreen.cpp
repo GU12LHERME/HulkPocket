@@ -164,7 +164,24 @@ int main(int argc,char** argv){
                bridge_mem.Read32(0x80110000+(32*64+32)*4)!=0x80ff00ff||
                bridge_mem.Read32(0x80110000)!=0xff0000ff)
                 throw std::runtime_error("D3D8 Vulkan ABI frame mismatch");
-            std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory");
+            // Real swap-style physical backing rotation behind the same header.
+            {
+                gpu::ScopedGuestMemory scope(bridge_mem);
+                bridge_mem.Write32(surface+4,0x118000);
+                bridge.BindInitialTargets(surface,0);
+                backend.BeginRotatedFrame(bridge.Snapshot().rt);
+                call("D3DDevice_Clear",{0,0,0xf0,0xff00ff00,std::bit_cast<uint32_t>(1.f),0});
+                if(bridge.Present(surface)!=2||bridge_mem.Read32(0x80118000)!=0xff00ff00)
+                    throw std::runtime_error("Vulkan rotated frame mismatch");
+                bridge_mem.Write32(surface+4,0x110000);
+                bridge.BindInitialTargets(surface,0);
+                backend.BeginRotatedFrame(bridge.Snapshot().rt);
+                backend.RestoreRotatedColor(bridge.Snapshot().rt);
+                if(backend.ReadPixel(32,32)!=std::array<uint8_t,4>{255,0,255,128}||
+                   bridge.Present(surface)!=3||bridge_mem.Read32(0x80110000+(32*64+32)*4)!=0x80ff00ff)
+                    throw std::runtime_error("Vulkan restored frame mismatch");
+            }
+            std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
         std::puts("PASS Vulkan draws, Xbox depth/stencil, checked guest vertex/index assembly, BGRA and DXT1 staging, guest surface readback");
     }catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}

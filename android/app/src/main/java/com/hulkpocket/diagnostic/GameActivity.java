@@ -12,7 +12,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     private static native void nativeSurface(Surface surface);
     private static native void nativeInput(boolean connected,int buttons,byte[] analog,int lx,int ly,int rx,int ry);
     private static native void nativeStop();
-    private static native int nativeRun(String disc,String module,String partition,String log,String fvf);
+    private static native int nativeRun(String disc,String module,String partition,String log,String fvf,boolean vulkan);
     private boolean started=false,finished=false;
     private int device=-1,keys=0,hat=0,lx=0,ly=0,rx=0,ry=0;
     private final byte[] analog=new byte[8];
@@ -47,7 +47,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         File partition=new File(getFilesDir(),"preview-partition1");
         for(String dir:new String[]{"TDATA","UDATA"})new File(partition,dir+"/56550039").mkdirs();
         new Thread(()->{
-            int code=nativeRun(disc,module,partition.getAbsolutePath(),new File(getFilesDir(),"preview-report.txt").getAbsolutePath(),getIntent().getStringExtra("fvf"));
+            int code=nativeRun(disc,module,partition.getAbsolutePath(),new File(getFilesDir(),"preview-report.txt").getAbsolutePath(),getIntent().getStringExtra("fvf"),getIntent().getBooleanExtra("vulkan",false));
             runOnUiThread(()->{finished=true;status.setVisibility(View.VISIBLE);status.setText("Execução encerrada ("+code+"). Volte ao launcher para exportar o relatório.");});
         },"hulk-game").start();
         status.postDelayed(()->{if(!finished)status.setVisibility(View.GONE);},3000);
