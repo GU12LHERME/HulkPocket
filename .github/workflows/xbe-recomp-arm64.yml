@@ -350,7 +350,7 @@ jobs:
             "$RUNNER_TEMP/xbe-original-machine-code/synthetic.xbe"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 \
             -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
-            -static-libstdc++ -Wl,-z,max-page-size=16384 \
+            -Wno-unused-but-set-variable -static-libstdc++ -Wl,-z,max-page-size=16384 \
             -I native -I "$RUNNER_TEMP/xbe-recompiled-real-opcodes" \
             native/test_recompiled_xbe_arm64.cpp \
             native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
@@ -387,7 +387,7 @@ jobs:
             "$RUNNER_TEMP/xbe-memory-machine-code/synthetic.xbe"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 \
             -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
-            -static-libstdc++ -Wl,-z,max-page-size=16384 \
+            -Wno-unused-but-set-variable -static-libstdc++ -Wl,-z,max-page-size=16384 \
             -I native -I "$RUNNER_TEMP/xbe-memory-recompiled" \
             native/test_recompiled_xbe_memory_arm64.cpp \
             native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
@@ -423,7 +423,7 @@ jobs:
             "$RUNNER_TEMP/xbe-calls-machine-code/synthetic.xbe"
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 \
             -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
-            -static-libstdc++ -Wl,-z,max-page-size=16384 \
+            -Wno-unused-but-set-variable -static-libstdc++ -Wl,-z,max-page-size=16384 \
             -I native -I "$RUNNER_TEMP/xbe-calls-recompiled" \
             native/test_recompiled_xbe_calls_arm64.cpp \
             native/xbe_image_memory_loader.cpp native/xbox_guest_address_space.cpp \
