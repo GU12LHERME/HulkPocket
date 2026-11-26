@@ -635,6 +635,7 @@ private:
             }
             case kSoundNewBuffer:Check(cpu,2);Ret(cpu,2,sound_.NewBuffer(Arg(cpu,0),Arg(cpu,1)));return;
             case kSoundNewDeviceBuffer:Check(cpu,4);Ret(cpu,4,sound_.Device(Arg(cpu,0))&&!Arg(cpu,3)?sound_.NewBuffer(Arg(cpu,1),Arg(cpu,2)):0x88780032u);return;
+            case kSoundBufferAll3d:case kSoundBufferRolloffCurve:case kSoundBufferStopEx:
             case kSoundBufferI3dl2Source:
             case kSoundBufferSpatialPosition:case kSoundBufferVelocity:case kSoundBufferMinDistance:case kSoundBufferMaxDistance:
             case kSoundBufferRelease:
@@ -655,8 +656,8 @@ private:
             case kSoundBufferPlayRegion:
             case kSoundBufferLoopRegion:
             case kSoundBufferGetPosition: {
-                unsigned n=ordinal==kSoundBufferLock?8:(ordinal==kSoundBufferUnlock||ordinal==kSoundBufferSpatialPosition||ordinal==kSoundBufferVelocity)?5:ordinal==kSoundBufferPlay?4:
-                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition||ordinal==kSoundBufferPlayRegion||ordinal==kSoundBufferLoopRegion||ordinal==kSoundBufferMinDistance||ordinal==kSoundBufferMaxDistance||ordinal==kSoundBufferI3dl2Source)?3:
+                unsigned n=ordinal==kSoundBufferLock?8:(ordinal==kSoundBufferUnlock||ordinal==kSoundBufferSpatialPosition||ordinal==kSoundBufferVelocity)?5:(ordinal==kSoundBufferPlay||ordinal==kSoundBufferRolloffCurve||ordinal==kSoundBufferStopEx)?4:
+                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition||ordinal==kSoundBufferPlayRegion||ordinal==kSoundBufferLoopRegion||ordinal==kSoundBufferMinDistance||ordinal==kSoundBufferMaxDistance||ordinal==kSoundBufferI3dl2Source||ordinal==kSoundBufferAll3d)?3:
                     (ordinal==kSoundBufferRelease||ordinal==kSoundBufferStop)?1:2;
                 Check(cpu,n);
                 sound_.Pump();

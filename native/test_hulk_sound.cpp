@@ -153,6 +153,23 @@ int main(){
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
     got=s.Render(1);assert(got[0]==0&&got[1]==500);
     assert(s.Buffer(v,kSoundBufferMinDistance,{v,0,0})==0x88780032u);
+    // DS3DBUFFER 64-byte parameters, listener-relative positioning and curve.
+    const uint32_t all3d[]={64,bits(2),0,0,0,0,0,360,360,0,0,bits(1),0,bits(1),bits(3),1};
+    mem.Write(0x10b00,all3d,sizeof(all3d));
+    assert(s.Buffer(v,kSoundBufferAll3d,{v,0x10b00,0})==0);
+    const uint32_t curve[]={bits(0.25f),0};
+    mem.Write(0x10b40,curve,sizeof(curve));
+    assert(s.Buffer(v,kSoundBufferRolloffCurve,{v,0x10b40,2,0})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==250);
+    assert(s.Buffer(v,kSoundBufferStopEx,{v,0,0,1})==0x88780032u);
+    assert(s.Buffer(v,kSoundBufferStopEx,{v,0,0,0})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==0);
+    assert(s.Buffer(v,kSoundBufferRolloffCurve,{v,0,0,0})==0);
+    mem.Write32(0x10b04,bits(-2));mem.Write32(0x10b3c,0);
+    assert(s.Buffer(v,kSoundBufferAll3d,{v,0x10b00,0})==0);
+    mem.Write32(0x10b3c,3);
+    assert(s.Buffer(v,kSoundBufferAll3d,{v,0x10b00,0})==0x88780032u);
     const uint32_t source_env[]={uint32_t(-2000),0,0,0,0,0,0,0,bits(0.25f)};
     mem.Write(0x10a00,source_env,sizeof(source_env));
     assert(s.Buffer(v,kSoundBufferI3dl2Source,{v,0x10a00,1})==0);

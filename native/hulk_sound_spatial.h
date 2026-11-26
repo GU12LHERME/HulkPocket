@@ -13,7 +13,14 @@ inline float Dot(const Vec& a,const Vec& b){return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]
 inline Vec Cross(const Vec& a,const Vec& b){return {a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]};}
 inline float Length(const Vec& v){return std::sqrt(Dot(v,v));}
 inline Vec Unit(const Vec& v){auto n=Length(v);return n>1e-6f?Vec{v[0]/n,v[1]/n,v[2]/n}:Vec{};}
-struct Source {Vec position{},velocity{};float minimum=1,maximum=1e9f;};
+struct Source {
+    Vec position{},velocity{},cone{0,0,1};
+    float minimum=1,maximum=1e9f;
+    uint32_t mode=0,inside=360,outside=360;
+    int32_t outside_volume=0;
+    uint32_t curve_count=0;
+    std::array<float,64> curve{};
+};
 struct Listener {Vec position{},velocity{},front{0,0,1},top{0,1,0};float distance=1,rolloff=1,doppler=1;};
 template<class T> struct Deferred {
     T live{},next{};
@@ -27,16 +34,32 @@ inline void Commit(Deferred<Source>& d){d.live=d.next;d.dirty=0;}
 inline void Commit(Deferred<Listener>& d){d.live=d.next;d.dirty=0;}
 struct Gains {float left=1,right=1,pitch=1;};
 inline Gains Calculate(const Source& s,const Listener& l){
-    Vec delta{s.position[0]-l.position[0],s.position[1]-l.position[1],s.position[2]-l.position[2]};
+    if(s.mode==2)return {};
+    const bool relative=s.mode==1;
+    Vec delta=relative?s.position:Vec{s.position[0]-l.position[0],s.position[1]-l.position[1],s.position[2]-l.position[2]};
     float distance=Length(delta);auto direction=Unit(delta);
-    auto right=Unit(Cross(l.top,l.front));
+    auto right=relative?Vec{1,0,0}:Unit(Cross(l.top,l.front));
     float pan=std::clamp(Dot(direction,right),-1.0f,1.0f);
     float range=std::clamp(distance,s.minimum,std::max(s.minimum,s.maximum));
     float attenuation=s.minimum/(s.minimum+l.rolloff*(range-s.minimum));
+    if(s.curve_count&&range>s.minimum&&s.maximum>s.minimum){
+        float at=(range-s.minimum)/(s.maximum-s.minimum)*s.curve_count;
+        auto i=std::min(uint32_t(at),s.curve_count-1);
+        float from=i?s.curve[i-1]:1.0f;
+        attenuation=from+(s.curve[i]-from)*std::clamp(at-float(i),0.0f,1.0f);
+    }
+    if(distance>1e-6f&&s.inside<360&&Length(s.cone)>1e-6f){
+        auto forward=Unit(s.cone);
+        float angle=std::acos(std::clamp(-Dot(direction,forward),-1.0f,1.0f))*57.2957795f;
+        float in=float(s.inside)*0.5f,out=float(s.outside)*0.5f;
+        float t=angle<=in?0.0f:out<=in?1.0f:std::clamp((angle-in)/(out-in),0.0f,1.0f);
+        float outside=s.outside_volume<=-10000?0.0f:std::pow(10.0f,float(s.outside_volume)/2000.0f);
+        attenuation*=1.0f+t*(outside-1.0f);
+    }
     // Equal-power stereo approximation; not the Xbox HRTF filter.
     float left=std::sqrt((1-pan)*0.5f)*attenuation;
     float rightgain=std::sqrt((1+pan)*0.5f)*attenuation;
-    float toward=Dot(l.velocity,direction)*l.distance*l.doppler;
+    float toward=relative?0.0f:Dot(l.velocity,direction)*l.distance*l.doppler;
     float away=Dot(s.velocity,direction)*l.distance*l.doppler;
     float pitch=(343.0f+std::clamp(toward,-171.5f,171.5f))/(343.0f+std::clamp(away,-171.5f,171.5f));
     return {left,rightgain,std::clamp(pitch,0.5f,2.0f)};

@@ -535,7 +535,7 @@ SOUND_HOOK(IDirectSoundBuffer_Lock,kSoundBufferLock,8)
 SOUND_HOOK(IDirectSoundBuffer_Pause,kSoundBufferPause,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetAllParameters
-SOUND_STOP(IDirectSoundBuffer_SetAllParameters)
+SOUND_HOOK(IDirectSoundBuffer_SetAllParameters,kSoundAll3d,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetEG
 SOUND_STOP(IDirectSoundBuffer_SetEG)
@@ -577,13 +577,13 @@ SOUND_HOOK(IDirectSoundBuffer_SetPlayRegion,kSoundBufferPlayRegion,3)
 SOUND_HOOK(IDirectSoundBuffer_SetPosition,kSoundBufferSpatialPosition,5)
 #endif
 #if HAS_IDirectSoundBuffer_SetRolloffCurve
-SOUND_STOP(IDirectSoundBuffer_SetRolloffCurve)
+SOUND_HOOK(IDirectSoundBuffer_SetRolloffCurve,kSoundRolloffCurve,4)
 #endif
 #if HAS_IDirectSoundBuffer_SetVelocity
 SOUND_HOOK(IDirectSoundBuffer_SetVelocity,kSoundBufferVelocity,5)
 #endif
 #if HAS_IDirectSoundBuffer_StopEx
-SOUND_STOP(IDirectSoundBuffer_StopEx)
+SOUND_HOOK(IDirectSoundBuffer_StopEx,kSoundStopEx,4)
 #endif
 #if HAS_IDirectSoundBuffer_Unlock
 SOUND_HOOK(IDirectSoundBuffer_Unlock,kSoundBufferUnlock,5)

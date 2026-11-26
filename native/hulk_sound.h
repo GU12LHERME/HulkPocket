@@ -192,6 +192,32 @@ private:
         }
         return 0;
     }
+    uint32_t AllSource3d(spatial::Deferred<spatial::Source>& d,uint32_t ptr,uint32_t apply){
+        if(!Range(ptr,64)||mem_.Read32(ptr)!=64||apply>1)return bad;
+        auto f=[&](unsigned off){return spatial::Float(mem_.Read32(ptr+off));};
+        auto v=[&](unsigned off){return spatial::Vec{f(off),f(off+4),f(off+8)};};
+        auto pos=v(4),vel=v(16),cone=v(36);
+        auto inside=mem_.Read32(ptr+28),outside=mem_.Read32(ptr+32);
+        auto volume=static_cast<int32_t>(mem_.Read32(ptr+48));
+        auto min=f(52),max=f(56);auto mode=mem_.Read32(ptr+60);
+        if(!spatial::Valid(pos)||!spatial::Valid(vel)||!spatial::Valid(cone)||
+           inside>outside||outside>360||volume< -10000||volume>0||
+           !spatial::Finite(min)||!spatial::Finite(max)||min<=0||max<min||mode>2||
+           (inside<360&&spatial::Length(cone)<1e-6f))return bad;
+        d.Set(0x1f,apply!=0,[&](auto& x){
+            x.position=pos;x.velocity=vel;x.cone=cone;x.inside=inside;x.outside=outside;
+            x.outside_volume=volume;x.minimum=min;x.maximum=max;x.mode=mode;
+        });return 0;
+    }
+    uint32_t RolloffCurve(spatial::Deferred<spatial::Source>& d,uint32_t ptr,uint32_t count,uint32_t apply){
+        if(count>64||apply>1||(count&&!Range(ptr,count*4)))return bad;
+        std::array<float,64> points{};
+        for(unsigned i=0;i<count;++i){
+            points[i]=spatial::Float(mem_.Read32(ptr+4*i));
+            if(!std::isfinite(points[i])||points[i]<0||points[i]>1)return bad;
+        }
+        d.Set(0x20,apply!=0,[&](auto& x){x.curve=points;x.curve_count=count;});return 0;
+    }
     uint32_t SourceEnvironment(spatial::Deferred<environment::SourceParameters>& d,uint32_t ptr,uint32_t apply){
         if(!Range(ptr,36)||apply>1)return bad;
         auto db=[&](unsigned i){return float(static_cast<int32_t>(mem_.Read32(ptr+4*i)));};
@@ -456,6 +482,8 @@ public:
             if(!v.locked||a[1]!=v.lock_ptr||a[2]!=v.lock_bytes||
                a[3]!=v.lock_ptr2||a[4]!=v.lock_bytes2)return bad;
             v.locked=false;return 0;
+        case kSoundBufferAll3d:return v.is3d?AllSource3d(v.space,a[1],a[2]):bad;
+        case kSoundBufferRolloffCurve:return v.is3d?RolloffCurve(v.space,a[1],a[2],a[3]):bad;
         case kSoundBufferI3dl2Source:
             return v.is3d?SourceEnvironment(v.environment,a[1],a[2]):bad;
         case kSoundBufferSpatialPosition:
@@ -483,6 +511,9 @@ public:
             v.loop=(a[3]&1)!=0;v.sync=(a[3]&4)!=0;v.paused=false;
             if(a[3]&2||v.phase>=uint64_t(v.fmt.Frames(v.play_length))*kRate)v.phase=0;
             v.playing=true;return 0;
+        case kSoundBufferStopEx:
+            if(a[1]||a[2]||a[3])return bad; // only immediate stop; no timed/envelope stop
+            [[fallthrough]];
         case kSoundBufferStop:v.playing=false;v.paused=v.sync=false;return 0;
         case kSoundBufferPause:
             if(a[1]>2)return bad;
@@ -633,7 +664,7 @@ public:
             auto spatial_gains=v.is3d?spatial::Calculate(v.space.live,listener_.live):spatial::Gains{};
             auto step=uint32_t(std::max(1.0f,float(v.frequency?v.frequency:v.fmt.rate)*spatial_gains.pitch));
             const auto& pos=v.space.live.position;const auto& lp=listener_.live.position;
-            auto distance=spatial::Length({pos[0]-lp[0],pos[1]-lp[1],pos[2]-lp[2]});
+            auto distance=spatial::Length(v.space.live.mode==1?pos:spatial::Vec{pos[0]-lp[0],pos[1]-lp[1],pos[2]-lp[2]});
             auto env_gains=environment::SourceFilter::Calculate(v.environment.live,distance,environmental_rolloff_);
             for(unsigned i=0;i<frames;++i){
                 if(v.phase>=end){
@@ -656,7 +687,7 @@ public:
                     sample[ch]=float(value)*v.gain*v.headroom;
                 }
                 sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
-                if(v.is3d){
+                if(v.is3d&&v.space.live.mode!=2){
                     auto send=v.environmental_filter.Apply(env_gains,sample);
                     mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];
                     if(reverb_)environmental_send[i]+=send;
@@ -673,7 +704,7 @@ public:
             auto spatial_gains=v.is3d?spatial::Calculate(v.space.live,listener_.live):spatial::Gains{};
             auto step=uint32_t(std::max(1.0f,float(v.frequency?v.frequency:v.fmt.rate)*spatial_gains.pitch));
             const auto& pos=v.space.live.position;const auto& lp=listener_.live.position;
-            auto distance=spatial::Length({pos[0]-lp[0],pos[1]-lp[1],pos[2]-lp[2]});
+            auto distance=spatial::Length(v.space.live.mode==1?pos:spatial::Vec{pos[0]-lp[0],pos[1]-lp[1],pos[2]-lp[2]});
             auto env_gains=environment::SourceFilter::Calculate(v.environment.live,distance,environmental_rolloff_);
             std::array<int16_t,128> decoded{};
             auto advance=[&]{
@@ -706,7 +737,7 @@ public:
                     sample[ch]=float(value)*v.gain*v.headroom;
                 }
                 sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
-                if(v.is3d){
+                if(v.is3d&&v.space.live.mode!=2){
                     auto send=v.environmental_filter.Apply(env_gains,sample);
                     mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];
                     if(reverb_)environmental_send[i]+=send;
