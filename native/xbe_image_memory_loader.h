@@ -13,6 +13,13 @@ struct LoadedXbeImage {
     std::uint32_t kernel_thunk = 0;
     std::uint32_t title_id = 0;
     std::size_t sections = 0;
+    // XBE startup metadata needed by a future Xbox kernel bootstrap.
+    // These fields are diagnostic only; no TLS/heap is initialized yet.
+    std::uint32_t tls_va = 0;
+    std::uint32_t stack_commit = 0;
+    std::uint32_t heap_reserve = 0;
+    std::uint32_t heap_commit = 0;
+    std::uint32_t init_flags = 0;
 };
 
 // Load image headers and section bytes only, with strict bounds checking.
