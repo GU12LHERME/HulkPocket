@@ -33,11 +33,17 @@ public:
         window_=w;
     }
     void Present(const uint8_t* bgra,unsigned w,unsigned h,unsigned pitch){
-        std::lock_guard lock(mutex_);
-        if(!window_||!bgra||!w||!h||w>4096||h>4096||pitch<uint64_t(w)*4)return;
-        if(ANativeWindow_setBuffersGeometry(window_,int(w),int(h),WINDOW_FORMAT_RGBA_8888))return;
+        if(!bgra||!w||!h||w>4096||h>4096||pitch<uint64_t(w)*4)return;
+        ANativeWindow* target=nullptr;
+        {
+            std::lock_guard lock(mutex_);target=window_;
+            if(target)ANativeWindow_acquire(target);
+        }
+        if(!target)return;
+        struct Ref {ANativeWindow* w;~Ref(){ANativeWindow_release(w);}} ref{target};
+        if(ANativeWindow_setBuffersGeometry(target,int(w),int(h),WINDOW_FORMAT_RGBA_8888))return;
         ANativeWindow_Buffer b{};
-        if(ANativeWindow_lock(window_,&b,nullptr))return;
+        if(ANativeWindow_lock(target,&b,nullptr))return;
         if(b.bits&&b.width==int(w)&&b.height==int(h)&&b.stride>=int(w)&&b.format==WINDOW_FORMAT_RGBA_8888){
             auto* dst=static_cast<uint8_t*>(b.bits);
             for(unsigned y=0;y<h;++y){
@@ -46,7 +52,7 @@ public:
                 for(unsigned x=0;x<w;++x){row[x*4]=src[x*4+2];row[x*4+1]=src[x*4+1];row[x*4+2]=src[x*4];row[x*4+3]=255;}
             }
         }
-        ANativeWindow_unlockAndPost(window_);
+        ANativeWindow_unlockAndPost(target);
     }
 #else
     void Present(const uint8_t*,unsigned,unsigned,unsigned){}

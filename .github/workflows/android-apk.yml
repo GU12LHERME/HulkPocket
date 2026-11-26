@@ -4,6 +4,8 @@ on:
     paths:
       - 'android/**'
       - '.github/workflows/android-apk.yml'
+      - 'native/**'
+      - 'third_party/xboxxberecomp/**'
   workflow_dispatch:
 permissions:
   contents: read
@@ -23,6 +25,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Fetch pinned SDK CPU context
+        run: |
+          mkdir -p android/app/src/main/cpp/sdk/cpu
+          curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o android/app/src/main/cpp/sdk/cpu/x86_context.h
+          test "$(git hash-object android/app/src/main/cpp/sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Build APK with bounded retries
         run: |
           for attempt in 1 2 3; do
@@ -32,6 +39,6 @@ jobs:
           exit 1
       - uses: actions/upload-artifact@v4
         with:
-          name: HulkPocket-0.2.0-native-bridge
+          name: HulkPocket-0.3.0-playable-preview-dev
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
