@@ -15,6 +15,8 @@ on:
       - 'native/*xbe_fault_diagnostic*'
       - 'native/*xbe_kernel*'
       - 'native/hulk_kernel*'
+      - 'third_party/xboxxberecomp/**'
+      - 'native/test_xbe_gpu_shader_foundation.cpp'
       - 'native/xbe_initial_cpu.h'
       - 'native/xbe_tls_index.h'
       - 'native/*xbe_entry_session*'
@@ -56,7 +58,7 @@ jobs:
           /tmp/bindings
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/entry-session
           /tmp/entry-session
-          g++ -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-session
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/kernel-session
           timeout 20 /tmp/kernel-session
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_fault_diagnostic.cpp native/xbox_guest_address_space.cpp -o /tmp/fault-diagnostic
           /tmp/fault-diagnostic
@@ -64,9 +66,11 @@ jobs:
           /tmp/diagnostic-cpu
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_kernel_data.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-data
           /tmp/kernel-data
+          g++ -std=c++20 -O2 -Ithird_party/xboxxberecomp native/test_xbe_gpu_shader_foundation.cpp third_party/xboxxberecomp/gpu/shaders.cpp -o /tmp/gpu-shaders
+          /tmp/gpu-shaders
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/xbe_first_entry_probe.cpp -o /tmp/xbe_first_entry_probe.o
-          g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -o /tmp/hulk-execute-diagnostic
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/hulk-execute-diagnostic
       - name: Install ARM64 tools
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu qemu-user
       - name: ARM64 tests
@@ -83,7 +87,7 @@ jobs:
           qemu-aarch64 /tmp/bindings-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/entry-session-arm64
           qemu-aarch64 /tmp/entry-session-arm64
-          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-session-arm64
+          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/kernel-session-arm64
           timeout 20 qemu-aarch64 /tmp/kernel-session-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_fault_diagnostic.cpp native/xbox_guest_address_space.cpp -o /tmp/fault-diagnostic-arm64
           qemu-aarch64 /tmp/fault-diagnostic-arm64
@@ -91,6 +95,8 @@ jobs:
           qemu-aarch64 /tmp/diagnostic-cpu-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_kernel_data.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-data-arm64
           qemu-aarch64 /tmp/kernel-data-arm64
+          aarch64-linux-gnu-g++ -static -std=c++20 -O2 -Ithird_party/xboxxberecomp native/test_xbe_gpu_shader_foundation.cpp third_party/xboxxberecomp/gpu/shaders.cpp -o /tmp/gpu-shaders-arm64
+          qemu-aarch64 /tmp/gpu-shaders-arm64
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/xbe_first_entry_probe.cpp -o /tmp/xbe_first_entry_probe.o
-          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -o /tmp/hulk-execute-diagnostic
+          aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -I/tmp/hulk-sdk native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/hulk-execute-diagnostic

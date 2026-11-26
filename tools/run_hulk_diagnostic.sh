@@ -16,10 +16,11 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     python tools/link_hulk_cached.py --sdk "$sdk" --generated "$generated" \
         --cache "$cache" --ndk-bin "$PREFIX/bin" --output "$module"
     clang++ -std=c++17 -O2 -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC \
-        -I"$sdk/runtime" native/hulk_xbe_local_diagnostic.cpp \
+        -I"$sdk/runtime" -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp \
         native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp \
         native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp \
         native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp \
+        third_party/xboxxberecomp/kernel/crypto.cpp \
         -ldl -o "$out"
     args=()
     if [[ -n "$disc" ]]; then args+=(--disc-root "$disc"); fi

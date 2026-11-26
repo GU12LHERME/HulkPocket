@@ -2,6 +2,7 @@
 #include "hulk_kernel_objects.h"
 #include <cassert>
 #include <atomic>
+#include <cstring>
 using namespace hulkpocket;
 namespace {
 XboxGuestAddressSpace* memory;
@@ -46,6 +47,24 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0 && memory->Read32(0x10e20)==4 && memory->Read32(0x10e24)==1 && memory->Read32(0x10e28)==4);
     call(*c,base,cb,24,{7,0,0,0,0x10e28});assert(c->eax==0xc0000023u);
     call(*c,base,cb,301,{0xc0000034u});assert(c->eax==2);
+    // SHA-1 of "abc" and RFC 2202 HMAC-SHA1 vector, through the guest ABI.
+    const uint8_t sha[]={0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d};
+    const uint8_t mac[]={0xb6,0x17,0x31,0x86,0x55,0x05,0x72,0x64,0xe2,0x8b,0xc0,0xb6,0xfb,0x37,0x8c,0x8e,0xf1,0x46,0xbe,0x00};
+    memory->Write(0x12000,"abc",3);
+    call(*c,base,cb,335,{0x12100});
+    call(*c,base,cb,336,{0x12100,0x12000,1});
+    call(*c,base,cb,336,{0x12100,0x12001,2});
+    call(*c,base,cb,337,{0x12100,0x12200});
+    assert(std::memcmp(base+0x12200,sha,20)==0);
+    uint8_t key[20];std::memset(key,0x0b,sizeof(key));
+    memory->Write(0x12020,key,sizeof(key));memory->Write(0x12040,"Hi There",8);
+    call(*c,base,cb,340,{0x12020,20,0x12040,3,0x12043,5,0x12220});
+    assert(std::memcmp(base+0x12220,mac,20)==0);
+    call(*c,base,cb,285,{0x12300,9,0xaabbccdd});
+    assert(memory->Read32(0x12300)==0xaabbccdd && memory->Read32(0x12304)==0xaabbccdd && memory->Read32(0x12308)==0);
+    call(*c,base,cb,269,{0x12300,12,0xaabbccdd});assert(c->eax==8);
+    call(*c,base,cb,268,{0x12000,0x12000,3});assert(c->eax==3);
+    call(*c,base,cb,268,{0x12000,0x12001,2});assert(c->eax==0);
     const char name[]="D:\\data.bin";
     memory->Write(0x10900,name,sizeof(name));
     call(*c,base,cb,289,{0x10940,0x10900});

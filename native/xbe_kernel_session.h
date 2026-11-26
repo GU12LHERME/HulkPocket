@@ -5,6 +5,7 @@
 #include "hulk_kernel_clock.h"
 #include "xbe_guest_thread_exit.h"
 #include "xbe_kernel_rtl.h"
+#include "xbe_kernel_crypto.h"
 #include "xbe_kernel_virtual_memory.h"
 #include "xbe_kernel_physical_memory.h"
 #include "xbe_kernel_files.h"
@@ -370,6 +371,30 @@ private:
                 Check(cpu,1);auto addr=Arg(cpu,0);
                 auto size=physical_.Size(addr);
                 Ret(cpu,1,size?size:virtual_.AllocationSize(addr));return;
+            }
+            case 335: Check(cpu,1); XbeKernelCrypto(mem_).Init(Arg(cpu,0)); Ret(cpu,1,0);return;
+            case 336: Check(cpu,3); XbeKernelCrypto(mem_).Update(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)); Ret(cpu,3,0);return;
+            case 337: Check(cpu,2); XbeKernelCrypto(mem_).Final(Arg(cpu,0),Arg(cpu,1)); Ret(cpu,2,0);return;
+            case 340: Check(cpu,7);
+                XbeKernelCrypto(mem_).Hmac(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6));
+                Ret(cpu,7,0);return;
+            case 268: case 269: case 285: {
+                Check(cpu,3);
+                const auto dst=Arg(cpu,0);
+                const auto n=ordinal==268?Arg(cpu,2):Arg(cpu,1)&~3u;
+                if(n>64u*1024u*1024u || !mem_.IsCommitted(dst,n))
+                    throw std::runtime_error("Invalid RTL memory range");
+                uint32_t done=0;
+                if(ordinal==268) {
+                    auto src=Arg(cpu,1);
+                    if(!mem_.IsCommitted(src,n))throw std::runtime_error("Invalid RTL compare buffer");
+                    while(done<n && mem_.Base()[dst+done]==mem_.Base()[src+done])++done;
+                } else if(ordinal==269) {
+                    while(done<n && mem_.Read32(dst+done)==Arg(cpu,2))done+=4;
+                } else {
+                    for(;done<n;done+=4)mem_.Write32(dst+done,Arg(cpu,2));
+                }
+                Ret(cpu,3,ordinal==285?0:done);return;
             }
             case 291: case 277: case 294: Critical(cpu,ordinal,lock); return;
             case 289: Check(cpu,2); InitGuestAnsiString(mem_,Arg(cpu,0),Arg(cpu,1)); Ret(cpu,2,0); return;
