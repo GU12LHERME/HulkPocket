@@ -74,11 +74,21 @@ public:
             gpu::TextureDesc d{};
             if(!gpu::Describe(s.textures[i],d)||d.cube||d.depth!=1)
                 throw std::logic_error("Vulkan bridge requires 2D texture");
-            if(uint64_t(d.data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&
-               uint64_t(address_)<uint64_t(d.data)+gpu::TotalSize(d))
-                throw std::logic_error("Vulkan render target alias needs synchronization");
-            uint32_t palette=s.palettes[i]?gpu::PhysicalResourceAddress(gpu::ReadGuest32(uint64_t(s.palettes[i])+4)):0;
-            core_.UploadGuestTexture(s.textures[i],i,palette);
+            auto bytes=gpu::TotalSize(d);
+            if(depth_header_&&uint64_t(d.data)<uint64_t(depth_address_)+uint64_t(depth_pitch_)*core_.H&&
+               uint64_t(depth_address_)<uint64_t(d.data)+bytes)
+                throw std::logic_error("Vulkan depth texture alias needs depth translation");
+            bool alias=uint64_t(d.data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&
+                       uint64_t(address_)<uint64_t(d.data)+bytes;
+            if(alias){
+                if(!d.linear||d.format!=0x12||d.data!=address_||d.pitch!=pitch_||
+                   d.width!=core_.W||d.height!=core_.H||d.levels!=1||s.palettes[i])
+                    throw std::logic_error("Unsupported Vulkan partial or reinterpreted target texture alias");
+                core_.SnapshotColorTexture(i);
+            }else{
+                uint32_t palette=s.palettes[i]?gpu::PhysicalResourceAddress(gpu::ReadGuest32(uint64_t(s.palettes[i])+4)):0;
+                core_.UploadGuestTexture(s.textures[i],i,palette);
+            }
             core_.SetSampler(i,s);
         }
         core_.Draw({},false,false,false,false,&s,false,&a,true,true,true);

@@ -437,6 +437,36 @@ int main(int argc,char** argv){
                 call("D3DDevice_CopyRects",{copy_surface,copy_rect,1,copy_surface,copy_point});
                 if(bridge_mem.Read32(0x80116004)!=0xff010203||bridge_mem.Read32(0x80116008)!=0xff040506)
                     throw std::runtime_error("Overlapping Vulkan copy corrupted source");
+                // Active render target as a 64x64 linear texture: GPU
+                // snapshot must see newest color, not stale guest memory.
+                auto feedback=bridge.Snapshot();
+                feedback.rs[kRsStencilEnable]=0;
+                feedback.textures={surface,0,0,0};
+                feedback.ps=std::make_shared<gpu::PixelShader>();
+                feedback.ps->def[8]=8;feedback.ps->def[9]=0x1800;
+                feedback.rs[kRsPsTextureModes]=1;
+                feedback.simple[kMColorWriteEnable/4]=0x01010101;
+                feedback.tss[0][kTssMinFilter]=feedback.tss[0][kTssMagFilter]=1;
+                feedback.tss[0][kTssAddressU]=feedback.tss[0][kTssAddressV]=3;
+                const Vertex sample[]={{-.75f,-.75f,.5f,0xffffffff,32.5f,32.5f},
+                    {.75f,-.75f,.5f,0xffffffff,32.5f,32.5f},{0,.75f,.5f,0xffffffff,32.5f,32.5f}};
+                bridge_mem.Write(0x80114000,sample,sizeof(sample));
+                call("D3DDevice_Clear",{0,0,0xf0,0xff123456,std::bit_cast<uint32_t>(1.f),0});
+                backend.Draw(feedback,5,0,3,nullptr);
+                Expect("render target GPU snapshot",backend.ReadPixel(32,32),{18,52,86,255});
+                uint32_t source_rect[4]={30,30,34,34};bridge_mem.Write(rect,source_rect,sizeof(source_rect));
+                call("D3DDevice_Clear",{1,rect,0xf0,0xffa04020,std::bit_cast<uint32_t>(1.f),0});
+                backend.Draw(feedback,5,0,3,nullptr);
+                Expect("refreshed target texture snapshot",backend.ReadPixel(32,40),{160,64,32,255});
+                Expect("snapshot preserves outside",backend.ReadPixel(0,0),{18,52,86,255});
+                // Switching back to an ordinary guest texture must invalidate
+                // any CPU cache entries from before the GPU snapshot.
+                feedback.textures[0]=tex0;
+                const Vertex uv[]={{-.75f,-.75f,.5f,0xffffffff,.5f,.5f},
+                    {.75f,-.75f,.5f,0xffffffff,.5f,.5f},{0,.75f,.5f,0xffffffff,.5f,.5f}};
+                bridge_mem.Write(0x80114000,uv,sizeof(uv));
+                backend.Draw(feedback,5,0,3,nullptr);
+                Expect("ordinary texture after framebuffer snapshot",backend.ReadPixel(32,32),{255,128,64,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

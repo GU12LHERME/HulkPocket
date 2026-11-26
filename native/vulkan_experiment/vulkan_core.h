@@ -298,6 +298,35 @@ struct VulkanCore{
         if(stage_samplers[stage])vkDestroySampler(dev,stage_samplers[stage],nullptr);
         stage_samplers[stage]=next;stage_sampler_keys[stage]=key;
     }
+    // Snapshot the finished color image into a separate sampled image.
+    // The next draw never reads and writes the same Vulkan attachment.
+    void SnapshotColorTexture(unsigned stage){
+        if(stage>=textures.size()||!frame_valid)throw std::invalid_argument("Invalid framebuffer texture snapshot");
+        bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1;
+        auto& texture=textures[stage];
+        if(resize){
+            Destroy(texture);
+            CreateImage(texture,W,H,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,1);
+            tex_width[stage]=W;tex_height[stage]=H;tex_levels[stage]=1;
+        }
+        tex_rect[stage]=true;
+        // GPU copies are not represented by the CPU decoded-pixel cache.
+        last_pixels[stage].clear();
+        Begin();
+        Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkImageCopy copy{};copy.srcSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+        copy.dstSubresource=copy.srcSubresource;copy.extent={W,H,1};
+        vkCmdCopyImage(cmd,target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                   VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        Submit();
+        VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
+        wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
+        vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+    }
     void UploadGuestTexture(uint32_t header,unsigned stage=0,uint32_t palette=0){
         if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
         gpu::TextureDesc desc{};if(!gpu::Describe(header,desc))throw std::invalid_argument("Invalid Xbox texture header");
