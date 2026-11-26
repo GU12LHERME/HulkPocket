@@ -1,0 +1,5 @@
+# DPC and timer diagnostic runtime
+
+RP6 execution reached KeInitializeDpc (ordinal 107) after shutdown notification registration succeeded. This batch implements checked KDPC and KTIMER layouts, a bounded queue, one-shot and periodic timers, cancellation, direct events and pointer waits. Reference: TGP482/XboxXBERecomp 767a81837fba2d86913f6af81a10b33661d35518 runtime/kernel/xboxkrnl.cpp and objects.cpp.
+
+DPC callbacks execute cooperatively at kernel safe points with a copied guest CPU context, checked stack frame and validated stdcall cleanup. Timers are serviced during kernel calls and supported waits. No detached host worker or full IRQL/preemption/APC semantics; callbacks cannot run during guest CPU-only busy loops. Alertable waits and wait handoff explicitly fail. Kernel waits wake on timer deadlines. A failed guest worker stops the session instead of leaving other workers indefinitely blocked. Tests exercise real nested callback argument delivery, direct event signaling/consumption, timer expiration and cancellation through guest ABI. The cached game objects remain unchanged.

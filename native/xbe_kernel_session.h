@@ -13,6 +13,7 @@
 #include "xbe_graphics_boundary.h"
 #include "xbe_kernel_calendar.h"
 #include <map>
+#include <deque>
 #include <chrono>
 #include <array>
 #include <condition_variable>
@@ -50,6 +51,13 @@ private:
     uint32_t next_event_=0x2000;
     std::map<uint32_t,uint32_t> critical_;
     std::map<uint32_t,uint32_t> shutdown_notifications_;
+    struct Timer {std::chrono::steady_clock::time_point due;uint32_t dpc;uint32_t period;};
+    std::map<uint32_t,Timer> timers_;
+    std::map<uint32_t,uint32_t> timer_types_;
+    std::map<uint32_t,uint32_t> pointer_events_;
+    std::map<uint32_t,uint32_t> dpc_routines_;
+    std::deque<uint32_t> dpc_queue_;
+    bool dpc_running_=false;
     uint32_t cache_pages_=16;
     const std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
     bool stopping_=false;
@@ -150,7 +158,7 @@ private:
             std::lock_guard<std::mutex> lock(lock_);
             w.finished=true;
             mem_.Write32(w.pcr+0x404,1); // dispatcher SignalState
-            if(result && !stopping_) worker_failure_=result;
+            if(result && !stopping_){worker_failure_=result;stopping_=true;}
             cv_.notify_all();
         });
         Output(out,handle); Output(idout,id);
@@ -172,6 +180,85 @@ private:
             ticks>Now100ns()?uint64_t(ticks-Now100ns()):0;
         return Steady::now()+std::chrono::nanoseconds(std::min<uint64_t>(delta,150000000)*100);
     }
+    void InitDispatcher(uint32_t body,uint32_t size,uint32_t type,uint32_t signal){
+        if(!body||body%4||!mem_.IsCommitted(body,size))throw std::runtime_error("Invalid dispatcher object");
+        std::array<uint8_t,40> zero{};
+        mem_.Write(body,zero.data(),size);
+        mem_.Write32(body,type|((size/4)<<16));
+        mem_.Write32(body+4,signal);mem_.Write32(body+8,body+8);mem_.Write32(body+12,body+8);
+    }
+    bool ValidDpc(uint32_t d){
+        return dpc_routines_.count(d)&&mem_.IsCommitted(d,28)&&
+            (mem_.Read32(d)&0xffffu)==19&&mem_.Read32(d+12)==dpc_routines_.at(d);
+    }
+    bool QueueDpc(uint32_t d,uint32_t a,uint32_t b){
+        if(!ValidDpc(d))throw std::runtime_error("Invalid initialized DPC");
+        if(mem_.Read32(d)&0x10000u)return false;
+        if(dpc_queue_.size()>=256)throw std::runtime_error("DPC queue capacity exhausted");
+        mem_.Write32(d,mem_.Read32(d)|0x10000u);
+        mem_.Write32(d+20,a);mem_.Write32(d+24,b);
+        dpc_queue_.push_back(d);cv_.notify_all();return true;
+    }
+    void ServiceTimers(){
+        auto now=Steady::now();
+        for(auto it=timers_.begin();it!=timers_.end();){
+            auto body=it->first;auto& timer=it->second;
+            if(timer.due>now){++it;continue;}
+            if(!mem_.IsCommitted(body,40))throw std::runtime_error("Invalid active timer storage");
+            mem_.Write32(body+4,1);
+            if(timer.dpc){
+                auto ticks=uint64_t(Now100ns());
+                QueueDpc(timer.dpc,uint32_t(ticks),uint32_t(ticks>>32));
+            }
+            cv_.notify_all();
+            if(timer.period){
+                timer.due=now+std::chrono::milliseconds(timer.period);++it;
+            }else{
+                mem_.Write32(body,mem_.Read32(body)&~0x01000000u);
+                it=timers_.erase(it);
+            }
+        }
+    }
+    Steady::time_point NextTimer(Steady::time_point deadline){
+        for(const auto& item:timers_)deadline=std::min(deadline,item.second.due);
+        return deadline;
+    }
+    // Cooperative DPC delivery: execute one guest callback at a kernel safe
+    // point, on the current guest context's stack, with isolated registers.
+    // This is not a separate Xbox interrupt thread or an IRQL emulation.
+    void ServiceDpc(X86Context& cpu,std::unique_lock<std::mutex>& lock){
+        ServiceTimers();
+        if(dpc_running_||dpc_queue_.empty())return;
+        auto d=dpc_queue_.front();
+        if(!ValidDpc(d))throw std::runtime_error("Invalid queued DPC storage");
+        auto routine=mem_.Read32(d+12),context=mem_.Read32(d+16),
+            a=mem_.Read32(d+20),b=mem_.Read32(d+24);
+        if(!entry_||cpu.esp<20||!mem_.IsCommitted(cpu.esp-20,20))
+            throw std::runtime_error("No DPC callback stack");
+        dpc_queue_.pop_front();mem_.Write32(d,mem_.Read32(d)&~0x10000u);
+        X86Context nested=cpu;
+        nested.esp-=20;
+        const uint32_t args[]={0,d,context,a,b};
+        mem_.Write(nested.esp,args,sizeof(args));
+        dpc_running_=true;
+        auto old_ordinal=fault_ordinal,old_return=fault_return,old_stack=fault_stack;
+        lock.unlock();
+        int status=0;
+        try{status=entry_(&nested,mem_.Base(),routine,Dispatch);}
+        catch(...){lock.lock();dpc_running_=false;cv_.notify_all();throw;}
+        lock.lock();dpc_running_=false;cv_.notify_all();
+        fault_ordinal=old_ordinal;fault_return=old_return;fault_stack=old_stack;
+        if(status||nested.esp!=cpu.esp)throw std::runtime_error("DPC guest callback failed or violated stack ABI");
+    }
+    bool PointerObject(uint32_t body){
+        if(!body||!mem_.IsCommitted(body,16))return false;
+        uint32_t header=mem_.Read32(body),type=header&255u;
+        if(timer_types_.count(body))return type==8+timer_types_.at(body);
+        if(pointer_events_.count(body))return type==pointer_events_.at(body);
+        for(const auto& item:events_)if(item.second.body==body)return true;
+        for(size_t i=0;i<count_;++i)if(workers_[i].pcr+0x400==body)return true;
+        return false;
+    }
     uint32_t Body(uint32_t h) {
         auto it=events_.find(h);
         if(it!=events_.end()) return it->second.body;
@@ -183,14 +270,16 @@ private:
                       std::unique_lock<std::mutex>& lock) {
         if(!body) return 0xc0000008u;
         const auto deadline=Deadline(timeout);
-        const auto ready=[&]{return stopping_ || mem_.Read32(body+4)!=0;};
-        do {
-            if(!cv_.wait_until(lock,deadline,ready)) return 0x102;
-            Pause(cpu,lock);
-        } while(!mem_.Read32(body+4));
+        for(;;){
+            Pause(cpu,lock);ServiceDpc(cpu,lock);
+            if(mem_.Read32(body+4))break;
+            if(Steady::now()>=deadline)return 0x102;
+            if(!dpc_running_&&!dpc_queue_.empty())continue;
+            cv_.wait_until(lock,NextTimer(deadline));
+        }
         // Synchronization event is consumed by exactly one waiter.
         const auto type=mem_.Read32(body)&255u;
-        if(type==1) mem_.Write32(body+4,0);
+        if(type==1||type==9) mem_.Write32(body+4,0);
         else if(type==5) mem_.Write32(body+4,mem_.Read32(body+4)-1);
         return 0;
     }
@@ -257,6 +346,85 @@ private:
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case 107: {
+                Check(cpu,3);auto d=Arg(cpu,0),routine=Arg(cpu,1),context=Arg(cpu,2);
+                if(!d||d%4||!mem_.IsCommitted(d,28)||!routine||!mem_.IsCommitted(routine,1))
+                    throw std::runtime_error("Invalid DPC initialization");
+                if(dpc_routines_.count(d)&&(mem_.Read32(d)&0x10000u))
+                    throw std::runtime_error("Reinitializing queued DPC");
+                if(dpc_routines_.size()>=256&&!dpc_routines_.count(d))
+                    throw std::runtime_error("DPC capacity exhausted");
+                std::array<uint8_t,28> zero{};mem_.Write(d,zero.data(),zero.size());
+                mem_.Write32(d,19);mem_.Write32(d+12,routine);mem_.Write32(d+16,context);
+                dpc_routines_[d]=routine;
+                std::fprintf(stderr,"Initialized DPC %08X routine=%08X context=%08X\n",d,routine,context);
+                Ret(cpu,3,0);return;
+            }
+            case 119: {
+                Check(cpu,3);auto queued=QueueDpc(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2));
+                Ret(cpu,3,queued);return;
+            }
+            case 137: {
+                Check(cpu,1);auto d=Arg(cpu,0);
+                if(!ValidDpc(d))throw std::runtime_error("Invalid DPC removal");
+                auto it=std::find(dpc_queue_.begin(),dpc_queue_.end(),d);
+                bool queued=it!=dpc_queue_.end();
+                if(queued){dpc_queue_.erase(it);mem_.Write32(d,mem_.Read32(d)&~0x10000u);}
+                Ret(cpu,1,queued);return;
+            }
+            case 113: {
+                Check(cpu,2);auto body=Arg(cpu,0),type=Arg(cpu,1);
+                if(type>1||timers_.count(body))throw std::runtime_error("Invalid timer initialization");
+                if(timer_types_.size()>=256&&!timer_types_.count(body))throw std::runtime_error("Timer capacity exhausted");
+                InitDispatcher(body,40,8+type,0);timer_types_[body]=type;
+                Ret(cpu,2,0);return;
+            }
+            case 149: case 150: {
+                unsigned n=ordinal==149?4:5;Check(cpu,n);
+                auto body=Arg(cpu,0),dpc=Arg(cpu,n-1),period=ordinal==150?Arg(cpu,3):0;
+                if(!timer_types_.count(body)||!PointerObject(body)||(dpc&&!ValidDpc(dpc))||period>86400000)
+                    throw std::runtime_error("Invalid timer scheduling");
+                uint64_t raw=uint64_t(Arg(cpu,1))|(uint64_t(Arg(cpu,2))<<32);
+                int64_t ticks;std::memcpy(&ticks,&raw,8);
+                auto system_now=Now100ns();
+                uint64_t delta=ticks<0?uint64_t(-(ticks+1))+1:ticks>system_now?uint64_t(ticks-system_now):0;
+                if(delta>864000000000ull)throw std::runtime_error("Timer due exceeds diagnostic budget");
+                bool previous=timers_.count(body);
+                auto due=Steady::now()+std::chrono::nanoseconds(delta*100);
+                timers_[body]={due,dpc,period};
+                mem_.Write32(body,mem_.Read32(body)|0x01000000u);mem_.Write32(body+4,0);
+                mem_.Write(body+16,&raw,8);mem_.Write32(body+32,dpc);mem_.Write32(body+36,period);
+                cv_.notify_all();Ret(cpu,n,previous);return;
+            }
+            case 97: {
+                Check(cpu,1);auto body=Arg(cpu,0);
+                if(!timer_types_.count(body)||!PointerObject(body))throw std::runtime_error("Invalid timer cancellation");
+                bool previous=timers_.erase(body)!=0;
+                mem_.Write32(body,mem_.Read32(body)&~0x01000000u);
+                cv_.notify_all();Ret(cpu,1,previous);return;
+            }
+            case 108: {
+                Check(cpu,3);auto body=Arg(cpu,0),type=Arg(cpu,1);
+                if(type>1)throw std::runtime_error("Invalid event type");
+                if(pointer_events_.size()>=256&&!pointer_events_.count(body))throw std::runtime_error("Event capacity exhausted");
+                InitDispatcher(body,16,type,(Arg(cpu,2)&255u)?1:0);
+                pointer_events_[body]=type;Ret(cpu,3,0);return;
+            }
+            case 145: case 138: {
+                unsigned n=ordinal==145?3:1;Check(cpu,n);auto body=Arg(cpu,0);
+                if(!PointerObject(body)||(mem_.Read32(body)&255u)>1)
+                    throw std::runtime_error("Invalid direct event object");
+                if(ordinal==145&&(Arg(cpu,2)&255u))throw std::runtime_error("KeSetEvent wait handoff not implemented");
+                auto old=mem_.Read32(body+4);mem_.Write32(body+4,ordinal==145?1:0);
+                cv_.notify_all();Ret(cpu,n,old);return;
+            }
+            case 159: {
+                Check(cpu,5);
+                if(Arg(cpu,3)&255u)throw std::runtime_error("Alertable pointer wait not implemented");
+                auto body=Arg(cpu,0);
+                if(!PointerObject(body))throw std::runtime_error("Unsupported dispatcher pointer wait");
+                auto result=WaitBody(cpu,body,Arg(cpu,4),lock);Ret(cpu,5,result);return;
+            }
             case kGraphicsCreate: {
                 Check(cpu,6);
                 auto pp=Arg(cpu,4);
@@ -459,7 +627,12 @@ private:
                 Check(cpu,3);
                 if((Arg(cpu,1)&255u)||!Arg(cpu,2)) throw std::runtime_error("Unsupported alertable delay or missing interval");
                 auto deadline=Deadline(Arg(cpu,2));
-                cv_.wait_until(lock,deadline,[&]{return stopping_;});
+                do {
+                    Pause(cpu,lock);ServiceDpc(cpu,lock);
+                    if(Steady::now()>=deadline)break;
+                    if(!dpc_running_&&!dpc_queue_.empty())continue;
+                    cv_.wait_until(lock,NextTimer(deadline));
+                }while(true);
                 Pause(cpu,lock); Ret(cpu,3,0); return;
             }
             case 189: {
@@ -528,8 +701,11 @@ private:
                                 std::all_of(bodies.begin(),bodies.end(),signal);
                 };
                 do {
-                    if(!cv_.wait_until(lock,deadline,ready)){Ret(cpu,6,0x102);return;}
-                    Pause(cpu,lock);
+                    Pause(cpu,lock);ServiceDpc(cpu,lock);
+                    if(ready())break;
+                    if(Steady::now()>=deadline){Ret(cpu,6,0x102);return;}
+                    if(!dpc_running_&&!dpc_queue_.empty())continue;
+                    cv_.wait_until(lock,NextTimer(deadline));
                 }while(!ready());
                 auto consume=[&](uint32_t body){
                     auto type=mem_.Read32(body)&255u;
@@ -632,6 +808,7 @@ public:
         std::unique_lock<std::mutex> lock(active_->lock_);
         if(active_->mem_.IsCommitted(cpu.esp,4)) fault_return=static_cast<sig_atomic_t>(active_->mem_.Read32(cpu.esp));
         active_->Call(cpu,ordinal,lock);
+        active_->ServiceDpc(cpu,lock);
     }
     int Run(Entry entry,X86Context& cpu,uint32_t address) {
         if(!entry || active_ || entry_) throw std::runtime_error("Invalid kernel session");
