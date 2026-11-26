@@ -40,6 +40,11 @@ struct VulkanCore{
     Image target,depth;
     std::array<Image,4> textures{};
     std::array<uint32_t,4> tex_width{},tex_height{};
+    std::array<bool,4> tex_rect{};
+    std::array<std::vector<uint8_t>,4> last_pixels{};
+    std::array<VkSampler,4> stage_samplers{};
+    std::array<std::array<uint32_t,4>,4> stage_sampler_keys{};
+    VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
     VkRenderPass pass{},load_pass{};bool frame_valid=false;VkFramebuffer fb{};VkSampler sampler{};
@@ -56,7 +61,9 @@ struct VulkanCore{
             if(descriptors)vkDestroyDescriptorPool(dev,descriptors,nullptr);
             if(pipeline_layout)vkDestroyPipelineLayout(dev,pipeline_layout,nullptr);
             if(set_layout)vkDestroyDescriptorSetLayout(dev,set_layout,nullptr);
+            for(auto s:stage_samplers)if(s)vkDestroySampler(dev,s,nullptr);
             if(sampler)vkDestroySampler(dev,sampler,nullptr);
+            if(pipeline_cache)vkDestroyPipelineCache(dev,pipeline_cache,nullptr);
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
             if(load_pass)vkDestroyRenderPass(dev,load_pass,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
@@ -192,6 +199,8 @@ struct VulkanCore{
         sci.addressModeU=sci.addressModeV=sci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         sci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;sci.maxLod=0;
         Check(vkCreateSampler(dev,&sci,nullptr,&sampler),"sampler");
+        VkPipelineCacheCreateInfo pci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+        Check(vkCreatePipelineCache(dev,&pci,nullptr,&pipeline_cache),"pipeline cache");
         VkAttachmentDescription ad{};ad.format=Format;ad.samples=VK_SAMPLE_COUNT_1_BIT;
         ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
         ad.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;ad.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -243,12 +252,33 @@ struct VulkanCore{
         vkUpdateDescriptorSets(dev,writes.size(),writes.data(),0,nullptr);
     }
     // Synchronous resource replacement: previous draws have completed.
+    void SetSampler(unsigned stage,const gpu::State& s){
+        if(stage>=4)throw std::invalid_argument("Invalid sampler stage");
+        const auto& t=s.tss[stage];
+        std::array<uint32_t,4> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter]};
+        if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
+        auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
+        auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
+        VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        ci.addressModeU=address(key[0]);ci.addressModeV=address(key[1]);ci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;ci.maxLod=0;
+        VkSampler next{};Check(vkCreateSampler(dev,&ci,nullptr,&next),"guest sampler");
+        VkDescriptorImageInfo im{next,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
+        VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=6+stage;
+        wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER;wr.pImageInfo=&im;
+        vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+        if(stage_samplers[stage])vkDestroySampler(dev,stage_samplers[stage],nullptr);
+        stage_samplers[stage]=next;stage_sampler_keys[stage]=key;
+    }
     void UploadGuestTexture(uint32_t header,unsigned stage=0,uint32_t palette=0){
         if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
+        gpu::TextureDesc desc{};if(!gpu::Describe(header,desc))throw std::invalid_argument("Invalid Xbox texture header");
         auto pixels=hulkpocket::vkexp::GuestTexture(header,palette);
         if(pixels.width>limits.maxImageDimension2D||pixels.height>limits.maxImageDimension2D||
            pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4)
             throw std::invalid_argument("Invalid Vulkan texture extent");
+        tex_rect[stage]=desc.linear;
+        if(tex_width[stage]==pixels.width&&tex_height[stage]==pixels.height&&last_pixels[stage]==pixels.rgba)return;
         EnsureBuffer(staging,pixels.rgba.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         std::memcpy(staging.data,pixels.rgba.data(),pixels.rgba.size());
         auto& texture=textures[stage];
@@ -270,6 +300,7 @@ struct VulkanCore{
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
         wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+        last_pixels[stage]=std::move(pixels.rgba);
     }
     VkShaderModule Module(const std::filesystem::path& path){
         std::ifstream f(path,std::ios::binary|std::ios::ate);
@@ -291,7 +322,7 @@ struct VulkanCore{
         if(dynamic){
             if(!override_state||!guest)throw std::invalid_argument("Missing dynamic draw state");
             gpu::TexInfo tex[4]{};
-            for(unsigned i=0;i<4;++i)if(override_state->textures[i])tex[i].kind=gpu::kTex2D;
+            for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=gpu::kTex2D;tex[i].rect=tex_rect[i];}
             vs=Module(shaders.Vertex(*override_state,*guest));
             fs=Module(shaders.Pixel(*override_state,tex));
         }else{
@@ -323,7 +354,7 @@ struct VulkanCore{
         auto& cb=raster.color;
         VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&cb;
         VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};gp.stageCount=2;gp.pStages=stages;gp.pVertexInputState=&vi;gp.pInputAssemblyState=&ia;gp.pViewportState=&vps;gp.pRasterizationState=&rs;gp.pMultisampleState=&ms;gp.pColorBlendState=&bs;gp.pDepthStencilState=&raster.depth;gp.layout=pipeline_layout;gp.renderPass=pass;
-        Check(vkCreateGraphicsPipelines(dev,VK_NULL_HANDLE,1,&gp,nullptr,&pipeline),"graphics pipeline");
+        Check(vkCreateGraphicsPipelines(dev,pipeline_cache,1,&gp,nullptr,&pipeline),"graphics pipeline");
     }
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;

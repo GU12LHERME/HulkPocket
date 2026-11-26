@@ -1101,14 +1101,15 @@ private:
                 // Capture actual shader object, viewport, texture bindings and
                 // streams before draining the scratch buffer; a pending packet
                 // must not hide the rest of this first-draw evidence.
-                for(auto off:{0x8u,0x1cu,0x784u,0x794u,0x7a0u,0x948u,0x95cu,0x960u,0xee0u,0xee4u,0xee8u,0xeecu,0xef0u,0xef4u,0xef8u,0xefcu})
+                const bool full_capture=!live.compact_capture||live.detailed_draws||!live.diagnostic_draw_returns;
+                if(full_capture)for(auto off:{0x8u,0x1cu,0x784u,0x794u,0x7a0u,0x948u,0x95cu,0x960u,0xee0u,0xee4u,0xee8u,0xeecu,0xef0u,0xef4u,0xef8u,0xefcu})
                     std::fprintf(stderr,"D3D DEVICE +%04X=%08X\n",off,mem_.Read32(dev+off));
-                for(auto off:{0x784u,0x794u}){
+                if(full_capture)for(auto off:{0x784u,0x794u}){
                     auto p=mem_.Read32(dev+off);
                     if(p&&mem_.IsCommitted(p,off==0x794?0x114:64))
                         for(unsigned i=0;i<(off==0x794?69u:16u);++i)std::fprintf(stderr,"D3D SHADER %04X +%02X=%08X\n",off,4*i,mem_.Read32(p+4*i));
                 }
-                for(unsigned st=0;st<4;++st){
+                if(full_capture)for(unsigned st=0;st<4;++st){
                     auto p=mem_.Read32(dev+0xf88+4*st);
                     std::fprintf(stderr,"D3D TEXTURE %u=%08X palette=%08X\n",st,p,mem_.Read32(dev+0xf98+4*st));
                     if(p&&mem_.IsCommitted(p,20))
@@ -1116,14 +1117,14 @@ private:
                 }
                 live.bridge.SyncGuestDrawTables(cpu.eax,cpu.ecx,cpu.edx);
                 auto state=live.bridge.Snapshot();
-                for(unsigned i=0;i<16;++i){
+                if(full_capture)for(unsigned i=0;i<16;++i){
                     auto st=state.streams[i];
                     std::fprintf(stderr,"D3D STREAM %u vb=%08X stride=%u\n",i,st.vb,st.stride);
                     if(st.vb)for(unsigned j=0;j<3;++j)std::fprintf(stderr,"D3D VB %u +%02X=%08X\n",i,j*4,mem_.Read32(st.vb+j*4));
                 }
-                for(unsigned i=gpu::kRsDeferredFirst;i<gpu::kRsMax;++i)
+                if(full_capture)for(unsigned i=gpu::kRsDeferredFirst;i<gpu::kRsMax;++i)
                     std::fprintf(stderr,"D3D DRAW RS %u=%08X\n",i,state.rs[i]);
-                for(unsigned st=0;st<4;++st)for(unsigned i=0;i<gpu::kTssCount;++i)
+                if(full_capture)for(unsigned st=0;st<4;++st)for(unsigned i=0;i<gpu::kTssCount;++i)
                     std::fprintf(stderr,"D3D DRAW TSS %u %u=%08X\n",st,i,state.tss[st][i]);
                 DrainLivePush(live);
                 auto fvf=live.bridge.SyncFixedDiffuseShader(dev);
@@ -1132,7 +1133,7 @@ private:
                     indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0);
                 std::fprintf(stderr,"D3D ORIGINAL GEOMETRY ASSEMBLED: fvf=%08X vertices=%u (not rendered)\n",fvf,vertices);
                 auto synced=live.bridge.Snapshot();
-                for(auto slot:{2,3,256}){
+                if(full_capture)for(auto slot:{2,3,256}){
                     std::fprintf(stderr,"D3D DRAW MATRIX %u",slot);
                     for(auto v:synced.transforms[slot])std::fprintf(stderr," %08X",std::bit_cast<uint32_t>(v));
                     std::fprintf(stderr,"\n");
@@ -1182,6 +1183,7 @@ private:
                     std::vector<uint8_t> before;
                     auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
                     if(capture){
+                        if(has_texture)std::fprintf(stderr,"D3D TEXTURE CAPTURE format=%02X width=%u height=%u pitch=%u levels=%u linear=%u\n",tex.format,tex.width,tex.height,tex.pitch,tex.levels,unsigned(tex.linear));
                         live.backend.ReadbackColor(synced.rt);
                         before.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
                     }

@@ -63,8 +63,12 @@ public:
         if(!gpu::Assemble(s,prim,start,count,indices,a))return;
         for(unsigned i=0;i<4;++i)if(s.textures[i]){
             gpu::TextureDesc d{};
-            if(!gpu::Describe(s.textures[i],d)||d.linear||d.levels!=1)
-                throw std::logic_error("Vulkan bridge requires single-level swizzled/BC texture");
+            if(!gpu::Describe(s.textures[i],d)||d.cube||d.depth!=1||d.levels!=1)
+                throw std::logic_error("Vulkan bridge requires single-level 2D texture");
+            if(uint64_t(d.data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&
+               uint64_t(address_)<uint64_t(d.data)+gpu::TotalSize(d))
+                throw std::logic_error("Vulkan render target alias needs synchronization");
+            core_.SetSampler(i,s);
             uint32_t palette=s.palettes[i]?gpu::PhysicalResourceAddress(gpu::ReadGuest32(uint64_t(s.palettes[i])+4)):0;
             core_.UploadGuestTexture(s.textures[i],i,palette);
         }

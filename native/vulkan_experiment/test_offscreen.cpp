@@ -127,10 +127,36 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("explicit new frame clears old color",f.Pixel(32,32),{0,0,0,255});
         Expect("translated geometry on new frame",f.Pixel(52,32),{0,255,0,255});
+        // Exact format/size words from the first RP6 Vulkan game session.
+        // Synthetic colored halves reveal wrong normalized-vs-texel sampling.
+        memory.Commit(0x80200000,0x130000);
+        memory.Write32(tex+4,0x200000);memory.Write32(tex+12,0x00011e29);memory.Write32(tex+16,0x271df27f);
+        std::vector<uint32_t> movie(640*480);
+        for(unsigned y=0;y<480;++y)for(unsigned x=0;x<640;++x)movie[y*640+x]=x<320?0x0000ff00:0x00ff0000;
+        memory.Write(0x80200000,movie.data(),movie.size()*4);
+        guest_state.vs_handle=0x142;guest_state.streams[0].stride=sizeof(Vertex);
+        guest_state.transforms[256][12]=0;guest_state.rs[kRsZEnable]=0;
+        guest_state.textures[0]=tex;
+        auto& stage=guest_state.tss[0];stage[kTssColorOp]=stage[kTssAlphaOp]=4;
+        stage[kTssColorArg1]=stage[kTssAlphaArg1]=2;stage[kTssColorArg2]=stage[kTssAlphaArg2]=0;
+        stage[kTssResultArg]=1;stage[kTssAddressU]=stage[kTssAddressV]=3;
+        stage[kTssMinFilter]=stage[kTssMagFilter]=2;
+        const Vertex screen[]={{-.75f,-.75f,.5f,0xffffffff,0,480},{.75f,-.75f,.5f,0xffffffff,640,480},
+                               {.75f,.75f,.5f,0xffffffff,640,0},{-.75f,.75f,.5f,0xffffffff,0,0}};
+        memory.Write(0x80100100,screen,sizeof(screen));
+        if(!GuestDraw(guest_state,8,0,4,0,assembled))throw std::runtime_error("Linear movie assembly failed");
+        f.UploadGuestTexture(tex);f.SetSampler(0,guest_state);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("RP6 linear XRGB left",f.Pixel(16,32),{0,255,0,255});
+        Expect("RP6 linear XRGB right",f.Pixel(48,32),{255,0,0,255});
+        std::fill(movie.begin(),movie.end(),0x000000ff);
+        memory.Write(0x80200000,movie.data(),movie.size()*4);
+        f.UploadGuestTexture(tex);f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("updated movie same address",f.Pixel(16,32),{0,0,255,255});
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");
-        memory.Write32(tex+4,0x10ffff);bad=false;
+        memory.Write32(tex+12,0x01110620);memory.Write32(tex+16,0);memory.Write32(tex+4,0x10ffff);bad=false;
         try{f.UploadGuestTexture(tex);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted texture span accepted");
         }
