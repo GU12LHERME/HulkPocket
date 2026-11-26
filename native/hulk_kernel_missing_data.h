@@ -13,12 +13,12 @@ inline std::vector<MissingKernelDataGuard> PlanMissingKernelDataGuards(
     if(!base || base%page || end%page || end<=base)
         throw std::invalid_argument("Invalid kernel guard arena");
     std::vector<MissingKernelDataGuard> result;
-    uint64_t cursor=base;
     for(auto ordinal:registry.MissingData(imports)) {
+        // A missing export must keep its own address across runtime revisions.
+        const uint64_t cursor=uint64_t(base)+uint64_t(ordinal)*page;
         if(cursor+page>end || memory.IsCommitted(static_cast<uint32_t>(cursor),page))
             throw std::runtime_error("Kernel guard arena unavailable");
         result.push_back({ordinal,static_cast<uint32_t>(cursor)});
-        cursor+=page;
     }
     return result;
 }

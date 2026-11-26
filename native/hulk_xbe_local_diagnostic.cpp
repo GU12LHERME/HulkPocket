@@ -134,7 +134,7 @@ int main(int argc,char** argv) {
                 RegisterDispatcherObjectTypes(guest,registry,0x07200400);
                 RegisterDiagnosticIdeQueue(guest,registry,0x07200600);
                 std::cout << "Diagnostic dispatcher object types and empty IDE queue registered" << '\n';
-                auto guards=PlanMissingKernelDataGuards(registry,imports,guest,0x08000000,0x08200000);
+                auto guards=PlanMissingKernelDataGuards(registry,imports,guest,0x0F000000,0x10000000);
                 for(auto g:guards) std::cout << "Unsupported data ordinal " << g.ordinal
                     << " guard=0x" << std::hex << g.address << std::dec << '\n';
                 auto boot=PrepareXbeBootstrap(loaded,guest,0x04000000,0x06000000);
@@ -158,6 +158,9 @@ int main(int argc,char** argv) {
                         if(!target) for(auto g:guards) if(g.ordinal==ordinal) target=g.address;
                     }
                     if(!target) throw std::runtime_error("Missing diagnostic binding");
+                    if(HulkKernelExportKind(ordinal)==KernelExportKind::Data)
+                        std::cout << "Data binding ordinal=" << ordinal << " slot=0x" << std::hex << slot
+                                  << " target=0x" << target << std::dec << '\n';
                     guest.Write32(slot,target);
                 }
                 auto entry=native.ResolveKernelEntry();

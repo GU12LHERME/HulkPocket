@@ -32,6 +32,10 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     if [[ -n "$pc" && -x "$PREFIX/bin/llvm-addr2line" ]]; then
         echo "Fault native function:"
         "$PREFIX/bin/llvm-addr2line" -f -C -e "$module" "$pc" || true
+        if [[ -x "$PREFIX/bin/llvm-objdump" ]]; then
+            echo "Native instruction window:"
+            "$PREFIX/bin/llvm-objdump" -d --start-address="$((pc-24))" --stop-address="$((pc+16))" "$module" || true
+        fi
     fi
     exit "$status"
 } 2>&1 | tee "$log"

@@ -38,12 +38,27 @@ inline void GuestFaultHandler(int sig,siginfo_t* info,void* context) noexcept {
     FaultHex(p," pc=0x",pc);
     if(fault_module_base && pc>=fault_module_base)
         FaultHex(p," pc_minus_module_base=0x",pc-fault_module_base);
+    FaultHex(p," guest_base=0x",fault_guest_base);
     FaultHex(p," thread=0x",static_cast<uint32_t>(fault_thread));
     FaultHex(p," last_kernel=0x",static_cast<uint32_t>(fault_ordinal));
     FaultHex(p," last_return=0x",static_cast<uint32_t>(fault_return));
     FaultHex(p," last_esp=0x",static_cast<uint32_t>(fault_stack));
     *p++='\n';
     (void)write(STDERR_FILENO,line,static_cast<size_t>(p-line));
+#if defined(__aarch64__)
+    // Raw ARM64 registers at the fault, not the older saved x86 context.
+    // One bounded line per eight registers for easy local log inspection.
+    const auto& regs=static_cast<ucontext_t*>(context)->uc_mcontext.regs;
+    for(unsigned i=0;i<31;i+=8) {
+        p=line;
+        for(unsigned j=i;j<31 && j<i+8;++j) {
+            char name[]=" x00=0x";
+            name[2]=char('0'+j/10);name[3]=char('0'+j%10);
+            FaultHex(p,name,regs[j]);
+        }
+        *p++='\n';(void)write(STDERR_FILENO,line,static_cast<size_t>(p-line));
+    }
+#endif
     _exit(128+sig);
 }
 inline void InstallGuestFaultHandler(uint8_t* base,uintptr_t module_base=0) {

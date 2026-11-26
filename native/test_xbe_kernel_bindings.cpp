@@ -2,6 +2,7 @@
 #include "hulk_kernel_clock.h"
 #include "hulk_kernel_profile.h"
 #include "hulk_kernel_objects.h"
+#include "hulk_kernel_missing_data.h"
 #include <cassert>
 #include <cstdio>
 using namespace hulkpocket;
@@ -41,10 +42,17 @@ int main() {
     imports.complete=true;
     imports.ordinals={16,17,22};
     assert(registry.MissingData(imports).size()==2);
+    const auto guard_base=0x0f000000u;
+    const auto guards=PlanMissingKernelDataGuards(registry,imports,mem,guard_base,0x10000000);
+    assert(guards.size()==2 && guards[1].ordinal==22);
+    assert(guards[1].address==guard_base+22*mem.PageSize());
+    assert(!mem.IsCommitted(guards[1].address,1));
     registry.Register(16,0x12000,32,mem);
     assert(registry.Resolve(16).guest_data==0x12000);
     assert(registry.Resolve(17).kind==KernelExportKind::Function);
     assert(registry.MissingData(imports)==std::vector<uint32_t>{22});
+    const auto remaining=PlanMissingKernelDataGuards(registry,imports,mem,guard_base,0x10000000);
+    assert(remaining.size()==1 && remaining[0].address==guards[1].address);
     rejected=false;
     try { registry.Register(22,0x12004,32,mem); }
     catch(const std::invalid_argument&) { rejected=true; }
