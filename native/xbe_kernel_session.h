@@ -101,7 +101,9 @@ private:
         uint32_t diagnostic_vertices=0;
         unsigned diagnostic_swap_returns=0,draws_at_swap=0;
         std::unique_ptr<gpu::State> diagnostic_line_profile;
-        static constexpr unsigned diagnostic_draw_limit=8;
+        uint64_t last_frame_hash=0;
+        unsigned identical_frames=0;
+        static constexpr unsigned diagnostic_draw_limit=kDiagnosticDrawsPerFrame;
         std::array<uint32_t,6> last_viewport{};
         uint32_t last_viewport_call=0,last_viewport_caller=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
@@ -923,6 +925,7 @@ private:
                 const bool zero_viewport=!synced.viewport.w||!synced.viewport.h;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 const bool opted_in=allow&&std::strcmp(allow,"1")==0;
+                const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=Arg(cpu,1),count=Arg(cpu,2);
                 const bool same_caller=caller==0x0031c10f&&!indexed&&Arg(cpu,0)==2&&
                     start==0&&count>0&&count<=1020&&count%2==0;
@@ -933,7 +936,7 @@ private:
                 // continuing multiple draws requires the explicit opt-in,
                 // same observed raster/transform profile and bounded count.
                 if(!indexed&&Arg(cpu,0)==2&&(first||(opted_in&&!zero_viewport&&
-                    same_caller&&matching&&live.diagnostic_draw_returns<LiveD3dDevice::diagnostic_draw_limit))){
+                    same_caller&&matching&&frame_draws<LiveD3dDevice::diagnostic_draw_limit))){
                         gpu::ScopedGuestMemory scope(mem_);
                         gpu::TextureDesc desc{};
                         if(!gpu::DescribeSurface(synced.rt,desc))
@@ -962,11 +965,11 @@ private:
                     // the color buffer. The BMP is cumulative, not a frame.
                     if(opted_in&&!zero_viewport&&(!first||changed)&&same_caller&&matching&&
                         synced.viewport.w==desc.width&&synced.viewport.h==desc.height&&
-                        live.diagnostic_draw_returns<LiveD3dDevice::diagnostic_draw_limit){
+                        frame_draws<LiveD3dDevice::diagnostic_draw_limit){
                         if(first)live.diagnostic_line_profile=std::make_unique<gpu::State>(synced);
                         ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
-                        std::fprintf(stderr,"D3D DIAGNOSTIC DRAW RETURN: batch=%u/%u vertices=%u cumulative_vertices=%u changed_pixels=%u (reduced profile)\n",
-                            live.diagnostic_draw_returns,LiveD3dDevice::diagnostic_draw_limit,vertices,live.diagnostic_vertices,changed);
+                        std::fprintf(stderr,"D3D DIAGNOSTIC DRAW RETURN: frame=%u batch=%u/%u total_draws=%u vertices=%u cumulative_vertices=%u changed_pixels=%u (reduced profile)\n",
+                            live.diagnostic_swap_returns+1,frame_draws+1,LiveD3dDevice::diagnostic_draw_limit,live.diagnostic_draw_returns,vertices,live.diagnostic_vertices,changed);
                         Ret(cpu,3,0);return;
                     }
                 }
@@ -986,7 +989,7 @@ private:
                     throw std::runtime_error("D3D vertical wait without owned live device");
                 auto& live=*live_d3d_;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_vblanks>=32)
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_vblanks>=4*kDiagnosticFrameLimit)
                     throw std::runtime_error("D3D vertical wait diagnostic continuation not enabled");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1020,7 +1023,7 @@ private:
                 std::fprintf(stderr,"D3D LIVE WAIT caller=%08X target=%08X current=%08X flags=%08X callback=%08X\n",
                     mem_.Read32(cpu.esp),target,current,flags,callback);
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_gpu_waits>=32)
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_gpu_waits>=4*kDiagnosticFrameLimit)
                     throw std::runtime_error("D3D initial wait diagnostic continuation not enabled");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1056,22 +1059,34 @@ private:
                     try{WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);}
                     catch(const std::exception& ex){std::fprintf(stderr,"D3D SWAP BITMAP FAILED: %s\n",ex.what());}
                 }
+                // Hash visible BGRA bytes, excluding pitch padding, so the
+                // report distinguishes repeated frames from actual changes.
+                uint64_t hash=14695981039346656037ull;
+                for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width*4;++x){
+                    hash^=pixels[size_t(y)*desc.pitch+x];hash*=1099511628211ull;
+                }
                 const auto presented=live.bridge.Present(state.rt.header);
+                if(presented>1&&hash==live.last_frame_hash)++live.identical_frames;
+                live.last_frame_hash=hash;
                 std::fprintf(stderr,"D3D ORIGINAL SWAP OFFSCREEN PASS: presents=%u draws=%u vertices=%u waits=%u (reduced diagnostic)\n",
                     presented,live.diagnostic_draw_returns,live.diagnostic_vertices,live.diagnostic_gpu_waits);
+                std::fprintf(stderr,"D3D FRAME CHECKSUM frame=%u/%u hash=%016llX identical_to_previous_total=%u draws_in_frame=%u\n",
+                    presented,kDiagnosticFrameLimit,static_cast<unsigned long long>(hash),live.identical_frames,live.diagnostic_draw_returns-live.draws_at_swap);
                 const char* swap_opt=std::getenv("HULK_CONTINUE_SWAP");
-                if(!swap_opt||std::strcmp(swap_opt,"1")||live.diagnostic_swap_returns||
-                    presented!=1||mem_.Read32(cpu.esp)!=0x0031b1d4||live.buffers.BufferCount()!=2)
-                    throw std::runtime_error("D3D original swap reached; guest continuation not enabled or outside verified first swap");
+                if(!swap_opt||std::strcmp(swap_opt,"1")||
+                    presented!=live.diagnostic_swap_returns+1||mem_.Read32(cpu.esp)!=0x0031b1d4||live.buffers.BufferCount()!=2)
+                    throw std::runtime_error("D3D original swap reached; guest continuation not enabled or outside verified swap profile");
+                if(presented>=kDiagnosticFrameLimit)
+                    throw std::runtime_error("D3D diagnostic frame budget reached (offscreen; no gameplay claim)");
                 // Pinned XDK bridge semantics: stable surface headers,
                 // physical data and lock words rotate, return swap count.
                 const auto dev=live.buffers.DeviceAddress(),front=live.buffers.BackBuffer(-1),back=live.buffers.BackBuffer(0);
                 const auto old_front=mem_.Read32(front+4),old_back=mem_.Read32(back+4);
-                if(old_front==old_back||mem_.Read32(dev+0x2478)!=0||
+                if(old_front==old_back||mem_.Read32(dev+0x2478)!=live.diagnostic_swap_returns||
                     mem_.Read32(front+8)||mem_.Read32(back+8)||
                     !physical_.Contains(0x80000000u+old_front,uint64_t(desc.pitch)*desc.height)||
                     !physical_.Contains(0x80000000u+old_back,uint64_t(desc.pitch)*desc.height))
-                    throw std::runtime_error("Unsupported original first swap backing state");
+                    throw std::runtime_error("Unsupported original swap backing state");
                 const auto n=live.buffers.Rotate();
                 if(n!=presented||mem_.Read32(front+4)!=old_back||mem_.Read32(back+4)!=old_front)
                     throw std::runtime_error("D3D swap rotation verification failed");

@@ -10,6 +10,10 @@ constexpr uint32_t kGraphicsCreate=0x10000,kGraphicsDraw=0x10001,
     kXapiInputGetState=0x1000a,kXapiInputSetState=0x1000b,kXapiInputGetCapabilities=0x1000c,kGraphicsClear=0x1000d,kViewportTraceEnter=0x1000e,kViewportTraceLeave=0x1000f,kGraphicsBlockOnTime=0x10010,kGraphicsVBlank=0x10011;
 constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture=0x10102,
     kDefaultMakeSpace=0x10103,kDefaultComplexBase=0x10200;
+// Bounded experimental presentation loop; the final swap is presented
+// but deliberately does not return to guest code.
+constexpr unsigned kDiagnosticFrameLimit=60;
+constexpr unsigned kDiagnosticDrawsPerFrame=8;
 using GraphicsCallback=void(*)(X86Context&,uint8_t*,uint32_t);
 inline thread_local GraphicsCallback graphics_callback=nullptr;
 class ScopedGraphicsCallback {

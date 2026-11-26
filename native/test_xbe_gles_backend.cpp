@@ -64,6 +64,23 @@ int main(){
             assert(guest.Read32(0x80000000u+a)==0xff0000ff);
             assert(guest.Read32(0x80000000u+b)==0xffff0000);
             assert(bridge.Present(back)==2);
+            // Exercise multiple rotations and ensure the prior front
+            // allocation survives the subsequent frame's clear.
+            assert(buffers.Rotate()==2);
+            for(unsigned frame=3;frame<=8;++frame){
+                auto old_front=guest.Read32(front+4),old_back=guest.Read32(back+4);
+                const auto previous_pixel=guest.Read32(0x80000000u+old_front);
+                bridge.BindInitialTargets(back,buffers.Depth());
+                state=bridge.Snapshot();gl.BeginRotatedFrame(state.rt);
+                const uint32_t color=0xff000000u|(frame*0x010203u);
+                gl.Clear(state,0,nullptr,0xf3,color,1,0);
+                gl.ReadbackColor(state.rt);
+                assert(guest.Read32(0x80000000u+old_back)==color);
+                assert(guest.Read32(0x80000000u+old_front)==previous_pixel);
+                assert(bridge.Present(back)==frame&&buffers.Rotate()==frame);
+                assert(guest.Read32(front+4)==old_back&&guest.Read32(back+4)==old_front);
+                assert(guest.Read32(dev+0x2478)==frame);
+            }
         }
         assert(pool.Outstanding()==0&&phys.AllocatedPages()==0&&guest.Read32(slot)==0);
     }
