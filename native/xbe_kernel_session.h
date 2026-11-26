@@ -101,6 +101,14 @@ private:
             :buffers(mem,pool,physical),bridge(mem,backend),owner(thread){}
     };
     std::unique_ptr<LiveD3dDevice> live_d3d_;
+    void DrainLivePush(LiveD3dDevice& live){
+        auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
+        if(end==begin)return;
+        for(auto m:DecodeNv2aMethods(mem_,begin,end))
+            std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
+        live.bridge.ApplyPush(begin,end);
+        live.buffers.RewindScratch();
+    }
     void ReleaseD3dOwner(uint32_t thread){
         if(live_d3d_&&live_d3d_->owner==thread){
             live_d3d_.reset();
@@ -500,13 +508,7 @@ private:
                 for(unsigned i=0;i<n;++i)std::fprintf(stderr,"D3D LIVE ARG %u=%08X\n",i,Arg(cpu,i));
                 // Preserve ordering with direct guest writes. Only supported
                 // state-only packets may be consumed; unknown ones stop.
-                auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
-                if(end!=begin){
-                    auto methods=DecodeNv2aMethods(mem_,begin,end);
-                    for(auto m:methods)std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
-                    live.bridge.ApplyPush(begin,end);
-                    live.buffers.RewindScratch();
-                }
+                DrainLivePush(live);
                 XbeD3dDefaultTrace trace(mem_,live.bridge.Snapshot());
                 apply(trace);
                 live.bridge.AdoptLiveSetters(trace.State());
@@ -792,6 +794,22 @@ private:
                 Ret(cpu,6,0);return;
 #else
                 throw std::runtime_error("D3D8 CreateDevice reached; guest device initialization pending");
+#endif
+            }
+            case kGraphicsClear: {
+                Check(cpu,6);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D clear without owned live device");
+                auto& live=*live_d3d_;
+                live.buffers.VerifyInitialTargets();
+                DrainLivePush(live);
+                std::fprintf(stderr,"D3D LIVE CLEAR caller=%08X rects=%u flags=%08X color=%08X z=%08X stencil=%08X\n",
+                    mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5));
+                live.bridge.Call("D3DDevice_Clear",cpu,D3dAbi::Stdcall(6));
+                std::fprintf(stderr,"D3D LIVE CLEAR PASS (offscreen)\n");return;
+#else
+                throw std::runtime_error("D3D clear requires GLES backend");
 #endif
             }
             case kGraphicsDraw: case kGraphicsDrawIndexed: case kGraphicsSwap: {

@@ -97,7 +97,7 @@ void XbeGlesBackend::Destroy() noexcept {
     if(surface_!=EGL_NO_SURFACE)eglDestroySurface(display_,surface_);
     eglTerminate(display_);
     display_=EGL_NO_DISPLAY;context_=EGL_NO_CONTEXT;surface_=EGL_NO_SURFACE;
-    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=false;
+    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=stencil_cleared_=false;
 }
 void XbeGlesBackend::Check() const {
     if(context_==EGL_NO_CONTEXT || owner_!=std::this_thread::get_id() ||
@@ -172,15 +172,34 @@ void XbeGlesBackend::DepthTarget(const gpu::Surface& s){
 }
 void XbeGlesBackend::RasterState(const gpu::State& s){
     auto simple=[&](unsigned m){return s.simple[m>>2];};
-    for(unsigned i=0;i<s.rs.size();++i)if(s.rs[i]&&i!=gpu::kRsZEnable)
-        Unsupported("Unsupported complex render state");
+    for(unsigned i=0;i<s.rs.size();++i){
+        if(!s.rs[i])continue;
+        switch(i){
+            case gpu::kRsZEnable:case gpu::kRsStencilEnable:case gpu::kRsStencilFail:break;
+            case gpu::kRsFillMode:case gpu::kRsBackFillMode:
+                if(s.rs[i]==0x1b02)break; // solid polygons
+                [[fallthrough]];
+            default:{
+                char msg[96];std::snprintf(msg,sizeof(msg),"Unsupported complex render state %u=%08X",i,s.rs[i]);
+                Unsupported(msg);
+            }
+        }
+    }
     for(unsigned i=0;i<s.simple.size();++i){
         if(!s.simple[i])continue;
         switch(i*4){
             case gpu::kMBlendEnable:case gpu::kMSrcBlend:case gpu::kMDestBlend:case gpu::kMBlendOp:
             case gpu::kMZFunc:case gpu::kMZWriteEnable:case gpu::kMColorWriteEnable:
             case gpu::kMAlphaTestEnable:case gpu::kMAlphaFunc:case gpu::kMAlphaRef:break;
-            default:Unsupported("Unsupported simple render state");
+            case gpu::kMStencilWriteMask:case gpu::kMStencilFunc:case gpu::kMStencilRef:
+            case gpu::kMStencilMask:case gpu::kMStencilZFail:case gpu::kMStencilPass:break;
+            case gpu::kMShadeMode:
+                if(s.simple[i]==0x1d01)break; // GLES shader uses smooth interpolation
+                [[fallthrough]];
+            default:{
+                char msg[96];std::snprintf(msg,sizeof(msg),"Unsupported simple render state %04X=%08X",i*4,s.simple[i]);
+                Unsupported(msg);
+            }
         }
     }
     if(s.rs[gpu::kRsZEnable]>1)Unsupported("W-buffer not implemented");
@@ -203,7 +222,26 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
     auto cw=simple(gpu::kMColorWriteEnable);
     if(cw&~0x01010101u)Unsupported("Invalid Xbox color write mask");
     glColorMask((cw>>16)&1,(cw>>8)&1,cw&1,(cw>>24)&1);
-    glDisable(GL_STENCIL_TEST);glDisable(GL_CULL_FACE);glDisable(GL_SCISSOR_TEST);
+    if(s.rs[gpu::kRsStencilEnable]>1)Unsupported("Invalid stencil enable");
+    if(s.rs[gpu::kRsStencilEnable]){
+        DepthTarget(s.zs);
+        if(!stencil_cleared_)Unsupported("Stencil surface must be cleared before drawing");
+        auto cmp=simple(gpu::kMStencilFunc);
+        if(cmp<0x200||cmp>0x207)Unsupported("Unknown stencil comparison");
+        auto op=[](uint32_t v)->GLenum{
+            switch(v){
+                case GL_ZERO:case GL_KEEP:case GL_REPLACE:case GL_INCR:case GL_DECR:
+                case GL_INVERT:case GL_INCR_WRAP:case GL_DECR_WRAP:return v;
+                default:Unsupported("Unknown stencil operation");
+            }
+        };
+        auto fail=op(s.rs[gpu::kRsStencilFail]),zfail=op(simple(gpu::kMStencilZFail)),pass=op(simple(gpu::kMStencilPass));
+        glEnable(GL_STENCIL_TEST);
+        glStencilFunc(cmp,GLint(simple(gpu::kMStencilRef)&255u),simple(gpu::kMStencilMask)&255u);
+        glStencilMask(simple(gpu::kMStencilWriteMask)&255u);
+        glStencilOp(fail,zfail,pass);
+    }else glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);glDisable(GL_SCISSOR_TEST);
 }
 void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rects,uint32_t flags,uint32_t color,float z,uint32_t stencil){
     Check();Target(s.rt);
@@ -217,17 +255,17 @@ void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rec
             throw std::invalid_argument("Clear rectangle outside framebuffer");
     }
     if(flags&~(gpu::kClearTarget|gpu::kClearZ|gpu::kClearStencil))Unsupported("Unsupported clear flags");
-    if(flags&gpu::kClearStencil)Unsupported("Guest stencil operations not implemented");
-    if(flags&gpu::kClearZ)DepthTarget(s.zs);
+    if(flags&(gpu::kClearZ|gpu::kClearStencil))DepthTarget(s.zs);
     if(!std::isfinite(z))throw std::invalid_argument("Nonfinite clear depth");
     glDisable(GL_SCISSOR_TEST);
     // NV2A D3DCLEAR_TARGET comprises R/G/B/A channel bits 4..7.
     glColorMask((flags&0x10)!=0,(flags&0x20)!=0,(flags&0x40)!=0,(flags&0x80)!=0);
     glClearColor(float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255);
-    glClearDepthf(z);glClearStencil(GLint(stencil));
+    glClearDepthf(z);glClearStencil(GLint(stencil&255u));
     GLbitfield mask=0;
     if(flags&gpu::kClearTarget)mask|=GL_COLOR_BUFFER_BIT;
     if(flags&gpu::kClearZ){glDepthMask(GL_TRUE);mask|=GL_DEPTH_BUFFER_BIT;}
+    if(flags&gpu::kClearStencil){glStencilMask(0xff);mask|=GL_STENCIL_BUFFER_BIT;}
     if(mask){
         if(!count)glClear(mask);
         else{
@@ -241,6 +279,7 @@ void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rec
     }
     // A partial depth clear cannot establish initialized depth everywhere.
     if((flags&gpu::kClearZ)&&!count)depth_cleared_=true;
+    if((flags&gpu::kClearStencil)&&!count)stencil_cleared_=true;
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);GlCheck("GLES clear");
 }
 void XbeGlesBackend::UploadTexture(const gpu::State& s){

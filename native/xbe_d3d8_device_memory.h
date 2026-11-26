@@ -95,6 +95,11 @@ public:
         Set(0x794,shader);
     }
     uint32_t Depth()const{return resources_[3].header;}
+    void VerifyInitialTargets()const{
+        if(!device_||mem_.Read32(device_+0x1a04)!=BackBuffer(0)||
+            mem_.Read32(device_+0x1a08)!=Depth())
+            throw std::runtime_error("Guest switched D3D targets; target integration pending");
+    }
     uint32_t Scratch()const{return scratch_;}
     uint32_t ScratchEnd()const{
         if(!device_)throw std::logic_error("D3D device not allocated");

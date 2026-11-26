@@ -103,6 +103,13 @@ class XbeD3d8Bridge {
             if(a[0]>1)throw std::invalid_argument("W-buffer not integrated");
             state_.rs[gpu::kRsZEnable]=a[0];return 0;
         }
+        if(name=="D3DDevice_SetRenderState_StencilEnable"||name=="D3DDevice_SetRenderState_StencilFail"){
+            Count(a,1);
+            if(name=="D3DDevice_SetRenderState_StencilEnable"&&a[0]>1)
+                throw std::invalid_argument("Invalid stencil enable");
+            state_.rs[name=="D3DDevice_SetRenderState_StencilEnable"?gpu::kRsStencilEnable:gpu::kRsStencilFail]=a[0];
+            return 0;
+        }
         if(name=="D3DDevice_SetTextureStageStateNotInline") {
             Count(a,3);
             if(a[1]>=gpu::kTssCount)throw std::invalid_argument("Unknown texture stage state");

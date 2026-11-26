@@ -28,7 +28,8 @@ constexpr bool Stdcall(std::string_view name){
     if(hulkpocket::graphics_callback)hulkpocket::graphics_callback(ctx,base,id);
     // Only CreateDevice has a checked diagnostic continuation. A callback
     // that did not complete its stdcall frame must still stop execution.
-    if(id==hulkpocket::kGraphicsCreate&&uint64_t(original_esp)+28==ctx.esp&&ctx.eax==0)return;
+    if((id==hulkpocket::kGraphicsCreate||id==hulkpocket::kGraphicsClear)&&
+        uint64_t(original_esp)+28==ctx.esp&&ctx.eax==0)return;
     throw std::runtime_error("D3D8 guest device integration checkpoint");
 }
 }
@@ -61,6 +62,9 @@ void GUEST(Direct3D_CreateDevice)(X86Context& ctx,uint8_t* base){
 }
 #else
 #error "Game has no generated Direct3D_CreateDevice symbol"
+#endif
+#if HAS_D3DDevice_Clear
+HOOK(D3DDevice_Clear,hulkpocket::kGraphicsClear)
 #endif
 #if HAS_D3DDevice_DrawVertices
 HOOK(D3DDevice_DrawVertices,hulkpocket::kGraphicsDraw)

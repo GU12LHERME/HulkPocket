@@ -142,6 +142,28 @@ int main(){
     tri(.5f,0xc000ff00);
     assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,255,0,192}));
     rs(gpu::kMAlphaTestEnable,0);
+    // Real stencil write and test: masked color draw writes stencil, then
+    // an equal test permits green only in the marked triangle.
+    call("D3DDevice_Clear",{0,0,gpu::kClearTarget|gpu::kClearStencil,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
+    call("D3DDevice_SetRenderState_StencilEnable",{1});
+    call("D3DDevice_SetRenderState_StencilFail",{GL_KEEP});
+    rs(gpu::kMStencilFunc,GL_ALWAYS);rs(gpu::kMStencilRef,7);
+    rs(gpu::kMStencilMask,0xff);rs(gpu::kMStencilWriteMask,0xff);
+    rs(gpu::kMStencilZFail,GL_KEEP);rs(gpu::kMStencilPass,GL_REPLACE);
+    rs(gpu::kMColorWriteEnable,0);tri(.5f,0xffff0000);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,0,255,255}));
+    rs(gpu::kMColorWriteEnable,0x01010101);
+    rs(gpu::kMStencilFunc,GL_EQUAL);rs(gpu::kMStencilPass,GL_KEEP);
+    tri(.5f,0xff00ff00);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,255,0,255}));
+    rs(gpu::kMStencilRef,3);tri(.5f,0xffff0000);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,255,0,255}));
+    // Stencil clear ignores the previous stencil write mask.
+    rs(gpu::kMStencilWriteMask,0);
+    call("D3DDevice_Clear",{0,0,gpu::kClearStencil,0,std::bit_cast<uint32_t>(1.0f),3});
+    tri(.5f,0xffff0000);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{255,0,0,255}));
+    call("D3DDevice_SetRenderState_StencilEnable",{0});
     // Restore the previous blend sample for the existing channel-mask test.
     call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
     rs(gpu::kMBlendEnable,1);tri(.5f,0x80ff0000);rs(gpu::kMBlendEnable,0);
