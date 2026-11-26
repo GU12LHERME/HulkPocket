@@ -56,7 +56,7 @@ jobs:
           /tmp/bootstrap
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_kernel_bindings.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/bindings
           /tmp/bindings
-          g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/entry-session
+          g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -pthread -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/entry-session
           /tmp/entry-session
           g++ -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/kernel-session
           timeout 20 /tmp/kernel-session
@@ -85,7 +85,7 @@ jobs:
           qemu-aarch64 /tmp/bootstrap-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_kernel_bindings.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/bindings-arm64
           qemu-aarch64 /tmp/bindings-arm64
-          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/entry-session-arm64
+          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -pthread -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/entry-session-arm64
           qemu-aarch64 /tmp/entry-session-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -Ithird_party/xboxxberecomp third_party/xboxxberecomp/kernel/crypto.cpp -o /tmp/kernel-session-arm64
           timeout 20 qemu-aarch64 /tmp/kernel-session-arm64
