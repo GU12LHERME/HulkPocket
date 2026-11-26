@@ -457,6 +457,32 @@ int main(){
         bool mismatch=false;
         try{bridge.SyncFixedDiffuseShader(dev);}catch(const std::logic_error&){mismatch=true;}
         assert(mismatch);
+        // Linear X8R8G8B8 with padded rows, texel coordinates, point filter,
+        // and two triangles: the next original RP6 movie-style draw.
+        mem.Write32(0x10404,0x107000);
+        mem.Write32(0x1040c,0x00011e21);mem.Write32(0x10410,0x00001001);
+        const uint32_t top[]={0x00123456,0x00ff0000},bottom[]={0x0000ff00,0x000000ff};
+        mem.Write(0x80107000,top,sizeof(top));mem.Write(0x80107040,bottom,sizeof(bottom));
+        const uint32_t linear_push[]={0x1b00|(2u<<18),0x107000,0x00011e21,
+            0x1b10|(1u<<18),0x00400000,0x1b1c|(1u<<18),0x00020002,0x1b0c|(1u<<18),0};
+        mem.Write(0x11800,linear_push,sizeof(linear_push));bridge.ApplyPush(0x11800,0x11800+sizeof(linear_push));
+        auto linear=bridge.Snapshot();
+        linear.tss[0][gpu::kTssMinFilter]=linear.tss[0][gpu::kTssMagFilter]=1;
+        bridge.AdoptLiveSetters(linear);
+        const QuadVertex triangles[]={{-1,1,.5f,0xffffffff,0,0},{1,1,.5f,0xffffffff,2,0},
+            {-1,-1,.5f,0xffffffff,0,2},{-1,-1,.5f,0xffffffff,0,2},
+            {1,1,.5f,0xffffffff,2,0},{1,-1,.5f,0xffffffff,2,2}};
+        mem.Write(0x80105000,triangles,sizeof(triangles));
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x142);
+        assert(bridge.VerifyGuestGeometry(5,0,6,0)==6);
+        bridge.ReplayTexturedDiffuseDiagnostic(5,0,6);
+        assert((backend.ReadPixel(8,8)==std::array<uint8_t,4>{0x12,0x34,0x56,255}));
+        assert((backend.ReadPixel(56,56)==std::array<uint8_t,4>{0,0,255,255}));
+        assert((backend.ReadPixel(8,56)==std::array<uint8_t,4>{0,255,0,255}));
+        mem.Write32(0x10410,0x01001001); // pitch mismatch, reject
+        mismatch=false;
+        try{bridge.SyncFixedDiffuseShader(dev);}catch(const std::logic_error&){mismatch=true;}
+        assert(mismatch);
     }
     std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");
 }

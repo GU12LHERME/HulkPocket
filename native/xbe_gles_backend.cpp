@@ -382,6 +382,9 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     }
     if(n>786432||!n||(mode==GL_LINES&&n%2)||(mode==GL_TRIANGLES&&n%3))
         throw std::invalid_argument("Invalid assembled primitive count");
+    gpu::TextureDesc sampled{};
+    if(textured&&!gpu::Describe(s.textures[0],sampled))
+        throw std::invalid_argument("Invalid sampled texture");
     std::vector<Vertex> vertices(n);
     for(uint32_t i=0;i<n;++i){
         int64_t id=i;
@@ -398,7 +401,12 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
         };
         auto& v=vertices[i];v.p[3]=1;read(0,v.p,transformed?16:12);
         uint8_t bgra[4];read(3,bgra,4);
-        if(textured){read(9,v.uv,8);if(!std::isfinite(v.uv[0])||!std::isfinite(v.uv[1]))throw std::invalid_argument("Invalid texture coordinates");}
+        if(textured){
+            read(9,v.uv,8);
+            if(!std::isfinite(v.uv[0])||!std::isfinite(v.uv[1]))throw std::invalid_argument("Invalid texture coordinates");
+            // Xbox linear/rectangle textures use texel coordinates; GLES normalized.
+            if(sampled.linear){v.uv[0]/=float(sampled.width);v.uv[1]/=float(sampled.height);}
+        }
         if(!std::all_of(v.p,v.p+4,[](float x){return std::isfinite(x);})||v.p[3]<=0)
             throw std::invalid_argument("Invalid XYZRHW position");
         v.c[0]=bgra[2]/255.0f;v.c[1]=bgra[1]/255.0f;v.c[2]=bgra[0]/255.0f;v.c[3]=bgra[3]/255.0f;

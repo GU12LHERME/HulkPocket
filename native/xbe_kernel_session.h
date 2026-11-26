@@ -1080,12 +1080,12 @@ private:
                 const bool opted_in=allow&&std::strcmp(allow,"1")==0;
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=Arg(cpu,1),count=Arg(cpu,2);
-                if(!indexed&&caller==0x0031c10f&&Arg(cpu,0)==6&&fvf==0x142&&start==0&&count==4){
+                if(!indexed&&caller==0x0031c10f&&fvf==0x142&&
+                   ((Arg(cpu,0)==5&&count&&count%3==0)||(Arg(cpu,0)==6&&count>=3))){
                     if(frame_draws>=LiveD3dDevice::diagnostic_draw_limit)
                         throw std::runtime_error("Textured diagnostic draw budget reached");
-                    if(live.diagnostic_texture_profile&&
-                       !XbeD3d8Bridge::SameDiagnosticTextureProfile(*live.diagnostic_texture_profile,synced))
-                        throw std::runtime_error("Original textured draw raster profile changed");
+                    // Validate each current texture/combiner/primitive independently
+                    // instead of requiring every screen to match the copyright raster profile.
                     gpu::ScopedGuestMemory scope(mem_);
                     gpu::TextureDesc desc{};
                     if(!gpu::DescribeSurface(synced.rt,desc))
@@ -1093,7 +1093,7 @@ private:
                     live.backend.ReadbackColor(synced.rt);
                     auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
                     std::vector<uint8_t> before(pixels,pixels+size_t(desc.pitch)*desc.height);
-                    live.bridge.ReplayTexturedQuadDiagnostic(start,count);
+                    live.bridge.ReplayTexturedDiffuseDiagnostic(Arg(cpu,0),start,count);
                     live.backend.ReadbackColor(synced.rt);
                     unsigned changed=0;
                     for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width;++x){

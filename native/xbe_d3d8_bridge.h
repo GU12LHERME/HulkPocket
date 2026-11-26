@@ -282,13 +282,22 @@ public:
         if(textures[0]){
             gpu::TextureDesc d{};
             if(!gpu::Describe(textures[0],d)||d.depth!=1||d.cube||d.levels!=1||
-               d.linear||d.format!=6||Read(uint64_t(textures[0])+8)||Read(uint64_t(textures[0])+16))
+               Read(uint64_t(textures[0])+8)||!SupportedDiffuseTexture(d))
                 throw std::logic_error("Unsupported original texture resource");
             if(push_constants_.texture_words[0]!=3||
                Read(uint64_t(textures[0])+4)!=state_.simple[0x1b00>>2]||
                Read(uint64_t(textures[0])+12)!=state_.simple[0x1b04>>2])
                 throw std::logic_error("Guest texture header disagrees with NV2A binding");
-            (void)DescribeNv2aSwizzledTexture(state_.simple[0x1b00>>2],state_.simple[0x1b04>>2]);
+            if(d.linear){
+                // NV097_SET_TEXTURE_CONTROL1 image pitch, IMAGE_RECT width/height.
+                if((state_.simple[0x1b10>>2]>>16)!=d.pitch||
+                   state_.simple[0x1b1c>>2]!=((d.width<<16)|d.height))
+                    throw std::logic_error("Linear texture header disagrees with NV2A pitch or extent");
+            }else if(gpu::Format(d.format).swizzled){
+                (void)DescribeNv2aSwizzledTexture(state_.simple[0x1b00>>2],state_.simple[0x1b04>>2]);
+            }
+            // DecodeGuestLevel validates complete storage, sizes and layout.
+            // Actual decoding is done once in UploadTexture, not here.
         }
         uint32_t fvf=0;
         for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u}){
@@ -417,10 +426,33 @@ public:
         }
         return true;
     }
+    static bool SupportedDiffuseTexture(const gpu::TextureDesc& d){
+        const auto& f=gpu::Format(d.format);
+        // Color formats already decoded by the pinned XboxXBERecomp code.
+        // Exclude palette/depth/bump-map signed data and odd packed YUV.
+        switch(d.format){
+            case 0x00:case 0x01:case 0x02:case 0x03:case 0x04:case 0x05:
+            case 0x06:case 0x07:case 0x0c:case 0x0e:case 0x0f:
+            case 0x10:case 0x11:case 0x12:case 0x13:case 0x19:case 0x1a:
+            case 0x1b:case 0x1c:case 0x1d:case 0x1e:case 0x1f:case 0x20:
+            case 0x24:case 0x25:case 0x32:case 0x35:
+            case 0x38:case 0x39:case 0x3a:case 0x3b:case 0x3c:
+            case 0x3d:case 0x3e:case 0x3f:case 0x40:case 0x41:break;
+            default:return false;
+        }
+        return d.width&&d.height&&d.width<=4096&&d.height<=4096&&d.levels==1&&
+            d.depth==1&&!d.cube&&d.linear==(!f.swizzled&&!f.compressed)&&
+            (!d.linear||d.pitch>=uint64_t(d.width)*f.bits/8)&&
+            ((d.format!=0x24&&d.format!=0x25)||!(d.width&1));
+    }
     void ReplayTexturedQuadDiagnostic(uint32_t start,uint32_t count){
+        ReplayTexturedDiffuseDiagnostic(6,start,count);
+    }
+    void ReplayTexturedDiffuseDiagnostic(uint32_t prim,uint32_t start,uint32_t count){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!initialized_||state_.vs_handle!=0x142||state_.vs||state_.ps||
-           !state_.textures[0]||start||count!=4||state_.scissor_count||
+           !state_.textures[0]||!count||count>262144||
+           !((prim==5&&count%3==0)||(prim==6&&count>=3))||state_.scissor_count||
            state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||
            state_.viewport.max_z!=1||state_.ss_offset_x||state_.ss_offset_y||
            state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
@@ -431,14 +463,15 @@ public:
             throw std::logic_error("Unsupported original textured quad profile");
         gpu::TextureDesc desc{},tex{};
         if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height||
-           !gpu::Describe(state_.textures[0],tex)||tex.levels!=1||tex.format!=6||tex.linear)
-            throw std::logic_error("Textured quad requires full target and swizzled single-mip ARGB");
+           !gpu::Describe(state_.textures[0],tex)||!SupportedDiffuseTexture(tex))
+            throw std::logic_error("Textured diffuse draw requires full target and supported single-level color texture");
         const auto& st=state_.tss[0];
         // RP6 stage 0: clamp, bilinear, modulate diffuse * texture for
         // both RGB and alpha. Arg0 is unused by a two-input modulate.
         if(st[gpu::kTssAddressU]!=3||st[gpu::kTssAddressV]!=3||
-           st[gpu::kTssAddressW]!=3||st[gpu::kTssMinFilter]!=2||
-           st[gpu::kTssMagFilter]!=2||st[gpu::kTssMipFilter]||
+           st[gpu::kTssAddressW]!=3||
+           (st[gpu::kTssMinFilter]!=1&&st[gpu::kTssMinFilter]!=2)||
+           (st[gpu::kTssMagFilter]!=1&&st[gpu::kTssMagFilter]!=2)||st[gpu::kTssMipFilter]||
            st[gpu::kTssMipLodBias]||st[gpu::kTssMaxMipLevel]||
            st[gpu::kTssMaxAnisotropy]!=1||st[gpu::kTssColorKeyOp]||
            st[gpu::kTssColorSign]||st[gpu::kTssAlphaKill]||
@@ -463,7 +496,7 @@ public:
         // Multiplication commutes; normalize argument order to the GLES
         // implementation without changing the guest's stored state.
         dst[gpu::kTssColorArg1]=dst[gpu::kTssAlphaArg1]=2;
-        backend_.Draw(replay,6,start,count,nullptr);backend_.Flush();
+        backend_.Draw(replay,prim,start,count,nullptr);backend_.Flush();
     }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
