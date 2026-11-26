@@ -181,7 +181,10 @@ def main():
             old_obj=old_cache/dest.name
             if old_source.is_file() and old_obj.is_file() and old_source.read_bytes()==source.read_bytes():
                 try:os.link(old_obj,dest)
-                except OSError:shutil.copyfile(old_obj,dest)
+                except (AttributeError,NotImplementedError,OSError):
+                    pending=dest.with_suffix('.copying')
+                    shutil.copyfile(old_obj,pending)
+                    pending.replace(dest)
                 reuse+=1;continue
             todo.append((source,dest))
         print(f"Reused objects: {reuse}; objects requiring compilation: {len(todo)}",flush=True)
