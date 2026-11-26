@@ -16,18 +16,16 @@ inline XbeBootstrapState PrepareXbeBootstrap(
     if (!image.entry || !mem.IsCommitted(image.entry,1))
         throw std::invalid_argument("unmapped guest entry");
     const auto tls=ReadXbeTls(image,mem);
-    const auto page=mem.PageSize();
-    const auto layout=PlanXbeStartupLayout(image,base,end,static_cast<std::uint32_t>(page));
     const std::size_t size=std::size_t(tls.end-tls.start)+tls.zero_fill;
-    const std::uint64_t dest=std::uint64_t(layout.heap_base)+layout.heap_reserved;
-    const std::uint64_t rounded=(size+page-1)&~std::uint64_t(page-1);
-    if(dest+rounded>end) throw std::invalid_argument("insufficient TLS arena");
-    InitializeXbeStartupMemory(image,mem,base,end);
-    if(size) {
-        mem.Commit(static_cast<std::uint32_t>(dest),size);
-        CopyXbeTls(tls,mem,static_cast<std::uint32_t>(dest));
-    }
-    return {layout,tls,image.entry,layout.stack_top,
-        size?static_cast<std::uint32_t>(dest):0,size};
+    const uint64_t aligned=(uint64_t(size)+3)&~uint64_t(3);
+    auto expanded=image;
+    const uint64_t stack=uint64_t(image.stack_commit)+aligned+32;
+    if(stack>0xffffffffu) throw std::invalid_argument("TLS stack overflow");
+    expanded.stack_commit=static_cast<uint32_t>(stack);
+    const auto layout=InitializeXbeStartupMemory(expanded,mem,base,end);
+    const auto dest=layout.stack_top-static_cast<uint32_t>(aligned);
+    if(size) CopyXbeTls(tls,mem,dest);
+    const auto esp=(dest&~15u)-12;
+    return {layout,tls,image.entry,esp,size?dest:0,size};
 }
 }
