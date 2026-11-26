@@ -7,19 +7,20 @@
 
 namespace hulkpocket {
 // First real renderer slice: a single offscreen color/depth/stencil target,
-// pretransformed untextured diffuse vertices. Not a general Xbox renderer.
+// pretransformed diffuse vertices with an optional stage-0 texture. Not a general Xbox renderer.
 // All operations are synchronous on the EGL owner thread.
 class XbeGlesBackend final:public gpu::Backend {
     EGLDisplay display_=EGL_NO_DISPLAY;
     EGLContext context_=EGL_NO_CONTEXT;
     EGLSurface surface_=EGL_NO_SURFACE;
-    GLuint program_=0,vao_=0,vbo_=0;
-    GLint extent_=-1;
+    GLuint program_=0,vao_=0,vbo_=0,texture_=0;
+    GLint extent_=-1, textured_=-1, sampler_=-1, color_op_=-1, alpha_op_=-1;
     uint32_t width_=0,height_=0,target_=0;
     uint32_t fence_=0;
     std::thread::id owner_{};
     void Check() const;
     void Target(const gpu::Surface&);
+    void UploadTexture(const gpu::State&);
     void Destroy() noexcept;
 public:
     XbeGlesBackend()=default;

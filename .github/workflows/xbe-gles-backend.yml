@@ -4,6 +4,7 @@ on:
     branches: [experiment-xbe-recomp-android]
     paths:
       - 'native/*xbe_gles_backend*'
+      - 'native/xbe_bc_decode.h'
       - 'native/xbe_d3d8_bridge.h'
       - 'native/xbox_guest_address_space.*'
       - 'third_party/xboxxberecomp/gpu/**'
