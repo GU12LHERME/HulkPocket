@@ -87,6 +87,13 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(result.year==1601&&result.month==1&&result.day==1&&result.weekday==1);
     // Initialize a real KDPC, execute a nested guest callback, then
     // schedule a timer whose callback signals a direct event.
+    call(*c,base,cb,129,{});assert(c->eax==0);
+    call(*c,base,cb,103,{});assert(c->eax==2);
+    c->ecx=0;call(*c,base,cb,161,{});
+    call(*c,base,cb,103,{});assert(c->eax==0);
+    c->ecx=3;call(*c,base,cb,160,{});assert(c->eax==0);
+    c->ecx=0;call(*c,base,cb,161,{});
+    call(*c,base,cb,358,{});assert(c->eax==0);
     call(*c,base,cb,107,{0x12500,0x13000,0x12345678});
     assert(memory->Read32(0x12500)==19&&memory->Read32(0x1250c)==0x13000);
     call(*c,base,cb,108,{0x12540,1,0});
@@ -105,6 +112,25 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,149,{0x12600,uint32_t(due),uint32_t(due>>32),0});
     call(*c,base,cb,97,{0x12600});assert(c->eax==1);
     call(*c,base,cb,97,{0x12600});assert(c->eax==0);
+    // Timer handles, aliases, byte-sized previous state and wait consumption.
+    call(*c,base,cb,194,{0x12800,0,1});assert(c->eax==0);
+    auto timer=memory->Read32(0x12800);
+    call(*c,base,cb,197,{timer,0x12804,1});assert(c->eax==0);
+    timer=memory->Read32(0x12804);
+    due=uint64_t(int64_t(-20000));memory->Write(0x12810,&due,8);
+    memory->Write32(0x12818,0xaabbccdd);
+    call(*c,base,cb,229,{timer,0x12810,0,0,0,0,0,0x12818});
+    assert(c->eax==0&&memory->Read32(0x12818)==0xaabbcc00);
+    call(*c,base,cb,233,{timer,0,0});assert(c->eax==0);
+    uint64_t instant=0;memory->Write(0x12820,&instant,8);
+    call(*c,base,cb,233,{timer,0,0x12820});assert(c->eax==0x102);
+    call(*c,base,cb,185,{timer,0x12818});assert(c->eax==0);
+    call(*c,base,cb,187,{timer});assert(c->eax==0);
+    call(*c,base,cb,189,{0x12824,0,1,0});assert(c->eax==0);
+    auto ev=memory->Read32(0x12824);
+    call(*c,base,cb,230,{ev,ev,0,0,0});assert(c->eax==0);
+    call(*c,base,cb,233,{ev,0,0x12820});assert(c->eax==0x102);
+    call(*c,base,cb,187,{ev});assert(c->eax==0);
     // Requests for non-recompiled executable images return the same
     // error as the upstream XAPI replacement instead of rebooting.
     const char launch[]="C:\\xboxdash.xbe";

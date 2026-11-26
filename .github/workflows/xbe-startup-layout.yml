@@ -15,6 +15,8 @@ on:
       - 'tools/report_missing_guest.py'
       - 'tools/supplemental_guest_mapping.py'
       - 'tools/extend_hulk_generated.py'
+      - 'tools/discover_hulk_xpp.py'
+      - 'tools/run_hulk_next.sh'
       - 'native/test_xbe_supplemental_mapping.cpp'
       - 'native/portable_xbe_dispatch.cpp'
       - 'native/xbe_diagnostic_runtime.cpp'
@@ -56,7 +58,9 @@ jobs:
           curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Validate local diagnostic script
-        run: bash -n tools/run_hulk_diagnostic.sh
+        run: |
+          bash -n tools/run_hulk_diagnostic.sh
+          bash -n tools/run_hulk_next.sh
       - name: Verify strong generated graphics override
         run: |
           printf '#define HAS_Direct3D_CreateDevice 1\n#define SYM_Direct3D_CreateDevice 0037D900\n#define HAS_XLaunchNewImageA 1\n#define SYM_XLaunchNewImageA 00209C04\n' > /tmp/hulk-sdk/image_symbols.h
@@ -69,6 +73,7 @@ jobs:
           python3 tools/report_missing_guest.py --self-test
           python3 tools/supplemental_guest_mapping.py --self-test
           python3 tools/extend_hulk_generated.py --self-test
+          python3 tools/discover_hulk_xpp.py --self-test
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout

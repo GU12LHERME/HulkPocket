@@ -64,6 +64,8 @@ private:
     std::map<uint32_t,uint32_t> dpc_routines_;
     std::deque<uint32_t> dpc_queue_;
     bool dpc_running_=false;
+    std::map<uint32_t,uint8_t> irql_;
+    uint8_t& Irql(const X86Context& cpu){return irql_[cpu.thread_handle];}
     std::map<uint32_t,uint32_t> system_allocations_;
     struct KernelTrace {
         uint64_t seq=0;uint32_t ordinal=0,thread=0,ret=0,esp=0,eax=0;
@@ -243,7 +245,7 @@ private:
     // This is not a separate Xbox interrupt thread or an IRQL emulation.
     void ServiceDpc(X86Context& cpu,std::unique_lock<std::mutex>& lock){
         ServiceTimers();
-        if(dpc_running_||dpc_queue_.empty())return;
+        if(dpc_running_||dpc_queue_.empty()||Irql(cpu)>=2)return;
         auto d=dpc_queue_.front();
         if(!ValidDpc(d))throw std::runtime_error("Invalid queued DPC storage");
         auto routine=mem_.Read32(d+12),context=mem_.Read32(d+16),
@@ -256,12 +258,13 @@ private:
         const uint32_t args[]={0,d,context,a,b};
         mem_.Write(nested.esp,args,sizeof(args));
         dpc_running_=true;
+        auto old_irql=Irql(cpu);Irql(cpu)=2;
         auto old_ordinal=fault_ordinal,old_return=fault_return,old_stack=fault_stack;
         lock.unlock();
         int status=0;
         try{status=entry_(&nested,mem_.Base(),routine,Dispatch);}
-        catch(...){lock.lock();dpc_running_=false;cv_.notify_all();throw;}
-        lock.lock();dpc_running_=false;cv_.notify_all();
+        catch(...){lock.lock();Irql(cpu)=old_irql;dpc_running_=false;cv_.notify_all();throw;}
+        lock.lock();Irql(cpu)=old_irql;dpc_running_=false;cv_.notify_all();
         fault_ordinal=old_ordinal;fault_return=old_return;fault_stack=old_stack;
         if(status||nested.esp!=cpu.esp)throw std::runtime_error("DPC guest callback failed or violated stack ABI");
     }
@@ -291,7 +294,7 @@ private:
             Pause(cpu,lock);ServiceDpc(cpu,lock);
             if(mem_.Read32(body+4))break;
             if(Steady::now()>=deadline)return 0x102;
-            if(!dpc_running_&&!dpc_queue_.empty())continue;
+            if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
             cv_.wait_until(lock,NextTimer(deadline));
         }
         // Synchronization event is consumed by exactly one waiter.
@@ -568,6 +571,17 @@ private:
                 std::fprintf(stderr,"D3D8 draw/swap boundary id=%X first=%08X\n",ordinal,Arg(cpu,0));
                 throw std::runtime_error("D3D8 draw/swap guest integration pending");
             }
+            case 103: case 129: case 130: case 160: case 161: {
+                Check(cpu,0);
+                auto& level=Irql(cpu);const auto old=level;
+                if(ordinal==103){Ret(cpu,0,old);return;}
+                const auto requested=ordinal==129||ordinal==130?2u:(cpu.ecx&255u);
+                if(requested>31||(ordinal==161?requested>old:requested<old))
+                    throw std::runtime_error("Invalid guest IRQL transition");
+                level=uint8_t(requested);
+                Ret(cpu,0,ordinal==161?0:old);return;
+            }
+            case 358: Check(cpu,0);Ret(cpu,0,stopping_?1:0);return;
             case 125: case 126: case 127: {
                 Check(cpu,0);
                 uint64_t ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -829,10 +843,72 @@ private:
                 do {
                     Pause(cpu,lock);ServiceDpc(cpu,lock);
                     if(Steady::now()>=deadline)break;
-                    if(!dpc_running_&&!dpc_queue_.empty())continue;
+                    if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
                     cv_.wait_until(lock,NextTimer(deadline));
                 }while(true);
                 Pause(cpu,lock); Ret(cpu,3,0); return;
+            }
+            case 194: {
+                Check(cpu,3);auto out=Arg(cpu,0),type=Arg(cpu,2);
+                if(!mem_.IsCommitted(out,4)||type>1){Ret(cpu,3,0xc000000du);return;}
+                if(Arg(cpu,1))throw std::runtime_error("Named timer not implemented");
+                if(timer_types_.size()>=256)throw std::runtime_error("Timer capacity exhausted");
+                auto body=pool_.Allocate(40);
+                if(!body){Ret(cpu,3,0xc0000017u);return;}
+                InitDispatcher(body,40,8+type,0);timer_types_[body]=type;
+                auto h=next_event_;next_event_+=4;
+                events_.emplace(h,Event{body,type==0});Output(out,h);
+                Ret(cpu,3,0);return;
+            }
+            case 185: case 229: {
+                const unsigned n=ordinal==185?2:8;Check(cpu,n);
+                auto body=Body(Arg(cpu,0));
+                if(!body){Ret(cpu,n,0xc0000008u);return;}
+                if(!timer_types_.count(body)){Ret(cpu,n,0xc0000024u);return;}
+                auto out=Arg(cpu,n-1);
+                if(out&&!mem_.IsCommitted(out,1)){Ret(cpu,n,0xc000000du);return;}
+                ServiceTimers();
+                uint8_t prev=mem_.Read32(body+4)!=0;
+                if(ordinal==185){
+                    timers_.erase(body);mem_.Write32(body,mem_.Read32(body)&~0x01000000u);
+                }else{
+                    if(Arg(cpu,2)||Arg(cpu,5))throw std::runtime_error("Timer APC or resume semantics not implemented");
+                    auto period=Arg(cpu,6);auto ptr=Arg(cpu,1);
+                    if(period>86400000||!mem_.IsCommitted(ptr,8)){Ret(cpu,n,0xc000000du);return;}
+                    int64_t ticks;mem_.Read(ptr,&ticks,8);auto now=Now100ns();
+                    uint64_t delta=ticks<0?uint64_t(-(ticks+1))+1:ticks>now?uint64_t(ticks-now):0;
+                    if(delta>864000000000ull){Ret(cpu,n,0xc000000du);return;}
+                    timers_[body]={Steady::now()+std::chrono::nanoseconds(delta*100),0,period};
+                    mem_.Write32(body,mem_.Read32(body)|0x01000000u);mem_.Write32(body+4,0);
+                    mem_.Write(body+16,&ticks,8);mem_.Write32(body+32,0);mem_.Write32(body+36,period);
+                }
+                if(out)mem_.Write(out,&prev,1);
+                cv_.notify_all();Ret(cpu,n,0);return;
+            }
+            case 197: {
+                Check(cpu,3);auto h=Arg(cpu,0),out=Arg(cpu,1),options=Arg(cpu,2);
+                if(!mem_.IsCommitted(out,4)||options&~1u){Ret(cpu,3,0xc000000du);return;}
+                auto it=events_.find(h);
+                if(it==events_.end())throw std::runtime_error("DuplicateObject currently supports dispatcher handles only");
+                auto copy=it->second;auto newh=next_event_;next_event_+=4;
+                events_.emplace(newh,copy);Output(out,newh);
+                if(options&1)events_.erase(h);
+                Ret(cpu,3,0);return;
+            }
+            case 230: {
+                Check(cpu,5);
+                if(Arg(cpu,3)&255u)throw std::runtime_error("Alertable signal-and-wait not implemented");
+                auto signal=Body(Arg(cpu,0)),wait=Body(Arg(cpu,1));
+                if(!signal||!wait){Ret(cpu,5,0xc0000008u);return;}
+                auto type=mem_.Read32(signal)&255u;
+                if(type==0||type==1)mem_.Write32(signal+4,1);
+                else if(type==5){
+                    auto old=mem_.Read32(signal+4);
+                    if(!semaphore_limits_.count(signal)||old>=semaphore_limits_.at(signal)){Ret(cpu,5,0xc0000047u);return;}
+                    mem_.Write32(signal+4,old+1);
+                }else{Ret(cpu,5,0xc0000024u);return;}
+                cv_.notify_all();
+                auto result=WaitBody(cpu,wait,Arg(cpu,4),lock);Ret(cpu,5,result);return;
             }
             case 189: {
                 Check(cpu,4);
@@ -903,12 +979,12 @@ private:
                     Pause(cpu,lock);ServiceDpc(cpu,lock);
                     if(ready())break;
                     if(Steady::now()>=deadline){Ret(cpu,6,0x102);return;}
-                    if(!dpc_running_&&!dpc_queue_.empty())continue;
+                    if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
                     cv_.wait_until(lock,NextTimer(deadline));
                 }while(!ready());
                 auto consume=[&](uint32_t body){
                     auto type=mem_.Read32(body)&255u;
-                    if(type==1)mem_.Write32(body+4,0);
+                    if(type==1||type==9)mem_.Write32(body+4,0);
                     else if(type==5)mem_.Write32(body+4,mem_.Read32(body+4)-1);
                 };
                 if(!kind){for(auto body:bodies)consume(body);Ret(cpu,6,0);return;}
@@ -920,7 +996,7 @@ private:
             case 225: case 186: {
                 const unsigned n=ordinal==225?2:1;Check(cpu,n);
                 auto it=events_.find(Arg(cpu,0));
-                if(it==events_.end()||semaphore_limits_.count(it->second.body)){Ret(cpu,n,0xc0000008u);return;}
+                if(it==events_.end()||semaphore_limits_.count(it->second.body)||timer_types_.count(it->second.body)){Ret(cpu,n,0xc0000008u);return;}
                 auto body=it->second.body;
                 if(ordinal==225) Output(Arg(cpu,1),mem_.Read32(body+4));
                 mem_.Write32(body+4,ordinal==225?1:0);
@@ -948,7 +1024,10 @@ private:
                 auto requested=Arg(cpu,1);
                 if(requested) {
                     uint32_t ordinal_type=259;
-                    if(events_.count(h)) ordinal_type=semaphore_limits_.count(body)?30:16;
+                    if(events_.count(h)){
+                        if(timer_types_.count(body)){Ret(cpu,3,0xc0000024u);return;}
+                        ordinal_type=semaphore_limits_.count(body)?30:16;
+                    }
                     const auto actual=registry_?registry_->Resolve(ordinal_type).guest_data:0;
                     if(!actual || actual!=requested){Ret(cpu,3,0xc0000024u);return;}
                 }
