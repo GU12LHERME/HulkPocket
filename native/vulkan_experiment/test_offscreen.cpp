@@ -183,6 +183,36 @@ int main(int argc,char** argv){
         light[18]=std::bit_cast<uint32_t>(1.f);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest reversed light",f.Pixel(32,32),{0,0,0,255});
+        // Synthetic Xbox vertex microcode: mov oPos,v0; mov oD0,c[96].
+        // Position is already in guest screen units, including depth scale.
+        guest_state.rs[kRsLighting]=0;guest_state.light_enable=0;
+        guest_state.vs->inputs.fill({});guest_state.vs->inputs[0]={0,0,0x42};
+        guest_state.vs->stream_stride[0]=16;guest_state.streams[0].stride=16;
+        guest_state.vs->program_type=0x2078;
+        guest_state.vs->program={0,(1u<<21)|0x1b,2u<<26,0xf800,
+                                 0,(1u<<21)|(96u<<13)|0x1b,3u<<26,0xf819};
+        const float sv[3][4]={{8,56,.5f,1},{56,56,.5f,1},{32,8,.5f,1}};
+        memory.Write(0x80100100,sv,sizeof(sv));guest_state.zscale=1;
+        guest_state.vsc[96]={.25f,1.f,0.f,1.f};
+        if(!GuestDraw(guest_state,5,0,3,0,assembled))throw std::runtime_error("Vertex program assembly failed");
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("programmable vertex constant",f.Pixel(32,32),{64,255,0,255});
+        auto shader_count=f.shaders.Compiled();
+        guest_state.vsc[96]={0.f,.25f,1.f,1.f};
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("updated vertex constant",f.Pixel(32,32),{0,64,255,255});
+        if(f.shaders.Compiled()!=shader_count)throw std::runtime_error("Vertex constant update recompiled shader");
+        // Final Xbox combiner: D = C0, G = C1.a. Independent pixel buffer.
+        guest_state.ps=std::make_shared<gpu::PixelShader>();
+        guest_state.ps->def[8]=0x00000001;guest_state.ps->def[9]=0x00001200;
+        guest_state.simple[kMPsFinalConstant0/4]=0xff804020;
+        guest_state.simple[kMPsFinalConstant1/4]=0x80000000;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("programmable final combiner",f.Pixel(32,32),{128,64,32,128});
+        guest_state.simple[kMPsFinalConstant0/4]=0xff20ff40;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("updated pixel constant",f.Pixel(32,32),{32,255,64,128});
+        guest_state.ps.reset();
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");

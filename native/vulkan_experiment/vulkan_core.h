@@ -36,7 +36,7 @@ struct VulkanCore{
     VkCommandPool pool{};VkCommandBuffer cmd{};
     gpu::ImageMemory images;
     std::unique_ptr<gpu::FrameFences<1>> fence;
-    Buffer verts,indices,uniform,readback,staging;
+    Buffer verts,indices,uniform,vertex_constants,readback,staging;
     Image target,depth;
     std::array<Image,4> textures{};
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1};
@@ -68,7 +68,7 @@ struct VulkanCore{
             if(load_pass)vkDestroyRenderPass(dev,load_pass,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
             Destroy(target);for(auto& t:textures)Destroy(t);Destroy(depth);
-            Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);Destroy(staging);
+            Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(vertex_constants);Destroy(readback);Destroy(staging);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
             vkDestroyDevice(dev,nullptr);
@@ -176,6 +176,7 @@ struct VulkanCore{
         const uint16_t idx[]={2,0,1};
         std::memcpy(indices.data,idx,sizeof(idx));
         CreateBuffer(uniform,4096,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        CreateBuffer(vertex_constants,192*16,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         CreateBuffer(readback,VkDeviceSize(W)*H*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         CreateBuffer(staging,16,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
@@ -239,7 +240,7 @@ struct VulkanCore{
         Check(vkCreateDescriptorPool(dev,&dp,nullptr,&descriptors),"descriptor pool");
         VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptors;da.descriptorSetCount=1;da.pSetLayouts=&set_layout;
         Check(vkAllocateDescriptorSets(dev,&da,&set),"descriptor set");
-        VkDescriptorBufferInfo ub{uniform.b,0,4096};
+        VkDescriptorBufferInfo ub[2]={{vertex_constants.b,0,192*16},{uniform.b,0,4096}};
         std::array<VkDescriptorImageInfo,4> im{};
         for(unsigned i=0;i<4;++i)im[i]={VK_NULL_HANDLE,textures[i].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo sm{sampler,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
@@ -247,7 +248,7 @@ struct VulkanCore{
         for(uint32_t i=0;i<10;++i){
             auto& x=writes[i];x.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;x.dstSet=set;x.dstBinding=i;
             x.descriptorCount=1;x.descriptorType=bindings[i].descriptorType;
-            if(i<2)x.pBufferInfo=&ub;else x.pImageInfo=i<6?&im[i-2]:&sm;
+            if(i<2)x.pBufferInfo=&ub[i];else x.pImageInfo=i<6?&im[i-2]:&sm;
         }
         vkUpdateDescriptorSets(dev,writes.size(),writes.data(),0,nullptr);
     }
@@ -454,8 +455,15 @@ struct VulkanCore{
         if(dynamic){
             if(!state)throw std::invalid_argument("Missing dynamic state");
             std::memset(dc.mat,0,sizeof(dc.mat));std::memset(dc.lt,0,sizeof(dc.lt));
-            hulkpocket::vkexp::FixedTransforms(*state,dc);
-            hulkpocket::vkexp::FixedLighting(*state,dc);
+            const bool program=state->vs&&!state->vs->program.empty();
+            if(program){
+                if(!std::isfinite(state->zscale)||state->zscale<=0)throw std::invalid_argument("Invalid Xbox program depth scale");
+                dc.surf[2]=1.f/state->zscale;
+            }else{
+                hulkpocket::vkexp::FixedTransforms(*state,dc);
+                hulkpocket::vkexp::FixedLighting(*state,dc);
+            }
+            hulkpocket::vkexp::CombinerConstants(*state,dc);
             if(state->simple[gpu::kMAlphaTestEnable/4]){
                 auto fn=state->simple[gpu::kMAlphaFunc/4];
                 if(fn<0x200||fn>0x207)throw std::invalid_argument("Invalid Xbox alpha function");
@@ -466,6 +474,8 @@ struct VulkanCore{
             dc.tfactor[0]=float((factor>>16)&255)/255;dc.tfactor[1]=float((factor>>8)&255)/255;
             dc.tfactor[2]=float(factor&255)/255;dc.tfactor[3]=float(factor>>24)/255;
         }
+        std::memset(vertex_constants.data,0,192*16);
+        if(dynamic)std::memcpy(vertex_constants.data,state->vsc.data(),192*16);
         std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
         Begin();
         VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};

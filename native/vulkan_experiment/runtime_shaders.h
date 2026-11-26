@@ -34,17 +34,37 @@ public:
     std::vector<uint32_t> Vertex(const gpu::State& s,const gpu::Assembled& a){
         if(!(a.regs&1))throw std::invalid_argument("Missing position register");
         if((s.vs_handle&1)&&!s.vs)throw std::invalid_argument("Missing vertex declaration");
-        if(s.vs&&!s.vs->program.empty())
-            throw std::invalid_argument("Programmable vertex constants not integrated");
+        if(s.vs&&!s.vs->program.empty()){
+            const auto& prog=s.vs->program;
+            if(s.vs->program_type!=0x2078||prog.size()%4||prog.size()>136*4||!(prog.back()&1)||a.pretransformed)
+                throw std::invalid_argument("Unsupported Xbox vertex program");
+            for(size_t n=0;n<prog.size();n+=4){
+                auto mac=(prog[n+1]>>21)&15, out=prog[n+3];
+                if(mac>13||(n+4<prog.size()&&(out&1))||((out&0xf000)&&!(out&0x800)))
+                    throw std::invalid_argument("Unsupported Xbox vertex opcode or constant write");
+            }
+            return Get(EShLangVertex,gpu::VulkanVertexHlsl(gpu::VertexProgramHlsl(prog,a.regs,a.decode),true,false,false));
+        }
         return Get(EShLangVertex,gpu::VulkanVertexHlsl(
             gpu::FixedVertexHlsl(a.regs,a.pretransformed,a.decode,gpu::MakeFixedKey(s)),false,false,false));
     }
     std::vector<uint32_t> Pixel(const gpu::State& s,const gpu::TexInfo (&tex)[4]){
-        if(s.ps)throw std::invalid_argument("Programmable pixel constants not integrated");
         for(unsigned i=0;i<4;++i)
             if(bool(s.textures[i])!=bool(tex[i].kind)||tex[i].kind>gpu::kTex2D||tex[i].shadow||tex[i].flags)
                 throw std::invalid_argument("Unsupported runtime texture binding");
-        return Get(EShLangFragment,gpu::PixelHlsl(gpu::MakePixelKey(s,tex)));
+        auto key=gpu::MakePixelKey(s,tex);
+        if(s.ps){
+            if((key.count&255)>8)throw std::invalid_argument("Invalid Xbox combiner count");
+            // Only the integrated 2D projection/pass-through modes. Do not silently
+            // turn a cube, dependent, dot or shadow texture into a normal sample.
+            for(unsigned i=0;i<4;++i){
+                auto raw=(s.rs[gpu::kRsPsTextureModes]>>(i*5))&31;
+                if(raw!=0&&raw!=1&&raw!=4&&raw!=5)
+                    throw std::invalid_argument("Unsupported Vulkan programmable texture mode");
+                if(raw==1&&!tex[i].kind)throw std::invalid_argument("Missing programmable 2D texture");
+            }
+        }
+        return Get(EShLangFragment,gpu::PixelHlsl(key));
     }
 };
 }

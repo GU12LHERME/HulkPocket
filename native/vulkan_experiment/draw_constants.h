@@ -70,4 +70,28 @@ inline void FixedLighting(const gpu::State& s,gpu::DrawConstants& dc){
         o[6][0]=std::cos(x[24]*.5f);o[6][1]=std::cos(x[25]*.5f);
     }
 }
+// SCDA Vulkan FillCombinerConstants, pinned MIT revision a8180800:
+// hardware simple-state registers are authoritative after ApplyPixelConstants.
+inline void CombinerConstants(const gpu::State& s,gpu::DrawConstants& dc){
+    auto color=[](uint32_t v,float* o){
+        o[0]=float((v>>16)&255)/255;o[1]=float((v>>8)&255)/255;o[2]=float(v&255)/255;o[3]=float(v>>24)/255;
+    };
+    for(unsigned i=0;i<8;++i){
+        color(s.simple[(gpu::kMPsConstant0+i*4)/4],dc.pc[2*i]);
+        color(s.simple[(gpu::kMPsConstant1+i*4)/4],dc.pc[2*i+1]);
+    }
+    color(s.simple[gpu::kMPsFinalConstant0/4],dc.pc[16]);
+    color(s.simple[gpu::kMPsFinalConstant1/4],dc.pc[17]);
+    dc.misc[3]=s.rs[gpu::kRsSpecularEnable]?1.f:0.f;
+    if(s.rs[gpu::kRsFogEnable]){
+        auto mode=s.rs[gpu::kRsFogTableMode];
+        if(mode<1||mode>3)throw std::invalid_argument("Unsupported Vulkan fog mode");
+        dc.fog[0]=std::bit_cast<float>(s.rs[gpu::kRsFogStart]);
+        dc.fog[1]=std::bit_cast<float>(s.rs[gpu::kRsFogEnd]);
+        dc.fog[2]=std::bit_cast<float>(s.rs[gpu::kRsFogDensity]);dc.fog[3]=float(mode);
+        for(float v:dc.fog)if(!std::isfinite(v))throw std::invalid_argument("Invalid Vulkan fog constant");
+        if(mode==3&&dc.fog[0]==dc.fog[1])throw std::invalid_argument("Invalid linear fog range");
+        color(s.rs[gpu::kRsFogColor],dc.fog_color);
+    }
+}
 }
