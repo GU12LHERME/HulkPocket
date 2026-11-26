@@ -1,4 +1,5 @@
 #include "xbe_d3d8_bridge.h"
+#include "xbe_d3d8_device_memory.h"
 #include <cassert>
 using namespace hulkpocket;
 class RecordingBackend final:public gpu::Backend {
@@ -21,6 +22,29 @@ public:
     void SetGamma(const uint8_t*)override{throw std::logic_error("not tested");}
 };
 int main(){
+    {
+        XboxGuestAddressSpace guest;guest.Commit(0x20000,0x10000);
+        XbeKernelPool pool(guest,0x09000000,0x10000);
+        XbePhysicalMemory physical(guest);
+        constexpr uint32_t dev=0x20000,slot=0x23000,pp=0x23100;
+        guest.Write32(pp,640);guest.Write32(pp+4,480);guest.Write32(pp+8,6);
+        guest.Write32(pp+12,1);guest.Write32(pp+0x20,1);guest.Write32(pp+0x24,0x2a);
+        {
+            XbeD3d8DeviceMemory device(guest,pool,physical);
+            device.Initialize(dev,slot,pp);
+            assert(device.BufferCount()==2&&guest.Read32(slot)==dev);
+            auto front=device.BackBuffer(-1),back=device.BackBuffer(0),depth=device.Depth();
+            assert(front&&back&&depth&&front!=back);
+            assert(guest.Read32(dev+0x1a04)==back&&guest.Read32(dev+0x1a08)==depth);
+            assert(guest.Read32(back+12)==0x00011221&&guest.Read32(depth+12)==0x00012e21);
+            auto a=guest.Read32(front+4),b=guest.Read32(back+4);
+            assert(a!=b&&physical.Contains(0x80000000u+b,640*480*4));
+            assert(device.Rotate()==1&&guest.Read32(front+4)==b&&guest.Read32(back+4)==a);
+            assert(guest.Read32(dev+0x2478)==1);
+            assert(device.Rotate()==2&&guest.Read32(front+4)==a);
+        }
+        assert(pool.Outstanding()==0&&physical.AllocatedPages()==0&&guest.Read32(slot)==0);
+    }
     XboxGuestAddressSpace mem;mem.Commit(0x10000,0x10000);mem.Commit(0x80100000,0x10000);
     RecordingBackend backend;XbeD3d8Bridge bridge(mem,backend);bridge.Initialize(640,480);
     X86Context c{};

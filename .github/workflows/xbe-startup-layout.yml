@@ -31,6 +31,7 @@ on:
       - 'native/test_xbe_gpu_shader_foundation.cpp'
       - 'native/test_xbe_gpu_resources.cpp'
       - 'native/xbe_d3d8_bridge.h'
+      - 'native/xbe_d3d8_device_memory.h'
       - 'native/test_xbe_d3d8_bridge.cpp'
       - 'native/xbe_initial_cpu.h'
       - 'native/xbe_tls_index.h'

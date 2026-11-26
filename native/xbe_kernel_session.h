@@ -765,11 +765,13 @@ private:
                 Check(cpu,8);
                 if(Arg(cpu,2)) throw std::runtime_error("File APC not implemented");
                 auto event=Arg(cpu,1);
-                if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
+                if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
                 auto status=files_.Read(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
                 if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
                 Ret(cpu,8,status);return;
             }
+            case 198: Check(cpu,2);Ret(cpu,2,files_.Flush(Arg(cpu,0),Arg(cpu,1)));return;
+            case 210: Check(cpu,2);Ret(cpu,2,files_.FullAttributes(Arg(cpu,0),Arg(cpu,1)));return;
             case 211: Check(cpu,5);Ret(cpu,5,files_.Query(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
             case 226: Check(cpu,5);Ret(cpu,5,files_.Set(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
             case 184: case 199: {
@@ -983,8 +985,9 @@ private:
             case 197: {
                 Check(cpu,3);auto h=Arg(cpu,0),out=Arg(cpu,1),options=Arg(cpu,2);
                 if(!mem_.IsCommitted(out,4)||options&~1u){Ret(cpu,3,0xc000000du);return;}
+                if(files_.Contains(h)){Ret(cpu,3,files_.Duplicate(h,out,options&1));return;}
                 auto it=events_.find(h);
-                if(it==events_.end())throw std::runtime_error("DuplicateObject currently supports dispatcher handles only");
+                if(it==events_.end())throw std::runtime_error("DuplicateObject currently supports dispatcher and disc handles only");
                 auto copy=it->second;auto newh=next_event_;next_event_+=4;
                 events_.emplace(newh,copy);Output(out,newh);
                 if(options&1)events_.erase(h);

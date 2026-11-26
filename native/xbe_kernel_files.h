@@ -7,6 +7,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <map>
+#include <memory>
+#include <cstdio>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -16,8 +18,14 @@ namespace hulkpocket {
 class XbeDiscFiles {
     XboxGuestAddressSpace& mem_;
     int root_=-1;
-    struct File { int fd; uint64_t pos; };
-    std::map<uint32_t,File> files_;
+    struct File {
+        int fd; uint64_t pos=0;
+        explicit File(int value):fd(value){}
+        ~File(){if(fd>=0)close(fd);}
+        File(const File&)=delete;
+        File& operator=(const File&)=delete;
+    };
+    std::map<uint32_t,std::shared_ptr<File>> files_;
     uint32_t next_=0x4000;
     static constexpr uint32_t invalid=0xc000000d, denied=0xc0000022,
         missing=0xc0000034, bad_handle=0xc0000008, small=0xc0000023;
@@ -93,12 +101,12 @@ public:
             if(root_<0) throw std::runtime_error("Cannot open selected game directory");
         }
     }
-    ~XbeDiscFiles(){for(auto& kv:files_) close(kv.second.fd);if(root_>=0)close(root_);}
+    ~XbeDiscFiles(){files_.clear();if(root_>=0)close(root_);}
     XbeDiscFiles(const XbeDiscFiles&)=delete;
     XbeDiscFiles& operator=(const XbeDiscFiles&)=delete;
     bool Close(uint32_t h) {
         auto it=files_.find(h);if(it==files_.end())return false;
-        close(it->second.fd);files_.erase(it);return true;
+        files_.erase(it);return true;
     }
     uint32_t Open(uint32_t out,uint32_t access,uint32_t attrs,uint32_t iosb,uint32_t disposition,uint32_t options) {
         if(!mem_.IsCommitted(out,4)||!mem_.IsCommitted(iosb,8))return invalid;
@@ -108,15 +116,54 @@ public:
         std::string name;
         if(!Name(attrs,name))return Finish(iosb,invalid);
         if(files_.size()>=256)return Finish(iosb,0xc000011fu);
-        int fd=Resolve(name);if(fd<0)return Finish(iosb,missing);
+        int fd=Resolve(name);
+        std::fprintf(stderr,"DISC OPEN %s status=%08X\n",name.c_str(),fd<0?missing:0u);
+        if(fd<0)return Finish(iosb,missing);
+        std::shared_ptr<File> file;
+        try{file=std::make_shared<File>(fd);}catch(...){close(fd);throw;}
         auto h=next_;next_+=4;
-        files_.emplace(h,File{fd,0});mem_.Write32(out,h);
+        files_.emplace(h,std::move(file));mem_.Write32(out,h);
         return Finish(iosb,0,1);
+    }
+    bool Contains(uint32_t h)const{return files_.count(h)!=0;}
+    uint32_t Duplicate(uint32_t h,uint32_t out,bool close_source){
+        auto it=files_.find(h);if(it==files_.end())return bad_handle;
+        if(!mem_.IsCommitted(out,4))return invalid;
+        if(files_.size()>=256)return 0xc000011fu;
+        auto alias=next_;next_+=4;
+        files_.emplace(alias,it->second);
+        mem_.Write32(out,alias);
+        if(close_source)files_.erase(h);
+        return 0;
+    }
+    uint32_t Flush(uint32_t h,uint32_t iosb){
+        if(!mem_.IsCommitted(iosb,8))return invalid;
+        if(!Contains(h))return Finish(iosb,bad_handle);
+        // Read-only disc handles have no dirty host data to flush.
+        return Finish(iosb,0);
+    }
+    uint32_t FullAttributes(uint32_t attrs,uint32_t out){
+        if(!mem_.IsCommitted(out,56))return invalid;
+        std::string name;if(!Name(attrs,name))return invalid;
+        int fd=Resolve(name);if(fd<0)return missing;
+        struct stat st{};int status=fstat(fd,&st);close(fd);
+        if(status||st.st_size<0)return 0xc0000185u;
+        std::array<uint32_t,14> data{};
+        auto put64=[&](unsigned i,uint64_t v){data[i]=uint32_t(v);data[i+1]=uint32_t(v>>32);};
+        auto ticks=[](int64_t seconds){return seconds < -11644473600LL?0ull:uint64_t(seconds+11644473600LL)*10000000ull;};
+        // POSIX has no portable creation timestamp. Match the existing
+        // FileBasicInformation convention using last-modified time for creation.
+        put64(0,ticks(st.st_mtime));put64(2,ticks(st.st_atime));
+        put64(4,ticks(st.st_mtime));put64(6,ticks(st.st_ctime));
+        const auto size=uint64_t(st.st_size);
+        put64(8,(size+4095)&~uint64_t(4095));put64(10,size);
+        data[12]=1; // FILE_ATTRIBUTE_READONLY
+        mem_.Write(out,data.data(),sizeof(data));return 0;
     }
     uint32_t Read(uint32_t h,uint32_t iosb,uint32_t buf,uint32_t len,uint32_t offset) {
         if(!mem_.IsCommitted(iosb,8)||!mem_.IsCommitted(buf,len)||len>64u*1024*1024)return invalid;
         auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
-        auto& f=it->second;int64_t pos=-2;
+        auto& f=*it->second;int64_t pos=-2;
         if(offset){if(!mem_.IsCommitted(offset,8))return Finish(iosb,invalid);mem_.Read(offset,&pos,8);}
         if(pos==-2)pos=static_cast<int64_t>(f.pos);
         if(pos<0||uint64_t(pos)+len>uint64_t(INT64_MAX))return Finish(iosb,invalid);
@@ -130,7 +177,7 @@ public:
     uint32_t Query(uint32_t h,uint32_t iosb,uint32_t out,uint32_t len,uint32_t cls) {
         if(!mem_.IsCommitted(iosb,8))return invalid;
         auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
-        struct stat st{};if(fstat(it->second.fd,&st))return Finish(iosb,0xc0000185u);
+        struct stat st{};if(fstat(it->second->fd,&st))return Finish(iosb,0xc0000185u);
         std::array<uint32_t,14> data{};
         auto put64=[&](unsigned i,uint64_t v){data[i]=uint32_t(v);data[i+1]=uint32_t(v>>32);};
         uint32_t need=0;const auto size=uint64_t(st.st_size);
@@ -138,7 +185,7 @@ public:
         switch(cls) {
             case 4:need=40;for(unsigned i=0;i<8;i+=2)put64(i,time);data[8]=0x80;break;
             case 5:need=24;put64(0,(size+4095)&~uint64_t(4095));put64(2,size);data[4]=1;break;
-            case 14:need=8;put64(0,it->second.pos);break;
+            case 14:need=8;put64(0,it->second->pos);break;
             case 34:need=56;for(unsigned i=0;i<8;i+=2)put64(i,time);
                 put64(8,(size+4095)&~uint64_t(4095));put64(10,size);data[12]=0x80;break;
             default:return Finish(iosb,invalid);
@@ -154,7 +201,7 @@ public:
         if(len<8||!mem_.IsCommitted(in,8))return Finish(iosb,invalid);
         int64_t pos;mem_.Read(in,&pos,8);
         if(pos<0)return Finish(iosb,invalid);
-        it->second.pos=static_cast<uint64_t>(pos);return Finish(iosb,0);
+        it->second->pos=static_cast<uint64_t>(pos);return Finish(iosb,0);
     }
 };
 }
