@@ -3,12 +3,16 @@ android {
  namespace 'com.hulkpocket.diagnostic'
  compileSdk 35
  ndkVersion '28.2.13676358'
+ buildFeatures { buildConfig true }
  defaultConfig {
+  def revision = providers.exec { commandLine 'git', 'rev-parse', 'HEAD' }.standardOutput.asText.get().trim()
+  buildConfigField 'String', 'PREVIEW_REVISION', '"' + revision + '"'
+  externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_shared' } }
   applicationId 'com.hulkpocket.diagnostic'
   minSdk 29
   targetSdk 35
-  versionCode 3
-  versionName '0.3.0-playable-preview-dev'
+  versionCode 4
+  versionName '0.3.1-playable-preview-dev'
   ndk { abiFilters 'arm64-v8a' }
  }
  externalNativeBuild { cmake { path 'src/main/cpp/CMakeLists.txt'; version '3.22.1' } }

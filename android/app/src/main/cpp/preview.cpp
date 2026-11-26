@@ -75,12 +75,16 @@ extern "C" JNIEXPORT void JNICALL Java_com_hulkpocket_diagnostic_GameActivity_na
     hulkpocket::preview_host.Input(connected,s);
 }
 extern "C" JNIEXPORT void JNICALL Java_com_hulkpocket_diagnostic_GameActivity_nativeStop(JNIEnv*,jclass){hulkpocket::preview_host.stop.store(true);}
-extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_nativeRun(JNIEnv* e,jclass,jstring disc,jstring module,jstring partition,jstring log){
+extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_nativeRun(JNIEnv* e,jclass,jstring disc,jstring module,jstring partition,jstring log,jstring fvf){
     if(running.exchange(true))return 2;
     int result=2;
     try{
         auto d=Str(e,disc),m=Str(e,module),p=Str(e,partition),l=Str(e,log);
         Report report(l);
+        auto f=Str(e,fvf);
+        if(f.size()!=8||f.find_first_not_of("0123456789abcdefABCDEF")!=std::string::npos)
+            throw std::runtime_error("Invalid FVF in local preview package");
+        setenv("HULK_FVF_SHADER",f.c_str(),1);
         setenv("HULK_CONTINUE_CREATE","1",1);setenv("HULK_CONTINUE_DRAW","1",1);setenv("HULK_CONTINUE_SWAP","1",1);
         setenv("HULK_FRAME_LIMIT","10800",1);setenv("HULK_WATCHDOG_SECONDS","600",1);setenv("HULK_DRAW_LIMIT","128",1);
         setenv("HULK_COMPACT_AUDIO_TRACE","1",1);setenv("HULK_COMPACT_REPORT","1",1);setenv("HULK_AUDIO_OUTPUT","1",1);

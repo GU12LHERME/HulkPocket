@@ -8,6 +8,10 @@ import android.provider.DocumentsContract;
 import android.widget.*;
 import java.io.*;
 import java.util.UUID;
+import java.util.Properties;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipEntry;
+import java.security.MessageDigest;
 
 public final class PreviewLauncherActivity extends Activity {
     private TextView status;
@@ -17,9 +21,13 @@ public final class PreviewLauncherActivity extends Activity {
     private File disc(){return new File(root(),getPreferences(0).getString("disc","missing"));}
     private File module(){return new File(root(),getPreferences(0).getString("module","missing"));}
     private void update(){
-        boolean d=new File(disc(),"default.xbe").isFile(),m=module().isFile();
+        boolean d=new File(disc(),"default.xbe").isFile(),m=module().isFile()&&
+            BuildConfig.PREVIEW_REVISION.equals(getPreferences(0).getString("moduleRevision",""));
+        boolean matched=m&&d&&getPreferences(0).getString("discSha","").equals(getPreferences(0).getString("moduleXbe",""))&&
+            !getPreferences(0).getString("discSha","").isEmpty();
         status.setText("Versão experimental • USA\nJogo: "+(d?"importado":"não importado")+"\nMódulo ARM64: "+(m?"importado":"não importado"));
-        discButton.setEnabled(!busy);moduleButton.setEnabled(!busy);playButton.setEnabled(!busy&&d&&m);
+        discButton.setEnabled(!busy);moduleButton.setEnabled(!busy);playButton.setEnabled(!busy&&matched);
+        if(d&&m&&!matched)status.append("\nMódulo não corresponde ao XBE importado.");
     }
     @Override public void onCreate(Bundle b){
         super.onCreate(b);
@@ -27,7 +35,7 @@ public final class PreviewLauncherActivity extends Activity {
         TextView title=new TextView(this);title.setText("HulkPocket");title.setTextSize(30);panel.addView(title);
         status=new TextView(this);panel.addView(status);
         discButton=new Button(this);discButton.setText("Importar pasta do jogo");panel.addView(discButton);
-        moduleButton=new Button(this);moduleButton.setText("Importar módulo ARM64 local");panel.addView(moduleButton);
+        moduleButton=new Button(this);moduleButton.setText("Importar HulkPocket-module.zip");panel.addView(moduleButton);
         playButton=new Button(this);playButton.setText("Jogar");panel.addView(playButton);
         Button report=new Button(this);report.setText("Exportar último relatório");panel.addView(report);
         report.setOnClickListener(v->{
@@ -43,7 +51,8 @@ public final class PreviewLauncherActivity extends Activity {
                 Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("*/*");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,11);
             }).show());
         playButton.setOnClickListener(v->{
-            Intent i=new Intent(this,GameActivity.class);i.putExtra("disc",disc().getAbsolutePath());i.putExtra("module",module().getAbsolutePath());startActivity(i);
+            Intent i=new Intent(this,GameActivity.class);i.putExtra("disc",disc().getAbsolutePath());i.putExtra("module",module().getAbsolutePath());
+            i.putExtra("fvf",getPreferences(0).getString("moduleFvf",""));startActivity(i);
         });
         update();
     }
@@ -79,6 +88,44 @@ public final class PreviewLauncherActivity extends Activity {
             }
         }
     }
+    private static String sha(File f)throws Exception{
+        MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        try(InputStream in=new FileInputStream(f)){byte[] b=new byte[131072];int n;while((n=in.read(b))>0)digest.update(b,0,n);}
+        StringBuilder hex=new StringBuilder();for(byte v:digest.digest())hex.append(String.format(java.util.Locale.ROOT,"%02x",v&255));
+        return hex.toString();
+    }
+    private Properties importBundle(Uri uri,File target)throws Exception{
+        Properties p=new Properties();
+        boolean meta=false,code=false;
+        try(InputStream raw=getContentResolver().openInputStream(uri)){
+            if(raw==null)throw new IOException("Pacote inacessível");
+            try(ZipInputStream z=new ZipInputStream(raw)){
+                ZipEntry e;byte[] b=new byte[131072];
+                while((e=z.getNextEntry())!=null){
+                    if(e.isDirectory())throw new IOException("Entrada de pacote inválida");
+                    if(e.getName().equals("preview.properties")&&!meta){
+                        ByteArrayOutputStream data=new ByteArrayOutputStream();int n;
+                        while((n=z.read(b))>0){if(data.size()+n>4096)throw new IOException("Metadados muito grandes");data.write(b,0,n);}
+                        p.load(new ByteArrayInputStream(data.toByteArray()));meta=true;
+                    }else if(e.getName().equals("libhulk-code.so")&&!code){
+                        try(FileOutputStream out=new FileOutputStream(target)){
+                            if(!target.setReadOnly())throw new IOException("Não foi possível proteger módulo");
+                            long count=0;int n;while((n=z.read(b))>0){count+=n;if(count>512L*1024*1024)throw new IOException("Módulo muito grande");out.write(b,0,n);}
+                            out.getFD().sync();
+                        }
+                        code=true;
+                    }else throw new IOException("Entrada desconhecida ou duplicada");
+                    z.closeEntry();
+                }
+            }
+        }
+        if(!meta||!code||!"1".equals(p.getProperty("format"))||!BuildConfig.PREVIEW_REVISION.equals(p.getProperty("revision"))||
+           !p.getProperty("fvf","").matches("[0-9A-Fa-f]{8}")||!p.getProperty("xbe_sha256","").matches("[0-9a-f]{64}")||
+           !p.getProperty("module_sha256","").equals(sha(target)))throw new IOException("Pacote inválido ou de revisão diferente do APK");
+        byte[] h=new byte[20];try(DataInputStream in=new DataInputStream(new FileInputStream(target))){in.readFully(h);}
+        if(h[0]!=127||h[1]!='E'||h[2]!='L'||h[3]!='F'||h[4]!=2||h[5]!=1||h[16]!=3||h[17]!=0||(h[18]&255)!=183||h[19]!=0)throw new IOException("Módulo não é ELF ARM64 compartilhado");
+        return p;
+    }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
         if(result!=RESULT_OK||data==null||data.getData()==null||busy)return;
@@ -95,17 +142,20 @@ public final class PreviewLauncherActivity extends Activity {
             File target=new File(root(),(request==10?"disc-":"module-")+UUID.randomUUID());String error=null;
             try{
                 copied=0;files=0;
+                android.content.SharedPreferences.Editor edit=getPreferences(0).edit();
                 if(request==10){
                     tree(uri,DocumentsContract.getTreeDocumentId(uri),target,0);
-                    if(!new File(target,"default.xbe").isFile())throw new IOException("Selecione a pasta que contém default.xbe");
+                    File xbe=new File(target,"default.xbe");
+                    if(!xbe.isFile())throw new IOException("Selecione a pasta que contém default.xbe");
+                    edit.putString("discSha",sha(xbe));
                 }else{
-                    copy(uri,target,512L*1024*1024,true);
-                    byte[] h=new byte[20];try(DataInputStream in=new DataInputStream(new FileInputStream(target))){in.readFully(h);}
-                    if(h[0]!=127||h[1]!='E'||h[2]!='L'||h[3]!='F'||h[4]!=2||h[5]!=1||(h[18]&255)!=183||h[19]!=0)throw new IOException("Módulo não é ELF ARM64");
+                    Properties p=importBundle(uri,target);
+                    edit.putString("moduleRevision",p.getProperty("revision"))
+                        .putString("moduleXbe",p.getProperty("xbe_sha256")).putString("moduleFvf",p.getProperty("fvf"));
                 }
                 String key=request==10?"disc":"module";
                 String old=getPreferences(0).getString(key,"");
-                if(!getPreferences(0).edit().putString(key,target.getName()).commit())throw new IOException("Falha ao salvar seleção");
+                if(!edit.putString(key,target.getName()).commit())throw new IOException("Falha ao salvar seleção");
                 if(old.startsWith(request==10?"disc-":"module-"))remove(new File(root(),old));
             }catch(Exception ex){error=ex.getMessage();remove(target);}
             final String message=error;runOnUiThread(()->{busy=false;update();if(message!=null)status.setText("Erro: "+message);});

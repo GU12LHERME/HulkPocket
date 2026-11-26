@@ -25,6 +25,14 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     echo "Original FVF pointer candidate: $HULK_FVF_SHADER"
     python tools/link_hulk_cached.py --sdk "$sdk" --generated "$generated" \
         --cache "$cache" --ndk-bin "$PREFIX/bin" --output "$module"
+    if [[ "${HULK_EXPORT_PREVIEW:-0}" == 1 ]]; then
+        downloads="$HOME/storage/downloads"
+        [[ -d "$downloads" ]] || downloads="$HOME"
+        python tools/export_hulk_preview.py --module "$module" --xbe "$xbe" \
+            --fvf "$HULK_FVF_SHADER" --revision "$(git rev-parse HEAD)" \
+            --readelf "$PREFIX/bin/llvm-readelf" --output "$downloads/HulkPocket-module.zip"
+        exit 0
+    fi
     # Prefer the explicitly selected Android-NDK CI artifact when testing
     # on Termux, whose sysroot intentionally excludes EGL/GLES headers.
     # This executable must correspond to the current runtime sources.
