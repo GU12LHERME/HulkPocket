@@ -1,0 +1,7 @@
+# Actual game graphics integration checkpoint
+
+Sources studied: lookingcoding/hulk-ultimate-destruction-recomp-xbox-ver- commit 6603e8a4021a06331f63310ce47b42315d9dbfc6 config/game_usa.toml; TGP482/XboxXBERecomp commit 767a81837fba2d86913f6af81a10b33661d35518 runtime/xdk/d3d8.cpp, runtime/xdk/hle.h, tools/recomp/codegen_emit.cpp, runtime/kernel/xboxkrnl.cpp. USA config identifies CreateDevice at 0x37D900 and actual draw/swap entry points, with an empty [abi] table. Local generated header is authoritative; no USA addresses are hardcoded into production hooks.
+
+The cached ELF now links four strong overrides where the generated game exports them, verifies their type T in the final dynamic symbols, and invokes the checked host session callback at the actual graphics boundary. CreateDevice prints real present parameters. The call deliberately stops without pretending success or executing NV2A hardware initialization. The fixture validates strong override vs weak original on host and AArch64. No game objects are rebuilt. Explicit custom ABI maps stop with a diagnostic rather than guessing argument placement.
+
+Additional boot services: monotonic interrupt/performance clocks and Gregorian time-field conversion with range checks, plus bounded processor stall. These unblock known imports independently of graphics. Run the current local diagnostic on the RP6 to locate the first remaining real boot blocker (kernel, file or graphics), then use that exact evidence to implement device initialization and guest layout. No real game frame claimed.

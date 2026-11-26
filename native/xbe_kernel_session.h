@@ -10,6 +10,8 @@
 #include "xbe_kernel_physical_memory.h"
 #include "xbe_kernel_files.h"
 #include "xbe_fault_diagnostic.h"
+#include "xbe_graphics_boundary.h"
+#include "xbe_kernel_calendar.h"
 #include <map>
 #include <chrono>
 #include <array>
@@ -49,6 +51,7 @@ private:
     std::map<uint32_t,uint32_t> critical_;
     std::map<uint32_t,uint32_t> shutdown_notifications_;
     uint32_t cache_pages_=16;
+    const std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
     bool stopping_=false;
     int worker_failure_=0;
     Entry entry_=nullptr;
@@ -254,6 +257,51 @@ private:
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case kGraphicsCreate: {
+                Check(cpu,6);
+                auto pp=Arg(cpu,4);
+                std::fprintf(stderr,"Direct3D_CreateDevice: adapter=%08X type=%08X window=%08X behavior=%08X pp=%08X out=%08X\n",
+                    Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),pp,Arg(cpu,5));
+                if(!mem_.IsCommitted(pp,0x34))throw std::runtime_error("Invalid D3D present parameters");
+                std::fprintf(stderr,"D3D8 REQUEST: width=%u height=%u format=%X buffers=%u multisample=%X depth=%u depth_format=%X interval=%X\n",
+                    mem_.Read32(pp),mem_.Read32(pp+4),mem_.Read32(pp+8),mem_.Read32(pp+12),mem_.Read32(pp+16),
+                    mem_.Read32(pp+0x20),mem_.Read32(pp+0x24),mem_.Read32(pp+0x30));
+                throw std::runtime_error("D3D8 CreateDevice reached; guest device initialization pending");
+            }
+            case kGraphicsDraw: case kGraphicsDrawIndexed: case kGraphicsSwap: {
+                Check(cpu,ordinal==kGraphicsSwap?1:3);
+                std::fprintf(stderr,"D3D8 draw/swap boundary id=%X first=%08X\n",ordinal,Arg(cpu,0));
+                throw std::runtime_error("D3D8 draw/swap guest integration pending");
+            }
+            case 125: case 126: case 127: {
+                Check(cpu,0);
+                uint64_t ns=static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now()-start_).count());
+                uint64_t v=ordinal==125?ns/100:ordinal==127?3375000ull:
+                    (ns/1000000000ull)*3375000ull+(ns%1000000000ull)*3375000ull/1000000000ull;
+                cpu.edx=uint32_t(v>>32);Ret(cpu,0,uint32_t(v));return;
+            }
+            case 151: {
+                Check(cpu,1);auto us=Arg(cpu,0);
+                if(us>1000000)throw std::runtime_error("Stall exceeds diagnostic budget");
+                auto until=std::chrono::steady_clock::now()+std::chrono::microseconds(us);
+                lock.unlock();
+                while(std::chrono::steady_clock::now()<until)std::this_thread::yield();
+                lock.lock();Pause(cpu,lock);Ret(cpu,1,0);return;
+            }
+            case 304: case 305: {
+                Check(cpu,2);
+                if(ordinal==304){
+                    XboxTimeFields f{};uint64_t ticks=0;
+                    mem_.Read(Arg(cpu,0),&f,sizeof(f));
+                    if(!XboxFieldsToTicks(f,ticks)){Ret(cpu,2,0);return;}
+                    mem_.Write(Arg(cpu,1),&ticks,8);Ret(cpu,2,1);
+                }else{
+                    uint64_t ticks=0;mem_.Read(Arg(cpu,0),&ticks,8);
+                    auto f=XboxTicksToFields(ticks);mem_.Write(Arg(cpu,1),&f,sizeof(f));Ret(cpu,2,0);
+                }
+                return;
+            }
             case 47: {
                 // HAL_SHUTDOWN_REGISTRATION: callback, priority, LIST_ENTRY.
                 Check(cpu,2);auto registration=Arg(cpu,0);

@@ -47,6 +47,21 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0 && memory->Read32(0x10e20)==4 && memory->Read32(0x10e24)==1 && memory->Read32(0x10e28)==4);
     call(*c,base,cb,24,{7,0,0,0,0x10e28});assert(c->eax==0xc0000023u);
     call(*c,base,cb,301,{0xc0000034u});assert(c->eax==2);
+    call(*c,base,cb,127,{});assert(c->eax==3375000&&c->edx==0);
+    call(*c,base,cb,125,{});uint64_t before=(uint64_t(c->edx)<<32)|c->eax;
+    call(*c,base,cb,151,{100});
+    call(*c,base,cb,125,{});assert(((uint64_t(c->edx)<<32)|c->eax)>=before+1000);
+    XboxTimeFields fields{2000,2,29,12,34,56,789,0};
+    memory->Write(0x12400,&fields,sizeof(fields));
+    call(*c,base,cb,304,{0x12400,0x12420});assert(c->eax==1);
+    call(*c,base,cb,305,{0x12420,0x12440});
+    XboxTimeFields result{};memory->Read(0x12440,&result,sizeof(result));
+    assert(result.year==2000&&result.month==2&&result.day==29&&result.hour==12&&result.minute==34&&result.second==56&&result.milliseconds==789&&result.weekday==2);
+    fields.year=1900;memory->Write(0x12400,&fields,sizeof(fields));
+    call(*c,base,cb,304,{0x12400,0x12420});assert(c->eax==0);
+    uint64_t zero=0;memory->Write(0x12420,&zero,8);
+    call(*c,base,cb,305,{0x12420,0x12440});memory->Read(0x12440,&result,sizeof(result));
+    assert(result.year==1601&&result.month==1&&result.day==1&&result.weekday==1);
     // SHA-1 of "abc" and RFC 2202 HMAC-SHA1 vector, through the guest ABI.
     const uint8_t sha[]={0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d};
     const uint8_t mac[]={0xb6,0x17,0x31,0x86,0x55,0x05,0x72,0x64,0xe2,0x8b,0xc0,0xb6,0xfb,0x37,0x8c,0x8e,0xf1,0x46,0xbe,0x00};

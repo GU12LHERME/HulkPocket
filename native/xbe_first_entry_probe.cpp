@@ -2,6 +2,7 @@
 // Does not execute guest code until Xbox TLS and kernel import setup are ready.
 #include "portable_xbe_dispatch.h"
 #include "xbe_guest_thread_exit.h"
+#include "xbe_graphics_boundary.h"
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -47,6 +48,7 @@ int hulk_entry_execute_with_kernel(X86Context* cpu, uint8_t* base, uint32_t entr
         hulkpocket::PortableXbeDispatch dispatch(
             X86FuncMappings,n,X86CodeBase,X86CodeEnd,kernel ? kernel : stop_kernel);
         hulkpocket::ScopedXbeDispatch scope(dispatch);
+        hulkpocket::ScopedGraphicsCallback graphics_scope(kernel);
         std::fprintf(stderr,"Entering guest at %08X ESP=%08X\n",entry,cpu->esp);
         dispatch.Call(*cpu,base,entry);
         std::fprintf(stderr,"Guest entry returned\n");

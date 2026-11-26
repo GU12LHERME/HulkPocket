@@ -35,7 +35,7 @@ def main():
         if not all(o.is_file() for o in objects):
             raise RuntimeError("Matching complete cache not found; no recompilation attempted")
         print(f"Reusing {len(objects)} cached objects", flush=True)
-        for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe"):
+        for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe", "xbe_d3d8_entry_guard"):
             obj = work / (name + ".o")
             subprocess.run([str(compiler), "-std=c++20", "-O2", "-fPIC",
                             "-I", str(prepared), "-I", str(root / "native"),
@@ -56,6 +56,22 @@ def main():
             for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint", "hulk_entry_probe", "hulk_entry_execute", "hulk_entry_execute_with_kernel"):
                 if name not in names:
                     raise RuntimeError("Missing export: " + name)
+            # Verify strong override, not just a symbol name that could be weak.
+            import re
+            header_text = (prepared / "image_symbols.h").read_text()
+            named = bool(re.search(r"^#define IMAGE_NAMED 1$", header_text, re.M))
+            for hook in ("Direct3D_CreateDevice", "D3DDevice_DrawVertices",
+                         "D3DDevice_DrawIndexedVertices", "D3DDevice_Swap"):
+                if not re.search(r"^#define HAS_" + hook + r" 1$", header_text, re.M):
+                    continue
+                match = re.search(r"^#define SYM_" + hook + r" ([0-9A-Fa-f]{8})$", header_text, re.M)
+                if not match:
+                    raise RuntimeError("Missing generated symbol for " + hook)
+                name = "sub_" + (hook if named else match.group(1))
+                if not any(len(fields := line.split()) >= 3 and fields[-2:] == ["T", name]
+                           for line in symbols.splitlines()):
+                    raise RuntimeError("Strong D3D8 hook not linked: " + name)
+                print("Verified D3D8 guest override:", hook, name, flush=True)
             pending.replace(a.output)
         finally:
             pending.unlink(missing_ok=True)
