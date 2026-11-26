@@ -59,6 +59,9 @@ int main(){
             refused=false;
             try{gl.Clear(state,0,nullptr,0x10,0xff0000ff,1,0);}catch(const std::logic_error&){refused=true;}
             assert(refused);
+            refused=false;
+            try{gl.RestoreRotatedColor(state.rt);}catch(const std::logic_error&){refused=true;}
+            assert(refused); // first rotation points to never-rendered backing
             gl.Clear(state,0,nullptr,0xf3,0xff0000ff,1,0);
             gl.ReadbackColor(state.rt);
             assert(guest.Read32(0x80000000u+a)==0xff0000ff);
@@ -81,6 +84,29 @@ int main(){
                 assert(guest.Read32(front+4)==old_back&&guest.Read32(back+4)==old_front);
                 assert(guest.Read32(dev+0x2478)==frame);
             }
+            // Two already rendered buffers: swap with no draw/clear.
+            bridge.BindInitialTargets(back,buffers.Depth());
+            state=bridge.Snapshot();gl.BeginRotatedFrame(state.rt);
+            auto prior=guest.Read32(0x80000000u+guest.Read32(back+4));
+            gl.RestoreRotatedColor(state.rt);
+            assert((gl.ReadPixel(0,0)==std::array<uint8_t,4>{uint8_t(prior>>16),uint8_t(prior>>8),uint8_t(prior),uint8_t(prior>>24)}));
+            // A nonuniform top row checks BGRA and vertical orientation.
+            int32_t top[]={0,0,64,1};
+            gl.Clear(state,1,reinterpret_cast<const uint8_t*>(top),0xf0,0xff123456,1,0);
+            gl.ReadbackColor(state.rt);
+            assert(bridge.Present(back)==9&&buffers.Rotate()==9);
+            bridge.BindInitialTargets(back,buffers.Depth());
+            state=bridge.Snapshot();gl.BeginRotatedFrame(state.rt);
+            gl.RestoreRotatedColor(state.rt);
+            gl.ReadbackColor(state.rt);
+            assert(bridge.Present(back)==10&&buffers.Rotate()==10);
+            bridge.BindInitialTargets(back,buffers.Depth());
+            state=bridge.Snapshot();gl.BeginRotatedFrame(state.rt);
+            gl.RestoreRotatedColor(state.rt);
+            assert((gl.ReadPixel(0,0)==std::array<uint8_t,4>{0x12,0x34,0x56,0xff}));
+            assert((gl.ReadPixel(0,63)==std::array<uint8_t,4>{uint8_t(prior>>16),uint8_t(prior>>8),uint8_t(prior),uint8_t(prior>>24)}));
+            gl.ReadbackColor(state.rt);
+            assert(bridge.Present(back)==11&&buffers.Rotate()==11);
         }
         assert(pool.Outstanding()==0&&phys.AllocatedPages()==0&&guest.Read32(slot)==0);
     }

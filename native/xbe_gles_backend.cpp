@@ -97,7 +97,7 @@ void XbeGlesBackend::Destroy() noexcept {
     if(surface_!=EGL_NO_SURFACE)eglDestroySurface(display_,surface_);
     eglTerminate(display_);
     display_=EGL_NO_DISPLAY;context_=EGL_NO_CONTEXT;surface_=EGL_NO_SURFACE;
-    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=stencil_cleared_=color_requires_clear_=false;
+    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=stencil_cleared_=color_requires_clear_=false;saved_color_={};saved_next_=0;
 }
 void XbeGlesBackend::Check() const {
     if(context_==EGL_NO_CONTEXT || owner_!=std::this_thread::get_id() ||
@@ -436,6 +436,64 @@ void XbeGlesBackend::BeginRotatedFrame(const gpu::Surface& s){
     color_requires_clear_=true;
     depth_cleared_=stencil_cleared_=false;
 }
+void XbeGlesBackend::RestoreRotatedColor(const gpu::Surface& s){
+    Check();
+    if(!target_||target_!=s.header)Unsupported("Restore requires current color target");
+    Target(s);
+    if(!color_requires_clear_)return;
+    gpu::TextureDesc d{};
+    if(!gpu::DescribeSurface(s,d)||!d.data||d.pitch<uint64_t(width_)*4||
+       std::find(saved_color_.begin(),saved_color_.end(),d.data)==saved_color_.end())
+        Unsupported("Rotated color backing has no checked prior readback");
+    const auto* src=gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
+    std::vector<uint8_t> rgba(size_t(width_)*height_*4);
+    for(uint32_t y=0;y<height_;++y){
+        const auto* row=src+size_t(height_-1-y)*d.pitch;
+        auto* dst=rgba.data()+size_t(y)*width_*4;
+        for(uint32_t x=0;x<width_;++x){
+            dst[4*x]=row[4*x+2];dst[4*x+1]=row[4*x+1];
+            dst[4*x+2]=row[4*x];dst[4*x+3]=row[4*x+3];
+        }
+    }
+    GLint read=0,draw=0,tex=0,alignment=0,row_length=0,skip_rows=0,skip_pixels=0,unpack_buffer=0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&read);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&draw);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,&tex);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT,&alignment);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH,&row_length);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS,&skip_rows);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS,&skip_pixels);
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING,&unpack_buffer);
+    const auto scissor=glIsEnabled(GL_SCISSOR_TEST);
+    GLuint upload=0,fbo=0;
+    glGenTextures(1,&upload);glGenFramebuffers(1,&fbo);
+    glBindTexture(GL_TEXTURE_2D,upload);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER,0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS,0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS,0);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,GLsizei(width_),GLsizei(height_),0,GL_RGBA,GL_UNSIGNED_BYTE,rgba.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,fbo);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,upload,0);
+    const bool complete=glCheckFramebufferStatus(GL_READ_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
+    if(complete){
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER,0);
+        glDisable(GL_SCISSOR_TEST);
+        glBlitFramebuffer(0,0,GLint(width_),GLint(height_),0,0,GLint(width_),GLint(height_),GL_COLOR_BUFFER_BIT,GL_NEAREST);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER,GLuint(read));glBindFramebuffer(GL_DRAW_FRAMEBUFFER,GLuint(draw));
+    glBindTexture(GL_TEXTURE_2D,GLuint(tex));glBindBuffer(GL_PIXEL_UNPACK_BUFFER,GLuint(unpack_buffer));
+    glPixelStorei(GL_UNPACK_ALIGNMENT,alignment);glPixelStorei(GL_UNPACK_ROW_LENGTH,row_length);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS,skip_rows);glPixelStorei(GL_UNPACK_SKIP_PIXELS,skip_pixels);
+    if(scissor)glEnable(GL_SCISSOR_TEST);
+    glDeleteFramebuffers(1,&fbo);glDeleteTextures(1,&upload);
+    GlCheck("GLES rotated color restore");
+    if(!complete)throw std::runtime_error("Incomplete restore framebuffer");
+    color_requires_clear_=false;
+}
 void XbeGlesBackend::Flush(){Check();glFinish();GlCheck("GLES finish");}
 std::array<uint8_t,4> XbeGlesBackend::ReadPixel(uint32_t x,uint32_t y){
     Check();if(color_requires_clear_)Unsupported("Rotated backbuffer requires full color clear before pixel readback");
@@ -463,6 +521,9 @@ void XbeGlesBackend::ReadbackColor(const gpu::Surface& s){
             row[x*4]=src[x*4+2];row[x*4+1]=src[x*4+1];
             row[x*4+2]=src[x*4];row[x*4+3]=src[x*4+3];
         }
+    }
+    if(std::find(saved_color_.begin(),saved_color_.end(),d.data)==saved_color_.end()){
+        saved_color_[saved_next_]=d.data;saved_next_=(saved_next_+1)%saved_color_.size();
     }
 }
 void XbeGlesBackend::Copy(const gpu::Surface&,const gpu::Surface&,uint32_t,uint32_t,uint32_t,float,float){Unsupported("GLES surface copies pending");}

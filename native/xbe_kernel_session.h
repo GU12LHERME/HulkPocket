@@ -1235,8 +1235,13 @@ private:
                     throw std::runtime_error("D3D swap without owned live device");
                 auto& live=*live_d3d_;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||
-                    live.diagnostic_draw_returns<=live.draws_at_swap||Arg(cpu,0)!=0)
+                const bool no_draw=live.diagnostic_draw_returns==live.draws_at_swap;
+                const auto caller=mem_.Read32(cpu.esp);
+                // RP6 f74de56: after 36 normal frames the original game
+                // requested another swap with zero intervening draws.
+                // Only continue the already verified two-buffer caller.
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||Arg(cpu,0)!=0||
+                    (no_draw&&(!live.diagnostic_swap_returns||caller!=0x0031b1d4||live.buffers.BufferCount()!=2)))
                     throw std::runtime_error("Unsupported diagnostic swap request");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1245,6 +1250,10 @@ private:
                 gpu::TextureDesc desc{};
                 if(!gpu::DescribeSurface(state.rt,desc)||state.rt.header!=live.buffers.BackBuffer(0))
                     throw std::runtime_error("Unsupported diagnostic swap target");
+                if(no_draw){
+                    live.backend.RestoreRotatedColor(state.rt);
+                    std::fprintf(stderr,"D3D SWAP WITHOUT DRAW PASS: caller=%08X backing=%08X (preserved color)\n",caller,desc.data);
+                }
                 live.backend.ReadbackColor(state.rt);
                 auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
                 if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
