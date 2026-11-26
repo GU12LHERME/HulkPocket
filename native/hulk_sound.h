@@ -808,7 +808,7 @@ public:
         // after a long pause. Diagnostic stops rather than consuming RAM.
         uint32_t frames=uint32_t(std::min<int64_t>(elapsed,100000)*kRate/1000000);
         last_=now;
-        if(rendered_+frames>uint64_t(kRate)*120)throw std::runtime_error("Audio diagnostic capture budget reached");
+        if(rendered_+frames>uint64_t(kRate)*DiagnosticAudioSeconds())throw std::runtime_error("Audio diagnostic capture budget reached");
         if(!voices_.empty()||!streams_.empty()||output_||reverb_){
             auto pcm=Render(frames);
             Capture(pcm);

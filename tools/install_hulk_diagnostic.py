@@ -81,9 +81,10 @@ def main():
             HULK_DIAGNOSTIC_BIN=str(home/"hulk-live-diagnostic"))
         # Longer bounded diagnostic by default for the device test; callers
         # can still request the old limits or full per-draw pixel capture.
-        env.setdefault("HULK_FRAME_LIMIT","1800")
+        env.setdefault("HULK_FRAME_LIMIT","5400")
         env.setdefault("HULK_DRAW_LIMIT","128")
-        env.setdefault("HULK_WATCHDOG_SECONDS","90")
+        env.setdefault("HULK_WATCHDOG_SECONDS","240")
+        env.setdefault("HULK_COMPACT_AUDIO_TRACE","1")
         return subprocess.call(["bash","tools/run_hulk_next.sh"],cwd=repo,env=env)
     return 0
 if __name__=="__main__":

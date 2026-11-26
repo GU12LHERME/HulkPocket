@@ -344,8 +344,25 @@ namespace {
 [[maybe_unused]] void SoundBoundary(X86Context& ctx,uint8_t* base,uint32_t id,unsigned n,const char* name){
     if(!Stdcall(name)||!hulkpocket::graphics_callback)throw std::runtime_error("Audio requires checked stdcall adapter");
     const auto esp=ctx.esp;
-    std::fprintf(stderr,"HULK DSOUND CALL %s ESP=%08X thread=%08X\n",name,esp,ctx.thread_handle);
-    hulkpocket::graphics_callback(ctx,base,id);
+    // Only routine successful audio polls are sampled, and only when
+    // explicitly selected. Keep all other calls and exceptions visible.
+    const char* compact=std::getenv("HULK_COMPACT_AUDIO_TRACE");
+    bool log=true;
+    unsigned count=0;
+    if(compact&&std::strcmp(compact,"1")==0){
+        static thread_local unsigned pump=0,position=0,commit=0;
+        unsigned* p=nullptr;
+        if(id==hulkpocket::kSoundPump)p=&pump;
+        else if(id==hulkpocket::kSoundBufferGetPosition)p=&position;
+        else if(id==hulkpocket::kSoundCommit3d)p=&commit;
+        if(p){count=++*p;log=hulkpocket::DiagnosticTracePoll(count);}
+    }
+    if(log)std::fprintf(stderr,"HULK DSOUND CALL %s ESP=%08X thread=%08X\n",name,esp,ctx.thread_handle);
+    try{hulkpocket::graphics_callback(ctx,base,id);}
+    catch(...){
+        if(!log)std::fprintf(stderr,"HULK DSOUND FAILED %s ESP=%08X thread=%08X poll=%u\n",name,esp,ctx.thread_handle,count);
+        throw;
+    }
     if(uint64_t(esp)+4+4*n!=ctx.esp)throw std::runtime_error("Audio adapter did not consume guest frame");
 }
 }

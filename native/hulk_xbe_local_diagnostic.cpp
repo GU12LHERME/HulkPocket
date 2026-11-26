@@ -176,7 +176,7 @@ int main(int argc,char** argv) {
                         Dl_info module_info{};
                         dladdr(reinterpret_cast<void*>(entry),&module_info);
                         InstallGuestFaultHandler(guest.Base(),reinterpret_cast<uintptr_t>(module_info.dli_fbase));
-                        const auto watchdog=DiagnosticBudget("HULK_WATCHDOG_SECONDS",15,90);
+                        const auto watchdog=DiagnosticWatchdogSeconds();
                         std::fprintf(stderr,"HULK DIAGNOSTIC BUDGET watchdog=%u seconds\n",watchdog);
                         alarm(watchdog);
                         uint32_t image_pages=0;

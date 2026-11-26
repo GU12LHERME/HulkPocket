@@ -75,6 +75,8 @@ constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture
 // Bounded experimental presentation loop; the final swap is presented
 // but deliberately does not return to guest code.
 constexpr unsigned kDiagnosticFrameLimit=60;
+constexpr unsigned kDiagnosticMaxFrames=5400;
+constexpr unsigned kDiagnosticMaxSeconds=240;
 constexpr unsigned kDiagnosticDrawsPerFrame=8;
 // Explicitly bounded longer diagnostic sessions. Reject malformed values
 // by falling back to the previous conservative defaults.
@@ -91,14 +93,22 @@ inline unsigned DiagnosticBudget(const char* name,unsigned fallback,unsigned max
 }
 // The guest override and host session must agree on the same frame ceiling.
 inline unsigned DiagnosticFrameLimit(){
-    return DiagnosticBudget("HULK_FRAME_LIMIT",kDiagnosticFrameLimit,1800);
+    return DiagnosticBudget("HULK_FRAME_LIMIT",kDiagnosticFrameLimit,kDiagnosticMaxFrames);
 }
 // Keep the historical floor for short sessions, with a bounded per-frame
-// allowance for extended ones. The frame ceiling is at most 1800.
+// allowance for extended ones. The frame ceiling remains bounded.
 constexpr unsigned DiagnosticSetterLimit(unsigned frames){
-    const unsigned bounded=frames>1800?1800:frames;
+    const unsigned bounded=frames>kDiagnosticMaxFrames?kDiagnosticMaxFrames:frames;
     return bounded*128u>16384u?bounded*128u:16384u;
 }
+inline unsigned DiagnosticWatchdogSeconds(){
+    return DiagnosticBudget("HULK_WATCHDOG_SECONDS",15,kDiagnosticMaxSeconds);
+}
+inline unsigned DiagnosticAudioSeconds(){
+    const unsigned seconds=DiagnosticWatchdogSeconds();
+    return seconds>120?seconds:120;
+}
+constexpr bool DiagnosticTracePoll(unsigned count){return count<=16||count%1024==0;}
 using GraphicsCallback=void(*)(X86Context&,uint8_t*,uint32_t);
 inline thread_local GraphicsCallback graphics_callback=nullptr;
 class ScopedGraphicsCallback {
