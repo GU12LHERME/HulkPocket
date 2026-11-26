@@ -20,11 +20,15 @@ constexpr bool Stdcall(std::string_view name){
     for(auto n:mapped_names)if(n==name)return false;
     return true;
 }
-[[maybe_unused,noreturn]] void Boundary(X86Context& ctx,uint8_t* base,uint32_t id,const char* name,bool stack_abi){
+[[maybe_unused]] void Boundary(X86Context& ctx,uint8_t* base,uint32_t id,const char* name,bool stack_abi){
     std::fprintf(stderr,"D3D8 GUEST BOUNDARY: %s ESP=%08X EAX=%08X ECX=%08X EDX=%08X thread=%08X\n",
         name,ctx.esp,ctx.eax,ctx.ecx,ctx.edx,ctx.thread_handle);
     if(!stack_abi)throw std::runtime_error("D3D8 boundary has explicit ABI mapping; host adapter required");
+    auto original_esp=ctx.esp;
     if(hulkpocket::graphics_callback)hulkpocket::graphics_callback(ctx,base,id);
+    // Only CreateDevice has a checked diagnostic continuation. A callback
+    // that did not complete its stdcall frame must still stop execution.
+    if(id==hulkpocket::kGraphicsCreate&&uint64_t(original_esp)+28==ctx.esp&&ctx.eax==0)return;
     throw std::runtime_error("D3D8 guest device integration checkpoint");
 }
 }

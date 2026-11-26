@@ -26,6 +26,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <mutex>
+#include <memory>
 #include <thread>
 namespace hulkpocket {
 // Bounded diagnostic scheduler. Suspension is cooperative at kernel calls;
@@ -89,13 +90,30 @@ private:
     int worker_failure_=0;
     Entry entry_=nullptr;
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+    // EGL objects must be destroyed on the guest host thread that created them.
+    struct LiveD3dDevice {
+        XbeD3d8DeviceMemory buffers;
+        XbeGlesBackend backend;
+        XbeD3d8Bridge bridge;
+        uint32_t owner;
+        LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
+            :buffers(mem,pool,physical),bridge(mem,backend),owner(thread){}
+    };
+    std::unique_ptr<LiveD3dDevice> live_d3d_;
+    void ReleaseD3dOwner(uint32_t thread){
+        if(live_d3d_&&live_d3d_->owner==thread){
+            live_d3d_.reset();
+            std::fprintf(stderr,"D3D persistent diagnostic device released on owner thread\n");
+        }
+    }
     XbeD3dDefaultTrace* default_trace_=nullptr;
     uint32_t default_thread_=0;
     void DefaultProbe(X86Context& cpu,uint32_t routine,uint32_t device,uint32_t slot,uint32_t pp,
                       std::unique_lock<std::mutex>& lock){
-        if(default_trace_||!entry_||!routine||cpu.esp<4||!mem_.IsCommitted(cpu.esp-4,4))
+        if(live_d3d_||default_trace_||!entry_||!routine||cpu.esp<4||!mem_.IsCommitted(cpu.esp-4,4))
             throw std::runtime_error("Invalid D3D default initializer entry");
-        XbeD3d8DeviceMemory buffers(mem_,pool_,physical_);
+        auto owned=std::make_unique<LiveD3dDevice>(mem_,pool_,physical_,cpu.thread_handle);
+        auto& buffers=owned->buffers;
         buffers.Initialize(device,slot,pp);
         const char* fvf_text=std::getenv("HULK_FVF_SHADER");
         if(!fvf_text||std::strlen(fvf_text)!=8)throw std::runtime_error("Original FVF pointer not resolved; inspect local discovery report");
@@ -121,8 +139,8 @@ private:
         std::fprintf(stderr,"D3D ORIGINAL DEFAULT INIT RETURNED\n");
         // Bind the *same* original guest device allocations to the GLES bridge,
         // not a fresh scratch-only device with synthetic render defaults.
-        XbeGlesBackend backend;
-        XbeD3d8Bridge bridge(mem_,backend);
+        auto& backend=owned->backend;
+        auto& bridge=owned->bridge;
         auto w=mem_.Read32(device+0xee8),h=mem_.Read32(device+0xeec);
         bridge.Initialize(w,h);
         bridge.BindInitialTargets(buffers.BackBuffer(0),buffers.Depth());
@@ -142,6 +160,7 @@ private:
             throw std::runtime_error("Original-state guest readback mismatch");
         std::fprintf(stderr,"D3D ORIGINAL STATE HANDOFF PASS: color=%08X depth=%08X z=%u\n",
             live.rt.header,live.zs.header,live.rs[gpu::kRsZEnable]);
+        live_d3d_=std::move(owned);
     }
 #endif
     inline static thread_local XbeKernelSession* active_=nullptr;
@@ -238,6 +257,9 @@ private:
             } catch(...) { result=1; }
             active_=nullptr;
             std::lock_guard<std::mutex> lock(lock_);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+            ReleaseD3dOwner(child.thread_handle);
+#endif
             w.finished=true;
             mem_.Write32(w.pcr+0x404,1); // dispatcher SignalState
             if(result && !stopping_){worker_failure_=result;stopping_=true;}
@@ -723,11 +745,24 @@ private:
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
                 if(!cpu.ecx||!cpu.edx)throw std::runtime_error("Missing generated D3D device symbols");
                 auto out=Arg(cpu,5);
-                if(out&&!mem_.IsCommitted(out,4))throw std::runtime_error("Invalid D3D device output");
+                if(!out||!mem_.IsCommitted(out,4))throw std::runtime_error("Invalid D3D device output");
+                if(live_d3d_||default_trace_)throw std::runtime_error("Duplicate D3D device creation");
+                if(Arg(cpu,0)!=0||Arg(cpu,1)!=1||Arg(cpu,2)!=0||Arg(cpu,3)!=0x40)
+                    throw std::runtime_error("Unvalidated D3D device creation arguments");
                 auto routine=cpu.eax,device=cpu.ecx,slot=cpu.edx;
                 RunD3dCreateProbe(mem_,pool_,physical_,device,slot,pp);
                 DefaultProbe(cpu,routine,device,slot,pp,lock);
-                throw std::runtime_error("D3D8 original state retained in live bridge; full draw translation and persistent device pending");
+                // Only the explicit diagnostic continuation may return this
+                // partial device. Unsupported rendering remains a hard stop.
+                auto opt=std::getenv("HULK_CONTINUE_CREATE");
+                if(!opt||std::strcmp(opt,"1")!=0)
+                    throw std::runtime_error("D3D persistent device ready; diagnostic continuation not enabled");
+                if(!live_d3d_||live_d3d_->owner!=cpu.thread_handle||mem_.Read32(slot)!=device)
+                    throw std::runtime_error("D3D persistent device ownership mismatch");
+                mem_.Write32(out,device);
+                std::fprintf(stderr,"D3D DIAGNOSTIC CREATE RETURN: device=%08X output=%08X caller=%08X (partial device, no gameplay claim)\n",
+                    device,out,mem_.Read32(cpu.esp));
+                Ret(cpu,6,0);return;
 #else
                 throw std::runtime_error("D3D8 CreateDevice reached; guest device initialization pending");
 #endif
@@ -1335,7 +1370,15 @@ public:
         int result=0;
         try { result=entry(&cpu,mem_.Base(),address,Dispatch); }
         catch(const GuestThreadExit& e) { cpu.eax=e.code; }
-        catch(...) { Stop(); throw; }
+        catch(...) {
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+            {std::lock_guard<std::mutex> guard(lock_);ReleaseD3dOwner(cpu.thread_handle);}
+#endif
+            Stop(); throw;
+        }
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+        {std::lock_guard<std::mutex> guard(lock_);ReleaseD3dOwner(cpu.thread_handle);}
+#endif
         if(result) Stop(); else Join();
         return result?result:worker_failure_;
     }
