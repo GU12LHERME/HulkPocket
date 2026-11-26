@@ -1,0 +1,3 @@
+# RP6 original defaults returned: 8ca5204
+
+Device report confirms FVF record 0039CDD8 (original instruction 00388E7B), 276 captured setter records, 64 scratch bytes, 10 decoded methods, and successful return of 003882E0. The final status 1 was the intentional diagnostic boundary. This change hands the original render-state and texture tables plus the observed ten raw NV2A methods into a GLES bridge bound to the same guest device allocations. It checks a diagnostic color clear and guest memory readback, not a game frame. Unknown raw packets are rejected transactionally. No draw support or CreateDevice success is claimed; persistent ownership, remaining XDK device setup and actual draw translation remain pending. CI and RP6 verification required.

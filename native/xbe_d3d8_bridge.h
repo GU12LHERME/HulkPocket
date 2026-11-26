@@ -195,6 +195,25 @@ public:
         auto rt=Surface(color),zs=Surface(depth);
         state_.rt=rt;state_.zs=zs;ViewportConstants();
     }
+    // Transfer the real initializer's state into the live bridge. The observed
+    // NV2A packets are retained verbatim in the method-indexed state; storing
+    // them is not a claim that the GLES draw path implements their semantics.
+    // Reject any new packet rather than silently treating it as supported.
+    void AdoptOriginalDefaults(const gpu::State& captured,uint32_t begin,uint32_t end){
+        std::lock_guard guard(lock_);
+        if(!initialized_||!state_.rt.header)throw std::logic_error("D3D targets not initialized");
+        auto methods=DecodeNv2aMethods(mem_,begin,end);
+        auto next=captured.simple;
+        for(auto [m,v]:methods){
+            switch(m){
+                case 0x1b0c:case 0x1b4c:case 0x1b8c:case 0x1bcc:
+                case 0x0a20:case 0x0a24:case 0x0a28:case 0x0a2c:
+                case 0x0394:case 0x0398:next[m>>2]=v;break;
+                default:throw std::logic_error("Unrecognized original default packet");
+            }
+        }
+        state_.simple=next;state_.rs=captured.rs;state_.tss=captured.tss;
+    }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");

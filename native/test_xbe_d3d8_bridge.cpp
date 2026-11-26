@@ -94,6 +94,25 @@ int main(){
     };
     mem.Write32(0x10100,0x50000);mem.Write32(0x10104,0x100000);mem.Write32(0x1010c,0x00011221);
     call("D3DDevice_SetRenderTarget",{0x10100,0});
+    // Verify default-state handoff preserves target/viewport and raw NV2A
+    // values, and rejects an unknown packet without partial mutation.
+    gpu::State captured{};
+    captured.rs[gpu::kRsZEnable]=1;
+    captured.simple[gpu::kMColorWriteEnable>>2]=0x01010101;
+    captured.tss[0][gpu::kTssColorOp]=4;
+    const uint32_t defaults[]={0x0a20|(2u<<18),0x3f080000,0x3f080000,
+        0x0394|(2u<<18),0,0x4b7fffff,0x1b0c|(1u<<18),0};
+    mem.Write(0x10400,defaults,sizeof(defaults));
+    bridge.AdoptOriginalDefaults(captured,0x10400,0x10400+sizeof(defaults));
+    auto adopted=bridge.Snapshot();
+    assert(adopted.rt.header==0x10100&&adopted.viewport.w==640);
+    assert(adopted.rs==captured.rs&&adopted.tss==captured.tss);
+    assert(adopted.simple[0x0a20>>2]==0x3f080000&&adopted.simple[0x0398>>2]==0x4b7fffff);
+    mem.Write32(0x10400,0x17fc|(1u<<18));
+    bool bad_default=false;
+    try{bridge.AdoptOriginalDefaults(gpu::State{},0x10400,0x10408);}
+    catch(const std::logic_error&){bad_default=true;}
+    assert(bad_default&&bridge.Snapshot().simple==adopted.simple&&bridge.Snapshot().rs==adopted.rs);
     call("D3DDevice_Clear",{0,0,0xf0,0xff123456,std::bit_cast<uint32_t>(1.0f),0});
     mem.Write32(0x10200,0x40000);mem.Write32(0x10204,0x100100);
     float v[]={0,0,0,1,0,0,0,1,0};mem.Write(0x80100100,v,sizeof(v));

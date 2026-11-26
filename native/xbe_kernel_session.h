@@ -119,6 +119,29 @@ private:
         trace.Dump(buffers);
         if(status||nested.esp!=cpu.esp)throw std::runtime_error("D3D original default initializer stopped or violated stack ABI");
         std::fprintf(stderr,"D3D ORIGINAL DEFAULT INIT RETURNED\n");
+        // Bind the *same* original guest device allocations to the GLES bridge,
+        // not a fresh scratch-only device with synthetic render defaults.
+        XbeGlesBackend backend;
+        XbeD3d8Bridge bridge(mem_,backend);
+        auto w=mem_.Read32(device+0xee8),h=mem_.Read32(device+0xeec);
+        bridge.Initialize(w,h);
+        bridge.BindInitialTargets(buffers.BackBuffer(0),buffers.Depth());
+        bridge.AdoptOriginalDefaults(trace.State(),buffers.Scratch(),buffers.ScratchEnd());
+        auto live=bridge.Snapshot();
+        if(live.rs!=trace.State().rs||live.tss!=trace.State().tss)
+            throw std::runtime_error("Original D3D state handoff mismatch");
+        buffers.RewindScratch();
+        gpu::ScopedGuestMemory scope(mem_);
+        backend.Clear(live,0,nullptr,0xf0u|(buffers.Depth()?gpu::kClearZ:0u),0xff123456,1.0f,0);
+        auto pixel=backend.ReadPixel(w/2,h/2);
+        if(pixel!=std::array<uint8_t,4>{0x12,0x34,0x56,0xff})
+            throw std::runtime_error("Original-state target clear mismatch");
+        backend.ReadbackColor(live.rt);
+        gpu::TextureDesc desc{};
+        if(!gpu::DescribeSurface(live.rt,desc)||mem_.Read32(desc.data+(h/2)*desc.pitch+(w/2)*4)!=0xff123456)
+            throw std::runtime_error("Original-state guest readback mismatch");
+        std::fprintf(stderr,"D3D ORIGINAL STATE HANDOFF PASS: color=%08X depth=%08X z=%u\n",
+            live.rt.header,live.zs.header,live.rs[gpu::kRsZEnable]);
     }
 #endif
     inline static thread_local XbeKernelSession* active_=nullptr;
@@ -704,7 +727,7 @@ private:
                 auto routine=cpu.eax,device=cpu.ecx,slot=cpu.edx;
                 RunD3dCreateProbe(mem_,pool_,physical_,device,slot,pp);
                 DefaultProbe(cpu,routine,device,slot,pp,lock);
-                throw std::runtime_error("D3D8 original defaults captured; applying full state and persistent device pending");
+                throw std::runtime_error("D3D8 original state retained in live bridge; full draw translation and persistent device pending");
 #else
                 throw std::runtime_error("D3D8 CreateDevice reached; guest device initialization pending");
 #endif
