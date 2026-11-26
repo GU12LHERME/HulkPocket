@@ -455,6 +455,45 @@ private:
                 }
                 Ret(cpu,2,2);return; // ERROR_FILE_NOT_FOUND
             }
+            // XboxXBERecomp's high-level I/O runtime deliberately has no
+            // low-level Xbox device drivers. Report failure, not a fake device.
+            // ABI cross-checked against Cxbx-Reloaded EmuKrnlIo.cpp.
+            case 65: {
+                Check(cpu,6);auto out=Arg(cpu,5);
+                if(!out||!mem_.IsCommitted(out,4)){Ret(cpu,6,0xc000000du);return;}
+                mem_.Write32(out,0);
+                std::fprintf(stderr,"IoCreateDevice unavailable: driver=%08X extension=%u name=%08X type=%08X exclusive=%u out=%08X status=C0000001\n",
+                    Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)&255u,out);
+                Ret(cpu,6,0xc0000001u);return;
+            }
+            case 84: {
+                Check(cpu,8);
+                auto out=Arg(cpu,4),size=Arg(cpu,5),returned=Arg(cpu,6);
+                if((size&&(!out||!mem_.IsCommitted(out,size)))||
+                   (returned&&!mem_.IsCommitted(returned,4))){
+                    Ret(cpu,8,0xc000000du);return;
+                }
+                if(size>0x01000000u)throw std::runtime_error("I/O output exceeds diagnostic budget");
+                if(size)std::memset(mem_.Base()+out,0,size);
+                Output(returned,0);
+                std::fprintf(stderr,"IoSynchronousDeviceIoControlRequest unavailable: code=%08X device=%08X\n",Arg(cpu,0),Arg(cpu,1));
+                Ret(cpu,8,0xc0000001u);return;
+            }
+            case 85: {
+                Check(cpu,5);
+                std::fprintf(stderr,"IoSynchronousFsdRequest unavailable: major=%08X device=%08X\n",Arg(cpu,0),Arg(cpu,1));
+                Ret(cpu,5,0xc0000001u);return;
+            }
+            case 44: {
+                Check(cpu,2);auto level=Arg(cpu,0),out=Arg(cpu,1);
+                if(level>15||(out&&!mem_.IsCommitted(out,1)))
+                    throw std::runtime_error("Unsupported interrupt vector request");
+                // Metadata only: the primary vector base is 0x30.
+                // This does not connect an interrupt or emulate a PIC.
+                auto irql=uint8_t(level);
+                if(out)mem_.Write(out,&irql,1);
+                Ret(cpu,2,level+0x30u);return;
+            }
             case 49: {
                 Check(cpu,1);
                 auto reason=Arg(cpu,0);
@@ -1025,8 +1064,7 @@ private:
                 if(requested) {
                     uint32_t ordinal_type=259;
                     if(events_.count(h)){
-                        if(timer_types_.count(body)){Ret(cpu,3,0xc0000024u);return;}
-                        ordinal_type=semaphore_limits_.count(body)?30:16;
+                        ordinal_type=timer_types_.count(body)?31:semaphore_limits_.count(body)?30:16;
                     }
                     const auto actual=registry_?registry_->Resolve(ordinal_type).guest_data:0;
                     if(!actual || actual!=requested){Ret(cpu,3,0xc0000024u);return;}

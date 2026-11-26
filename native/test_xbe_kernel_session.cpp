@@ -45,6 +45,23 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         call(*c,base,cb,258,{42});
         assert(false);
     }
+    // Unavailable physical Xbox device drivers return explicit failure.
+    // Never invent a successful device object or leave stale output.
+    memory->Write32(0x12a00,0xdeadbeef);
+    call(*c,base,cb,65,{0,64,0,0x22,0,0x12a00});
+    assert(c->eax==0xc0000001u&&memory->Read32(0x12a00)==0);
+    call(*c,base,cb,65,{0,64,0,0x22,0,0});
+    assert(c->eax==0xc000000du);
+    memory->Write32(0x12a04,0xdeadbeef);
+    memory->Write32(0x12a08,0xdeadbeef);
+    call(*c,base,cb,84,{1,0,0,0,0x12a04,4,0x12a08,0});
+    assert(c->eax==0xc0000001u&&memory->Read32(0x12a04)==0&&memory->Read32(0x12a08)==0);
+    call(*c,base,cb,84,{1,0,0,0,0,4,0x12a08,0});
+    assert(c->eax==0xc000000du);
+    call(*c,base,cb,85,{3,0,0,0,0});assert(c->eax==0xc0000001u);
+    memory->Write32(0x12a0c,0xaabbccdd);
+    call(*c,base,cb,44,{5,0x12a0c});
+    assert(c->eax==0x35&&memory->Read32(0x12a0c)==0xaabbcc05);
     // Main-thread settings and fastcall object references.
     const auto main_body=memory->Read32(c->fs_base+0x28);
     call(*c,base,cb,246,{0xfffffffeu,0,0x10f00});
