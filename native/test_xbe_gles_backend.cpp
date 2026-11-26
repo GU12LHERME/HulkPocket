@@ -483,6 +483,26 @@ int main(){
         mismatch=false;
         try{bridge.SyncFixedDiffuseShader(dev);}catch(const std::logic_error&){mismatch=true;}
         assert(mismatch);
+        // DXT1 mip chain (4x4 red, 2x2 green, 1x1 blue), repeat,
+        // minification and an indexed strip, matching the next RP6 draw family.
+        mem.Write32(0x1040c,0x02230c21);mem.Write32(0x10410,0);
+        const uint8_t chain[]={0,0xf8,0,0,0,0,0,0, 0xe0,7,0,0,0,0,0,0, 0x1f,0,0,0,0,0,0,0};
+        mem.Write(0x80107000,chain,sizeof(chain));
+        const uint32_t bc_push[]={0x1b00|(2u<<18),0x107000,0x02230c21,0x1b0c|(1u<<18),0};
+        mem.Write(0x11800,bc_push,sizeof(bc_push));bridge.ApplyPush(0x11800,0x11800+sizeof(bc_push));
+        auto mip=bridge.Snapshot();
+        mip.tss[0][gpu::kTssAddressU]=mip.tss[0][gpu::kTssAddressV]=mip.tss[0][gpu::kTssAddressW]=1;
+        mip.tss[0][gpu::kTssMinFilter]=mip.tss[0][gpu::kTssMagFilter]=2;
+        mip.tss[0][gpu::kTssMipFilter]=2;
+        bridge.AdoptLiveSetters(mip);
+        const QuadVertex minified[]={{-1,1,.5f,0xffffffff,0,0},{1,1,.5f,0xffffffff,128,0},
+            {-1,-1,.5f,0xffffffff,0,128},{1,-1,.5f,0xffffffff,128,128}};
+        mem.Write(0x80105000,minified,sizeof(minified));
+        const uint16_t idx[]={0,1,2,3};mem.Write(0x11880,idx,sizeof(idx));
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x142);
+        assert(bridge.VerifyGuestGeometry(6,0,4,0x11880)==4);
+        bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
+        assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,0,255,255}));
     }
     std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");
 }

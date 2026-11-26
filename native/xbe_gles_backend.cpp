@@ -300,14 +300,16 @@ void XbeGlesBackend::UploadTexture(const gpu::State& s){
     gpu::TextureDesc rt{};
     if(!gpu::Describe(s.rt.header,rt))Unsupported("Missing render target");
     // Guest render target readback is not implemented, so reject aliases.
+    unsigned max_levels=1;
+    for(unsigned extent=std::max(d.width,d.height);extent>1;extent>>=1)++max_levels;
+    if(!d.levels||d.levels>max_levels||d.width>4096||d.height>4096||!d.width||!d.height||
+       (d.linear&&d.levels!=1))Unsupported("Invalid GLES mip chain");
+    // Decoder validates the complete guest chain even if mip sampling is disabled.
     std::vector<uint8_t> decoded;uint32_t pitch=0;
     gpu::DecodeGuestLevel(d,0,0,0,decoded,pitch);
     uint64_t a=d.data,b=rt.data;
     if(a<b+gpu::TotalSize(rt)&&b<a+gpu::TotalSize(d))
         Unsupported("Render-to-texture synchronization pending");
-    if(f.compressed)decoded=DecodeXboxBc(d.width,d.height,f.host,decoded);
-    else for(size_t i=0;i<decoded.size();i+=4)std::swap(decoded[i],decoded[i+2]);
-    if(decoded.size()!=uint64_t(d.width)*d.height*4)throw std::runtime_error("Invalid RGBA texture size");
     const auto& st=s.tss[0];
     auto address=[](uint32_t v)->GLint{
         switch(v){case 1:return GL_REPEAT;case 2:return GL_MIRRORED_REPEAT;case 3:return GL_CLAMP_TO_EDGE;
@@ -318,12 +320,28 @@ void XbeGlesBackend::UploadTexture(const gpu::State& s){
     };
     auto u=address(st[gpu::kTssAddressU]),v=address(st[gpu::kTssAddressV]);
     auto min=filter(st[gpu::kTssMinFilter]),mag=filter(st[gpu::kTssMagFilter]);
+    const auto mip=st[gpu::kTssMipFilter];
+    if(mip>2)Unsupported("Unsupported mip filter");
+    if(mip&&d.levels>1){
+        if(mip==1)min=min==GL_NEAREST?GL_NEAREST_MIPMAP_NEAREST:GL_LINEAR_MIPMAP_NEAREST;
+        else min=min==GL_NEAREST?GL_NEAREST_MIPMAP_LINEAR:GL_LINEAR_MIPMAP_LINEAR;
+    }
+    const unsigned levels=mip?d.levels:1;
     glActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,texture_);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,u);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,v);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,min);glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,mag);
     glPixelStorei(GL_UNPACK_ALIGNMENT,1);
     // Re-upload for correctness until lock/dirty tracking is linked to actual guest resource calls.
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,d.width,d.height,0,GL_RGBA,GL_UNSIGNED_BYTE,decoded.data());
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_BASE_LEVEL,0);
+    glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAX_LEVEL,GLint(levels-1));
+    for(unsigned level=0;level<levels;++level){
+        if(level)gpu::DecodeGuestLevel(d,level,0,0,decoded,pitch);
+        const auto w=std::max(d.width>>level,1u),h=std::max(d.height>>level,1u);
+        if(f.compressed)decoded=DecodeXboxBc(w,h,f.host,decoded);
+        else for(size_t i=0;i<decoded.size();i+=4)std::swap(decoded[i],decoded[i+2]);
+        if(decoded.size()!=uint64_t(w)*h*4)throw std::runtime_error("Invalid RGBA texture size");
+        glTexImage2D(GL_TEXTURE_2D,GLint(level),GL_RGBA8,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,decoded.data());
+    }
     GlCheck("GLES texture upload");
 }
 void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint32_t count,const uint8_t* indices){
@@ -351,7 +369,7 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     for(unsigned i=0;i<st.size();++i){
         if(!st[i])continue;
         switch(i){
-            case gpu::kTssAddressU:case gpu::kTssAddressV:case gpu::kTssMinFilter:case gpu::kTssMagFilter:
+            case gpu::kTssAddressU:case gpu::kTssAddressV:case gpu::kTssMinFilter:case gpu::kTssMagFilter:case gpu::kTssMipFilter:
             case gpu::kTssColorOp:case gpu::kTssColorArg1:case gpu::kTssColorArg2:
             case gpu::kTssAlphaOp:case gpu::kTssAlphaArg1:case gpu::kTssAlphaArg2:break;
             default:Unsupported("Unsupported stage-0 texture state");

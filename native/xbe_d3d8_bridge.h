@@ -281,7 +281,7 @@ public:
         }
         if(textures[0]){
             gpu::TextureDesc d{};
-            if(!gpu::Describe(textures[0],d)||d.depth!=1||d.cube||d.levels!=1||
+            if(!gpu::Describe(textures[0],d)||d.depth!=1||d.cube||
                Read(uint64_t(textures[0])+8)||!SupportedDiffuseTexture(d))
                 throw std::logic_error("Unsupported original texture resource");
             if(push_constants_.texture_words[0]!=3||
@@ -440,7 +440,10 @@ public:
             case 0x3d:case 0x3e:case 0x3f:case 0x40:case 0x41:break;
             default:return false;
         }
-        return d.width&&d.height&&d.width<=4096&&d.height<=4096&&d.levels==1&&
+        unsigned max_levels=1;
+        for(unsigned extent=std::max(d.width,d.height);extent>1;extent>>=1)++max_levels;
+        return d.width&&d.height&&d.width<=4096&&d.height<=4096&&d.levels>=1&&
+            d.levels<=max_levels&&(!d.linear||d.levels==1)&&
             d.depth==1&&!d.cube&&d.linear==(!f.swizzled&&!f.compressed)&&
             (!d.linear||d.pitch>=uint64_t(d.width)*f.bits/8)&&
             ((d.format!=0x24&&d.format!=0x25)||!(d.width&1));
@@ -448,7 +451,7 @@ public:
     void ReplayTexturedQuadDiagnostic(uint32_t start,uint32_t count){
         ReplayTexturedDiffuseDiagnostic(6,start,count);
     }
-    void ReplayTexturedDiffuseDiagnostic(uint32_t prim,uint32_t start,uint32_t count){
+    void ReplayTexturedDiffuseDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!initialized_||state_.vs_handle!=0x142||state_.vs||state_.ps||
            !state_.textures[0]||!count||count>262144||
@@ -464,14 +467,15 @@ public:
         gpu::TextureDesc desc{},tex{};
         if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height||
            !gpu::Describe(state_.textures[0],tex)||!SupportedDiffuseTexture(tex))
-            throw std::logic_error("Textured diffuse draw requires full target and supported single-level color texture");
+            throw std::logic_error("Textured diffuse draw requires full target and supported color texture");
         const auto& st=state_.tss[0];
         // RP6 stage 0: clamp, bilinear, modulate diffuse * texture for
         // both RGB and alpha. Arg0 is unused by a two-input modulate.
-        if(st[gpu::kTssAddressU]!=3||st[gpu::kTssAddressV]!=3||
-           st[gpu::kTssAddressW]!=3||
+        auto address_ok=[](uint32_t mode){return mode>=1&&mode<=3;};
+        if(!address_ok(st[gpu::kTssAddressU])||!address_ok(st[gpu::kTssAddressV])||
+           !address_ok(st[gpu::kTssAddressW])||
            (st[gpu::kTssMinFilter]!=1&&st[gpu::kTssMinFilter]!=2)||
-           (st[gpu::kTssMagFilter]!=1&&st[gpu::kTssMagFilter]!=2)||st[gpu::kTssMipFilter]||
+           (st[gpu::kTssMagFilter]!=1&&st[gpu::kTssMagFilter]!=2)||st[gpu::kTssMipFilter]>2||
            st[gpu::kTssMipLodBias]||st[gpu::kTssMaxMipLevel]||
            st[gpu::kTssMaxAnisotropy]!=1||st[gpu::kTssColorKeyOp]||
            st[gpu::kTssColorSign]||st[gpu::kTssAlphaKill]||
@@ -492,11 +496,12 @@ public:
             replay.simple[m>>2]=state_.simple[m>>2];
         auto& dst=replay.tss[0];
         for(auto k:{gpu::kTssAddressU,gpu::kTssAddressV,gpu::kTssMinFilter,gpu::kTssMagFilter,
-                    gpu::kTssColorOp,gpu::kTssAlphaOp})dst[k]=st[k];
+                    gpu::kTssMipFilter,gpu::kTssColorOp,gpu::kTssAlphaOp})dst[k]=st[k];
         // Multiplication commutes; normalize argument order to the GLES
         // implementation without changing the guest's stored state.
         dst[gpu::kTssColorArg1]=dst[gpu::kTssAlphaArg1]=2;
-        backend_.Draw(replay,prim,start,count,nullptr);backend_.Flush();
+        auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
+        backend_.Draw(replay,prim,start,count,ip);backend_.Flush();
     }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);

@@ -36,7 +36,7 @@ constexpr bool Stdcall(std::string_view name){
     if(id==hulkpocket::kGraphicsVBlank&&uint64_t(original_esp)+4==ctx.esp&&ctx.eax==0)return;
     if(id==hulkpocket::kGraphicsBlockOnTime&&
         uint64_t(original_esp)+12==ctx.esp&&ctx.eax==0)return;
-    if(id==(hulkpocket::kGraphicsDraw|0x1000u)&&
+    if((id==(hulkpocket::kGraphicsDraw|0x1000u)||id==(hulkpocket::kGraphicsDrawIndexed|0x1000u))&&
         uint64_t(original_esp)+16==ctx.esp&&ctx.eax==0)return;
     throw std::runtime_error("D3D8 guest device integration checkpoint");
 }
