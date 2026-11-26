@@ -10,6 +10,7 @@ from build_xbe_android import generated_sources
 from supplemental_guest_mapping import generate
 from discover_hulk_viewport_writer import generate_writer
 from discover_hulk_block_on_time import generate_block_on_time
+from discover_hulk_startup_text import generate_startup_text
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -46,6 +47,8 @@ def main():
         print(f"Verified local viewport writer instrumentation: {viewport_writer}",flush=True)
         block_on_time=generate_block_on_time(prepared,work/"hulk_verified_block_on_time.h")
         print(f"Verified local D3D_BlockOnTime adapter: {block_on_time}",flush=True)
+        startup_text=generate_startup_text(prepared,work/"hulk_verified_startup_text.h")
+        print(f"Verified local startup text observer: {startup_text}",flush=True)
         for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe", "xbe_d3d8_entry_guard"):
             obj = work / (name + ".o")
             subprocess.run([str(compiler), "-std=c++20", "-O2", "-fPIC",
@@ -71,6 +74,8 @@ def main():
                 raise RuntimeError("Verified viewport writer override not linked")
             if block_on_time and not any(len(fields:=line.split())>=3 and fields[-2:]==["T","sub_0038A2C0"] for line in symbols.splitlines()):
                 raise RuntimeError("Verified D3D_BlockOnTime override not linked")
+            if startup_text and not any(len(fields:=line.split())>=3 and fields[-2:]==["T","sub_0029B330"] for line in symbols.splitlines()):
+                raise RuntimeError("Verified startup text observer not linked")
             # Verify strong override, not just a symbol name that could be weak.
             import re
             header_text = (prepared / "image_symbols.h").read_text()

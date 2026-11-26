@@ -1,0 +1,5 @@
+# Startup text and disc diagnosis
+
+The RP6 disc root listing contains 2.3 GB of extracted RCF archives and an identical SHA-256 default.xbe. Explicit disc-root execution still rendered sixty identical diagnostic frames. A local source report verified the UTF-16 newline splitting loop at 001BB2F0 and call to 0029B330 at 001BB339 with a pointer to a stack line and flag zero. Its exact return address is 001BB33E. The text's meaning is not yet known. No direct incoming references to the anchor functions were found; virtual calls or split functions may be involved.
+
+Add a locally verified pass-through observer of that call. Read a maximum of 512 UTF-16 units, only at the exact observed caller and flag, with checked guest memory; cap logging at 32 lines. Escape non-ASCII units; call original generated implementation with unchanged context. No branch bypass or fabricated text. Log actual host disc directory open, every NtOpenFile/NtCreateFile return and read result. New build needed for callback handling; game object cache remains intact. This does not implement any additional disk hardware semantics. CI and device validation pending.

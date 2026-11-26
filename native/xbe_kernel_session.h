@@ -84,6 +84,7 @@ private:
     };
     std::array<KernelTrace,48> recent_{};
     uint64_t trace_seq_=0;
+    unsigned startup_text_lines_=0;
     uint32_t cache_pages_=16;
     uint32_t image_pages_=0, initial_stack_pages_=0;
     const std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
@@ -1211,6 +1212,8 @@ private:
                 unsigned n=ordinal==190?9:6;Check(cpu,n);
                 auto status=files_.Open(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),
                     ordinal==190?Arg(cpu,7):1,Arg(cpu,n-1));
+                std::fprintf(stderr,"DISC OPEN CALL ordinal=%u caller=%08X access=%08X attrs=%08X status=%08X\n",
+                    ordinal,mem_.Read32(cpu.esp),Arg(cpu,1),Arg(cpu,2),status);
                 Ret(cpu,n,status);return;
             }
             case 219: {
@@ -1220,6 +1223,8 @@ private:
                 if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
                 auto status=files_.Read(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
                 if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
+                std::fprintf(stderr,"DISC READ caller=%08X handle=%08X requested=%u status=%08X\n",
+                    mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,6),status);
                 Ret(cpu,8,status);return;
             }
             case 198: Check(cpu,2);Ret(cpu,2,files_.Flush(Arg(cpu,0),Arg(cpu,1)));return;
@@ -1683,6 +1688,29 @@ public:
         auto& session=*active_;
         // Pure observation: do not pause, service DPCs, consume stack args
         // or touch the original CPU context while a guest routine is active.
+        if(ordinal==kStartupTextTrace){
+            auto& mem=session.mem_;
+            // The verified call at 001BB339 pushes flag 0, then the
+            // UTF-16 line pointer. Do not infer an ABI at other callsites.
+            if(session.startup_text_lines_<32&&mem.IsCommitted(cpu.esp,12)&&
+               mem.Read32(cpu.esp)==0x001bb33e&&mem.Read32(cpu.esp+8)==0){
+                const auto p=mem.Read32(cpu.esp+4);
+                std::string line;
+                bool terminated=false;
+                for(unsigned i=0;i<512;++i){
+                    const uint64_t a=uint64_t(p)+2*i;
+                    if(!p||p%2||a+2>XboxGuestAddressSpace::kSize||!mem.IsCommitted(uint32_t(a),2))break;
+                    uint16_t ch=0;mem.Read(uint32_t(a),&ch,2);
+                    if(!ch){terminated=true;break;}
+                    if(ch>=32&&ch<=126)line.push_back(char(ch));
+                    else {char escaped[8];std::snprintf(escaped,sizeof(escaped),"\\u%04X",unsigned(ch));line+=escaped;}
+                }
+                ++session.startup_text_lines_;
+                std::fprintf(stderr,"HULK STARTUP TEXT caller=001BB33E ptr=%08X complete=%u text=%s\n",
+                    p,unsigned(terminated),line.c_str());
+            }
+            return;
+        }
         if(ordinal==kViewportTraceEnter||ordinal==kViewportTraceLeave){
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
             auto* live=session.live_d3d_.get();

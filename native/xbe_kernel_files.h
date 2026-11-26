@@ -99,7 +99,8 @@ public:
         if(!root.empty()) {
             root_=open(root.c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
             if(root_<0) throw std::runtime_error("Cannot open selected game directory");
-        }
+            std::fprintf(stderr,"DISC ROOT OPEN PASS (read-only directory)\n");
+        }else std::fprintf(stderr,"DISC ROOT NOT SELECTED\n");
     }
     ~XbeDiscFiles(){files_.clear();if(root_>=0)close(root_);}
     XbeDiscFiles(const XbeDiscFiles&)=delete;

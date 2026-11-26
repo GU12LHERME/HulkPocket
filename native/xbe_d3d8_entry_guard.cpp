@@ -322,3 +322,18 @@ void sub_0038A2C0(X86Context& ctx,uint8_t* base){
 }
 #endif
 #endif
+
+#if __has_include("hulk_verified_startup_text.h")
+#include "hulk_verified_startup_text.h"
+#if HULK_VERIFIED_STARTUP_TEXT
+extern "C" void __imp__sub_0029B330(X86Context&,uint8_t*);
+extern "C" __attribute__((visibility("default")))
+void sub_0029B330(X86Context& ctx,uint8_t* base){
+    if(hulkpocket::graphics_callback){
+        auto observation=ctx;
+        hulkpocket::graphics_callback(observation,base,hulkpocket::kStartupTextTrace);
+    }
+    __imp__sub_0029B330(ctx,base);
+}
+#endif
+#endif
