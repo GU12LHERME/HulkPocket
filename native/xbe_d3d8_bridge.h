@@ -37,6 +37,7 @@ struct D3dAbi {
 class XbeD3d8Bridge {
     XboxGuestAddressSpace& mem_;
     gpu::Backend& backend_;
+    bool defer_draw_flush_=false;
     gpu::State state_{};
     Nv2aConstantCursor push_constants_{};
     std::mutex lock_;
@@ -192,7 +193,8 @@ class XbeD3d8Bridge {
         throw std::logic_error("Unsupported D3D8 bridge operation");
     }
 public:
-    XbeD3d8Bridge(XboxGuestAddressSpace& mem,gpu::Backend& backend):mem_(mem),backend_(backend){}
+    XbeD3d8Bridge(XboxGuestAddressSpace& mem,gpu::Backend& backend,bool defer_draw_flush=false)
+        :mem_(mem),backend_(backend),defer_draw_flush_(defer_draw_flush){}
     void Initialize(uint32_t w,uint32_t h) {
         std::lock_guard guard(lock_);
         if(initialized_)throw std::logic_error("D3D bridge already initialized");
@@ -513,7 +515,7 @@ public:
                     gpu::kMDitherEnable,gpu::kMShadeMode})
             replay.simple[m>>2]=state_.simple[m>>2];
         backend_.Draw(replay,2,start,count,nullptr);
-        backend_.Flush();
+        if(!defer_draw_flush_)backend_.Flush();
     }
     // First original textured quad: use the checked real declaration,
     // resource, matrices, viewport and blend/alpha/depth parameters.
@@ -627,7 +629,7 @@ public:
             dst[gpu::kTssColorArg1]=dst[gpu::kTssAlphaArg1]=2;
         }
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
-        backend_.Draw(replay,prim,start,count,ip);backend_.Flush();
+        backend_.Draw(replay,prim,start,count,ip);if(!defer_draw_flush_)backend_.Flush();
     }
     // Narrow live programmable-pixel path: preserve only the existing
     // verified fixed diffuse vertex profile and captured combiner words.
@@ -661,7 +663,7 @@ public:
             replay.simple[m/4]=state_.simple[m/4];
         for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
-        backend_.Draw(replay,prim,start,count,ip);backend_.Flush();
+        backend_.Draw(replay,prim,start,count,ip);if(!defer_draw_flush_)backend_.Flush();
     }
     void ApplyPush(uint32_t begin,uint32_t end,bool capture_pixel=false){
         std::lock_guard guard(lock_);

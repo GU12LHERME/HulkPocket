@@ -148,7 +148,7 @@ private:
         std::array<uint32_t,6> last_viewport{};
         uint32_t last_viewport_call=0,last_viewport_caller=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
-            :buffers(mem,pool,physical),bridge(mem,backend),owner(thread){}
+            :buffers(mem,pool,physical),bridge(mem,backend,VulkanPreviewSelected()),owner(thread){}
     };
     std::unique_ptr<LiveD3dDevice> live_d3d_;
     void TraceViewport(LiveD3dDevice& live,uint32_t ordinal,uint32_t caller){

@@ -151,6 +151,7 @@ public:
     void ReadbackColor(const gpu::Surface& s){Target(s);Writeback();}
     void BeginRotatedFrame(const gpu::Surface& s){
         if(!target_.header||target_.header!=s.header||!core_.frame_valid)throw std::logic_error("Invalid Vulkan rotation");
+        core_.FlushBatch();
         auto old=address_;target_={};Target(s);
         if(old==address_)throw std::logic_error("Vulkan rotation did not change backing");
         core_.frame_valid=false;core_.readback_valid=false;depth_valid_=stencil_valid_=false;rotated_=true;
@@ -167,7 +168,11 @@ public:
         if(target_.header&&uint64_t(data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&uint64_t(address_)<uint64_t(data)+size)Writeback();
     }
     void SyncLate(uint32_t data)override{Sync(data,1);}
-    void Flush()override{} // every submission is synchronous
+    void Flush()override{core_.FlushBatch();}
+    uint32_t Fence()override{Flush();return gpu::Backend::Fence();}
+    void WaitFence(uint32_t)override{Flush();}
+    void WaitResource(uint32_t)override{Flush();}
+    void WaitGpuFrame(uint64_t)override{Flush();}
     void SetGamma(const uint8_t*)override{throw std::logic_error("Vulkan gamma not integrated");}
     void GetReport(uint32_t)override{throw std::logic_error("Vulkan visibility report not integrated");}
 };

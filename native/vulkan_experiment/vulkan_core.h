@@ -63,7 +63,13 @@ struct VulkanCore{
     VkCommandPool pool{};VkCommandBuffer cmd{};
     gpu::ImageMemory images;
     std::unique_ptr<gpu::FrameFences<1>> fence;
+    static constexpr unsigned BatchLimit=4;
+    static constexpr VkDeviceSize ExtraSlotLimit=2*1024*1024;
     Buffer verts,indices,uniform,vertex_constants,readback,staging;
+    std::array<Buffer,BatchLimit-1> extra_verts{},extra_indices{};
+    uint32_t uniform_stride=4096,constant_stride=3072;
+    unsigned pending_draws=0;
+    uint64_t queue_submissions=0,draw_batches=0;
     Image target,depth;
     std::array<Image,4> textures{};
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1};
@@ -101,7 +107,10 @@ struct VulkanCore{
             if(load_pass)vkDestroyRenderPass(dev,load_pass,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
             Destroy(target);for(auto& t:textures)Destroy(t);Destroy(depth);
-            Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(vertex_constants);Destroy(readback);Destroy(staging);
+            Destroy(verts);Destroy(indices);
+            for(auto& b:extra_verts)Destroy(b);
+            for(auto& b:extra_indices)Destroy(b);
+            Destroy(uniform);Destroy(vertex_constants);Destroy(readback);Destroy(staging);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
             vkDestroyDevice(dev,nullptr);
@@ -155,7 +164,12 @@ struct VulkanCore{
         if(x.image)vkDestroyImage(dev,x.image,nullptr);
         images.Free(dev,x.alloc);x={};
     }
+    void FlushBatch(){
+        if(!pending_draws)return;
+        Submit();pending_draws=0;++draw_batches;
+    }
     void Begin(){
+        FlushBatch();
         if(!fence->Begin(0))throw std::runtime_error("Vulkan frame wait/reset failed");
         Check(vkResetCommandBuffer(cmd,0),"reset command buffer");
         VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -165,6 +179,7 @@ struct VulkanCore{
         Check(vkEndCommandBuffer(cmd),"end commands");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&cmd;
         if(!fence->Submit(queue,0,si)||!fence->Begin(0))throw std::runtime_error("Vulkan submit/wait failed");
+        ++queue_submissions;
     }
     void Transition(VkImage im,VkImageLayout old,VkImageLayout next,VkAccessFlags src,VkAccessFlags dst,
                     VkPipelineStageFlags before,VkPipelineStageFlags after,uint32_t levels=1){
@@ -208,8 +223,11 @@ struct VulkanCore{
         CreateBuffer(indices,3*sizeof(uint16_t),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         const uint16_t idx[]={2,0,1};
         std::memcpy(indices.data,idx,sizeof(idx));
-        CreateBuffer(uniform,4096,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-        CreateBuffer(vertex_constants,192*16,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        const auto alignment=std::max<VkDeviceSize>(1,limits.minUniformBufferOffsetAlignment);
+        auto aligned=[&](VkDeviceSize n){return uint32_t((n+alignment-1)/alignment*alignment);};
+        uniform_stride=aligned(4096);constant_stride=aligned(192*16);
+        CreateBuffer(uniform,VkDeviceSize(uniform_stride)*BatchLimit,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        CreateBuffer(vertex_constants,VkDeviceSize(constant_stride)*BatchLimit,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         CreateBuffer(readback,VkDeviceSize(W)*H*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         CreateBuffer(staging,16,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
@@ -263,12 +281,12 @@ struct VulkanCore{
         VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=pass;fi.attachmentCount=2;fi.pAttachments=views;fi.width=W;fi.height=H;fi.layers=1;
         Check(vkCreateFramebuffer(dev,&fi,nullptr,&fb),"framebuffer");
         std::array<VkDescriptorSetLayoutBinding,10> bindings{};
-        for(uint32_t i=0;i<10;++i)bindings[i]={i,i<2?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:i<6?VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:VK_DESCRIPTOR_TYPE_SAMPLER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr};
+        for(uint32_t i=0;i<10;++i)bindings[i]={i,i<2?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:i<6?VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:VK_DESCRIPTOR_TYPE_SAMPLER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr};
         VkDescriptorSetLayoutCreateInfo dl{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};dl.bindingCount=bindings.size();dl.pBindings=bindings.data();
         Check(vkCreateDescriptorSetLayout(dev,&dl,nullptr,&set_layout),"descriptor layout");
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&set_layout;
         Check(vkCreatePipelineLayout(dev,&pl,nullptr,&pipeline_layout),"pipeline layout");
-        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,2},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,4},{VK_DESCRIPTOR_TYPE_SAMPLER,4}};
+        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,2},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,4},{VK_DESCRIPTOR_TYPE_SAMPLER,4}};
         VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dp.maxSets=1;dp.poolSizeCount=3;dp.pPoolSizes=sizes;
         Check(vkCreateDescriptorPool(dev,&dp,nullptr,&descriptors),"descriptor pool");
         VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptors;da.descriptorSetCount=1;da.pSetLayouts=&set_layout;
@@ -292,6 +310,7 @@ struct VulkanCore{
         std::array<uint32_t,6> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage]};
         if(key[4]>2||t[gpu::kTssMipLodBias]||t[gpu::kTssMaxMipLevel])throw std::invalid_argument("Unsupported Vulkan mip sampler state");
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
+        FlushBatch();
         auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
         auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
         VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
@@ -309,6 +328,7 @@ struct VulkanCore{
     // The next draw never reads and writes the same Vulkan attachment.
     void SnapshotColorTexture(unsigned stage){
         if(stage>=textures.size()||!frame_valid)throw std::invalid_argument("Invalid framebuffer texture snapshot");
+        FlushBatch();
         bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1;
         auto& texture=textures[stage];
         if(resize){
@@ -351,6 +371,7 @@ struct VulkanCore{
         tex_rect[stage]=desc.linear;
         bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels;
         if(!resize&&last_pixels[stage]==pixels)return;
+        FlushBatch();
         EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         std::memcpy(staging.data,pixels.data(),pixels.size());
         auto& texture=textures[stage];
@@ -440,6 +461,7 @@ struct VulkanCore{
         if(found!=pipelines.end()){
             found->second.used=++pipeline_tick;pipeline=found->second.handle;++pipeline_hits;return;
         }
+        if(pipelines.size()>=PipelineLimit)FlushBatch();
         VkShaderModule vs{},fs{};VkPipeline created{};
         try{
             vs=Module(vertex);fs=Module(fragment);
@@ -467,6 +489,7 @@ struct VulkanCore{
     // at explicit consumers (present, resource sync, capture or pixel probe).
     const uint8_t* ColorPixels(){
         if(!frame_valid)throw std::logic_error("Readback of uninitialized Vulkan frame");
+        FlushBatch();
         if(!readback_valid){
             Begin();ReadbackCommands();Submit();readback_valid=true;++readback_copies;
         }else ++readback_hits;
@@ -548,14 +571,7 @@ struct VulkanCore{
                 const auto expected=a.location==0?VK_FORMAT_R32G32B32_SFLOAT:a.location==9?VK_FORMAT_R32G32_SFLOAT:packed?VK_FORMAT_R32_UINT:VK_FORMAT_B8G8R8A8_UNORM;
                 if(!dynamic&&a.format!=expected)throw std::invalid_argument("Probe shader input format mismatch");
             }
-            EnsureBuffer(verts,plan.bytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-            for(unsigned i=0;i<guest->buffer_count;++i)
-                std::memcpy(static_cast<uint8_t*>(verts.data)+plan.offsets[i],guest->buffers[i].src,guest->buffers[i].bytes);
-            if(guest->index_count){
-                if(!guest->index_src)throw std::invalid_argument("Missing assembled indices");
-                auto bytes=uint64_t(guest->index_count)*(guest->index16?2:4);
-                EnsureBuffer(indices,bytes,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);std::memcpy(indices.data,guest->index_src,bytes);
-            }
+            if(guest->index_count&&!guest->index_src)throw std::invalid_argument("Missing assembled indices");
         }
         ViewRegion region{};
         if(guest_viewport){
@@ -568,11 +584,24 @@ struct VulkanCore{
             }
         }
         Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr,dynamic,guest_viewport?&region:nullptr);
+        const VkDeviceSize vb_bytes=guest?plan.bytes:6*sizeof(Vertex);
+        const VkDeviceSize ib_bytes=guest?uint64_t(guest->index_count)*(guest->index16?2:4):3*sizeof(uint16_t);
+        if(vb_bytes>ExtraSlotLimit||ib_bytes>ExtraSlotLimit)FlushBatch();
+        const unsigned slot=pending_draws;
+        auto& draw_verts=slot?extra_verts[slot-1]:verts;
+        auto& draw_indices=slot?extra_indices[slot-1]:indices;
+        EnsureBuffer(draw_verts,vb_bytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        if(ib_bytes)EnsureBuffer(draw_indices,ib_bytes,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        if(guest){
+            for(unsigned i=0;i<guest->buffer_count;++i)
+                std::memcpy(static_cast<uint8_t*>(draw_verts.data)+plan.offsets[i],guest->buffers[i].src,guest->buffers[i].bytes);
+            if(ib_bytes)std::memcpy(draw_indices.data,guest->index_src,ib_bytes);
+        }
         uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
-        if(!guest){std::memcpy(verts.data,v,sizeof(v));const uint16_t idx[]={2,0,1};std::memcpy(indices.data,idx,sizeof(idx));}
+        if(!guest){std::memcpy(draw_verts.data,v,sizeof(v));const uint16_t idx[]={2,0,1};std::memcpy(draw_indices.data,idx,sizeof(idx));}
         if(second){for(auto& vert:v){vert.z=.75f;vert.color_or_normal=0xffff0000u;}
-            std::memcpy(static_cast<uint8_t*>(verts.data)+sizeof(v),v,sizeof(v));}
+            std::memcpy(static_cast<uint8_t*>(draw_verts.data)+sizeof(v),v,sizeof(v));}
         gpu::DrawConstants dc{};
         dc.surf[0]=W;dc.surf[1]=H;dc.surf[2]=1;dc.surf[3]=1;
         for(unsigned i=0;i<4;++i)dc.wvp[i*5]=dc.wv[i*5]=dc.wvn[i*5]=1;
@@ -602,10 +631,13 @@ struct VulkanCore{
             dc.tfactor[0]=float((factor>>16)&255)/255;dc.tfactor[1]=float((factor>>8)&255)/255;
             dc.tfactor[2]=float(factor&255)/255;dc.tfactor[3]=float(factor>>24)/255;
         }
-        std::memset(vertex_constants.data,0,192*16);
-        if(dynamic)std::memcpy(vertex_constants.data,state->vsc.data(),192*16);
-        std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
-        Begin();
+        uint32_t offsets[2]={slot*constant_stride,slot*uniform_stride};
+        auto* vc=static_cast<uint8_t*>(vertex_constants.data)+offsets[0];
+        auto* uc=static_cast<uint8_t*>(uniform.data)+offsets[1];
+        std::memset(vc,0,192*16);
+        if(dynamic)std::memcpy(vc,state->vsc.data(),192*16);
+        std::memset(uc,0,4096);std::memcpy(uc,&dc,sizeof(dc));
+        if(!pending_draws)Begin();
         VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=preserve?load_pass:pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=preserve?0:2;ri.pClearValues=preserve?nullptr:clear;
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
@@ -613,23 +645,24 @@ struct VulkanCore{
         VkViewport draw_vp{0,float(H),float(W),-float(H),0,1};VkRect2D draw_sc{{0,0},{W,H}};
         if(guest_viewport){draw_vp=region.viewport;draw_sc=region.scissor;}
         vkCmdSetViewport(cmd,0,1,&draw_vp);vkCmdSetScissor(cmd,0,1,&draw_sc);
-        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
-        VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&verts.b,&offset);
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,2,offsets);
+        VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&draw_verts.b,&offset);
         if(guest){
-            std::array<VkBuffer,16> buffers{};buffers.fill(verts.b);
+            std::array<VkBuffer,16> buffers{};buffers.fill(draw_verts.b);
             vkCmdBindVertexBuffers(cmd,0,guest->buffer_count,buffers.data(),plan.offsets.data());
             if(guest->index_count){
-                vkCmdBindIndexBuffer(cmd,indices.b,0,guest->index16?VK_INDEX_TYPE_UINT16:VK_INDEX_TYPE_UINT32);
+                vkCmdBindIndexBuffer(cmd,draw_indices.b,0,guest->index16?VK_INDEX_TYPE_UINT16:VK_INDEX_TYPE_UINT32);
                 vkCmdDrawIndexed(cmd,guest->index_count,1,0,guest->base_vertex,0);
             }else vkCmdDraw(cmd,guest->draw_count,1,0,0);
         }else if(packed||multi){
-            vkCmdBindIndexBuffer(cmd,indices.b,0,VK_INDEX_TYPE_UINT16);
+            vkCmdBindIndexBuffer(cmd,draw_indices.b,0,VK_INDEX_TYPE_UINT16);
             vkCmdDrawIndexed(cmd,3,1,0,0,0);
         }else vkCmdDraw(cmd,3,1,0,0);
         if(second)vkCmdDraw(cmd,3,1,3,0);
         vkCmdEndRenderPass(cmd);
         gpu::RenderPassBarrier(cmd);
-        Submit();frame_valid=true;++draw_submissions;
+        ++pending_draws;frame_valid=true;++draw_submissions;
+        if(pending_draws==BatchLimit||vb_bytes>ExtraSlotLimit||ib_bytes>ExtraSlotLimit)FlushBatch();
         // A preserving stencil/depth-only draw cannot change color.
         if(!preserve||!state||state->simple[gpu::kMColorWriteEnable/4])readback_valid=false;
     }

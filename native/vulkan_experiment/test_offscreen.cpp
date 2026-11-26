@@ -299,6 +299,22 @@ int main(int argc,char** argv){
         f.ClearFrame(0xf0,0xff123456,1,0);
         Expect("clear invalidates cached readback",f.Pixel(32,32),{18,52,86,255});
         if(f.readback_copies!=copies+2)throw std::runtime_error("Color clear did not invalidate readback");
+        // Distinct per-draw vertex and constant storage, one submission
+        // for multiple ordered draws. Explicit flush does not read color.
+        auto submits=f.queue_submissions,batches=f.draw_batches;
+        f.Draw(argv[1],false,false,false);
+        f.Draw(argv[1],false,false,true,false,nullptr,false,nullptr,false,true);
+        if(f.queue_submissions!=submits||f.pending_draws!=2)
+            throw std::runtime_error("Vulkan draw batch submitted too early");
+        f.FlushBatch();
+        if(f.queue_submissions!=submits+1||f.draw_batches!=batches+1||f.pending_draws)
+            throw std::runtime_error("Vulkan batch did not submit exactly once");
+        Expect("batched distinct vertex colors",f.Pixel(32,32),{128,127,0,191});
+        submits=f.queue_submissions;
+        for(unsigned i=0;i<VulkanCore::BatchLimit;++i)f.Draw(argv[1],false,false,false);
+        if(f.pending_draws||f.queue_submissions!=submits+1)
+            throw std::runtime_error("Vulkan batch limit failed");
+        Expect("bounded batch final color",f.Pixel(32,32),{0,255,0,255});
         std::printf("Vulkan pipelines created=%llu reused=%llu resident=%zu\n",
             (unsigned long long)f.pipeline_creates,(unsigned long long)f.pipeline_hits,f.pipelines.size());
         }
