@@ -270,7 +270,8 @@ public:
         auto ptr=Read(uint64_t(device)+0x794);
         if(!ptr||ptr%4)throw std::invalid_argument("Missing guest vertex shader object");
         gpu::CheckedGuestRange(ptr,0x14+16*16);
-        if(Read(uint64_t(ptr)+4)!=0x400||Read(uint64_t(ptr)+8)||Read(uint64_t(ptr)+12)||
+        const auto flags=Read(uint64_t(ptr)+4);
+        if((flags!=0x400&&flags!=0)||Read(uint64_t(ptr)+8)||Read(uint64_t(ptr)+12)||
            Read(uint64_t(device)+0x784))
             throw std::logic_error("Unsupported guest shader program or flags");
         std::array<uint32_t,4> textures{};
@@ -301,6 +302,7 @@ public:
         }
         uint32_t fvf=0;
         for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u}){
+            if(flags!=0x400)continue;
             if(bool(candidate&0x100u)!=bool(textures[0]))continue;
             gpu::VertexShader layout;
             gpu::FvfInputs(candidate,layout);
@@ -318,9 +320,33 @@ public:
                 fvf=candidate;break;
             }
         }
-        if(!fvf)throw std::logic_error("Guest fixed vertex declaration not equivalent to supported diffuse FVF");
+        // RP6 APK after Start: XYZ + signed packed 11/11/10 normal +
+        // UV, 24-byte stream. It is not an FVF with vertex diffuse color.
+        // Preserve the exact declaration for the upstream geometry assembler.
+        // The GLES lighting stage is still deliberately guarded.
+        std::shared_ptr<gpu::VertexShader> packed;
+        if(!fvf&&flags==0&&textures[0]&&state_.streams[0].vb&&state_.streams[0].stride==24){
+            auto layout=std::make_shared<gpu::VertexShader>();
+            layout->inputs.fill({});
+            layout->inputs[0]={0,0,0x32};
+            layout->inputs[2]={0,12,0x16};
+            layout->inputs[9]={0,16,0x22};
+            layout->stream_stride[0]=24;
+            bool match=true;
+            for(unsigned i=0;i<16;++i){
+                auto slot=uint64_t(ptr)+0x14+16*i;
+                const auto& want=layout->inputs[i];
+                auto type=Read(slot+8);
+                if(want.stream<0){
+                    if(type!=0&&type!=2)match=false;
+                }else if(type!=want.type||Read(slot)!=uint32_t(want.stream)||
+                         Read(slot+4)!=want.offset||Read(slot+12))match=false;
+            }
+            if(match){packed=std::move(layout);fvf=ptr|1u;}
+        }
+        if(!fvf)throw std::logic_error("Guest fixed vertex declaration not equivalent to supported diffuse or packed-normal layout");
         auto next=state_;
-        next.vs_handle=fvf;next.vs.reset();next.ps.reset();
+        next.vs_handle=fvf;next.vs=std::move(packed);next.ps.reset();
         next.textures=textures;next.palettes.fill(0);
         next.base_vertex=Read(uint64_t(device)+0x1c);
         // Copy the actual matrices instead of using the standalone identity.
@@ -347,7 +373,8 @@ public:
             throw std::invalid_argument("Invalid guest geometry request");
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         gpu::Assembled a;
-        if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=(state_.textures[0]?0x209u:9u))
+        const auto regs=state_.vs?0x205u:(state_.textures[0]?0x209u:9u);
+        if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=regs)
             throw std::runtime_error("Guest diffuse geometry assembly failed");
         return a.vertex_count;
     }

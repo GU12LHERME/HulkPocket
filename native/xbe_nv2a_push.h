@@ -50,7 +50,7 @@ inline bool IsPendingRawConfiguration(uint32_t m){
         case 0x0a20:case 0x0a24:case 0x0a28:case 0x0a2c: // viewport offset
         // Packed current vertex attributes (NV097_SET_VERTEX_DATA4UB).
         // Retain values; their use by missing shader inputs is not translated.
-        case 0x1950:case 0x195c:case 0x1960:
+        case 0x194c:case 0x1950:case 0x195c:case 0x1960:
         case 0x1e78: // shader other-stage input
             return true;
         default:return false;

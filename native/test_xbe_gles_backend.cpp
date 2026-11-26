@@ -503,6 +503,22 @@ int main(){
         assert(bridge.VerifyGuestGeometry(6,0,4,0x11880)==4);
         bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
         assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,0,255,255}));
+        // Reproduce the next APK declaration; packed normals must not be
+        // interpreted as vertex colors. Verify geometry but do not draw it
+        // through an unlit shader.
+        auto shader=mem.Read32(dev+0x794);
+        mem.Write32(shader+4,0);
+        mem.Write32(shader+0x14+3*16+4,0);mem.Write32(shader+0x14+3*16+8,2);
+        mem.Write32(shader+0x14+2*16+4,12);mem.Write32(shader+0x14+2*16+8,0x16);
+        const uint32_t attributes[]={0x194c|(4u<<18),0xffffffff,0,0,0};
+        mem.Write(0x11800,attributes,sizeof(attributes));bridge.ApplyPush(0x11800,0x11800+sizeof(attributes));
+        auto lit=bridge.Snapshot();lit.rs[gpu::kRsLighting]=1;lit.rs[gpu::kRsSpecularEnable]=1;
+        bridge.AdoptLiveSetters(lit);
+        assert(bridge.SyncFixedDiffuseShader(dev)==(shader|1u));
+        assert(bridge.VerifyGuestGeometry(6,0,4,0x11880)==4);
+        bool lit_blocked=false;
+        try{bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);}catch(const std::logic_error&){lit_blocked=true;}
+        assert(lit_blocked);
     }
     std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");
 }

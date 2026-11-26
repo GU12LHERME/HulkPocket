@@ -1139,6 +1139,12 @@ private:
                 const bool zero_viewport=!synced.viewport.w||!synced.viewport.h;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 const bool opted_in=allow&&std::strcmp(allow,"1")==0;
+                if(synced.vs){
+                    std::fprintf(stderr,"D3D PACKED NORMAL GEOMETRY PASS vertices=%u lighting=%u specular=%u ambient=%08X diffuse_source=%u ambient_source=%u\n",
+                        vertices,synced.rs[gpu::kRsLighting],synced.rs[gpu::kRsSpecularEnable],synced.rs[gpu::kRsAmbient],
+                        synced.rs[gpu::kRsDiffuseMaterialSource],synced.rs[gpu::kRsAmbientMaterialSource]);
+                    throw std::logic_error("Packed normal geometry verified; original fixed-function lighting/material integration required");
+                }
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=indexed?0u:Arg(cpu,1),count=indexed?Arg(cpu,1):Arg(cpu,2);
                 const auto indices=indexed?Arg(cpu,2):0u;

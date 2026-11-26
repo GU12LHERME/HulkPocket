@@ -76,6 +76,11 @@ int main(){
         assert(pushed.simple[0x1bf0>>2]==0x3f800000&&pushed.simple[0x0398>>2]==0x4b7fffff);
         ApplyNv2aState(pushed,cursor,{{0x1ea4,8}});
         assert(cursor.pending_raw_configuration);
+        // Exact packed current-attribute writes observed on the first APK
+        // after Start. These are state, not immediate draw commands.
+        ApplyNv2aState(pushed,cursor,{{0x194c,0xffffffff},{0x1950,0},{0x195c,0xffffffff},{0x1960,0}});
+        assert(pushed.simple[0x194c>>2]==0xffffffff&&cursor.pending_raw_configuration);
+        assert(pushed.simple[0x195c>>2]==0xffffffff);
         // Actual RP6 first texture packet, including disabled sampler.
         ApplyNv2aState(pushed,cursor,{{0x1b00,0x03ae0000},{0x1b04,0x08810629},{0x1b0c,0}});
         assert(cursor.texture_words[0]==3&&pushed.simple[0x1b00>>2]==0x03ae0000);
