@@ -710,3 +710,37 @@ Artifacts expire per GitHub's configured retention.
 The original game still needs private EU/USA XBE verification,
 actual game-function recompilation, full kernel/thread APIs, game
 hooks, graphics/audio/controller ports and RP6 gameplay profiling.
+
+## Static Xbox kernel-import report and native thunk execution probe
+
+`native/xbe_kernel_imports.h/.cpp` inspects the original XBE
+kernel import table in guest virtual memory. It safely reads
+`0x80000000 | ordinal` entries, stops at zero, bounds scans,
+rejects uncommitted memory and out-of-range ordinals, and
+deduplicates ordinals while retaining the original number of
+entries. This **does not implement** those kernel calls.
+
+`hulk_xbe_local_diagnostic` accepts `--imports` to report
+the original Xbox kernel ordinal inventory without starting the
+XBE. It also exposes the original image's `tls_va`,
+`stack_commit`, `heap_reserve`, `heap_commit`, and
+`init_flags`, which have not yet been initialized by an
+Android Xbox kernel. The inventory is diagnostic, not a record
+of actual runtime call order.
+
+A fourth original IA-32 **synthetic** workload,
+`tools/create_synthetic_xbe_recompile.py --profile kernel`,
+generates `mov eax,0xFE000044; call eax; ret` and an original
+XBE kernel-thunk table importing ordinal 17. The real static
+recompiler translates that code; the AArch64 QEMU executable
+`native/test_recompiled_xbe_kernel_arm64.cpp` verifies that
+the resulting indirect call is routed to the portable
+`PortableXbeDispatch::KernelCall` callback and checks the
+guest stack and register outcome. A matching Android CLI
+artifact is produced only after CI success. This is a
+test callback for one ordinal, **not** Xbox OS emulation.
+
+**Status:** the newest CI containing the kernel execution
+probe must pass before regarding the fourth workload as
+validated. Real Hulk executable instructions have not
+been executed.
