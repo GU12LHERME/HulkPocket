@@ -15,3 +15,9 @@ The be538dc reference and shader compiler tests passed on CI. New fixture uses t
 ## Android hardware probe
 
 ba397e5 passed all 3 Vulkan tests, including real offscreen pixels on llvmpipe: diffuse 0,255,0,255; blend 128,0,127,191; packed lit 0,0,64,255. Parallel portable recompilation failed exit 74 after synthetic IA-32/AArch64 execution passed and before the next fixture generation. The likely cause is llvm-readelf writing to a prematurely closed pipe (grep -q under pipefail); preserve the architecture check and drain its output rather than suppressing command failure. New Vulkan CI builds the identical pixel test as Android ARM64 PIE with API 29 and packages its SPIR-V, test script and license. Also add actual 16-bit index buffer draws and a two-stage texture combiner pixel proof; no synthetic shader substitution. The executable is a standalone diagnostic, not an APK or game backend. On-device RP6 result still required. Existing GLES branch remains untouched.
+
+## RP6 hardware milestone and raster state integration
+
+The user ran the 5136113 Android probe on Adreno 740: all five pixel comparisons passed (diffuse, outside triangle, blend, packed lighting, two-stage indexed modulation). This verifies the synthetic offscreen Vulkan path on physical hardware, not gameplay. Four workflows also passed for 5136113.
+
+Next implementation replaces hardcoded blend and color settings with a reusable translation of the actual gpu::State NV2A render-state encodings, adds depth/stencil attachments with supported format selection, and exercises occlusion, disabling depth writes, stencil increment/rejection and write masks through real draws. Invalid W-buffer mode is rejected. These tests still use synthetic vertices and an offscreen target; guest-resource upload, dynamic shaders, swap/present, APK selection and first-phase gameplay are not yet integrated. GLES is untouched. New CI pending.

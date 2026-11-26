@@ -4,6 +4,7 @@
 #include "android/frame_fences.h"
 #include "android/pass_barrier.h"
 #include "gpu/shaders.h"
+#include "raster_state.h"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -31,7 +32,8 @@ struct Fixture{
     gpu::ImageMemory images;
     std::unique_ptr<gpu::FrameFences<1>> fence;
     Buffer verts,indices,uniform,readback;
-    Image target,texture;
+    Image target,texture,depth;
+    VkFormat depth_format=VK_FORMAT_UNDEFINED;
     VkRenderPass pass{};VkFramebuffer fb{};VkSampler sampler{};
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
     VkDescriptorPool descriptors{};VkDescriptorSet set{};
@@ -48,7 +50,7 @@ struct Fixture{
             if(sampler)vkDestroySampler(dev,sampler,nullptr);
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
-            Destroy(target);Destroy(texture);
+            Destroy(target);Destroy(texture);Destroy(depth);
             Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
@@ -76,9 +78,9 @@ struct Fixture{
         if(b.b)vkDestroyBuffer(dev,b.b,nullptr);
         if(b.m)vkFreeMemory(dev,b.m,nullptr);
     }
-    void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage){
+    void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage,VkFormat format=Format,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT){
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};ci.imageType=VK_IMAGE_TYPE_2D;
-        ci.format=Format;ci.extent={width,height,1};ci.mipLevels=ci.arrayLayers=1;
+        ci.format=format;ci.extent={width,height,1};ci.mipLevels=ci.arrayLayers=1;
         ci.samples=VK_SAMPLE_COUNT_1_BIT;ci.tiling=VK_IMAGE_TILING_OPTIMAL;ci.usage=usage;
         Check(vkCreateImage(dev,&ci,nullptr,&out.image),"vkCreateImage");
         VkImageMemoryRequirementsInfo2 ri{VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2};ri.image=out.image;
@@ -90,7 +92,7 @@ struct Fixture{
             throw std::runtime_error("SCDA image pool allocation failed");
         Check(vkBindImageMemory(dev,out.image,out.alloc.memory,out.alloc.offset),"bind image");
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=out.image;
-        vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=Format;vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=format;vi.subresourceRange={aspect,0,1,0,1};
         Check(vkCreateImageView(dev,&vi,nullptr,&out.view),"image view");
     }
     void Destroy(Image& x){
@@ -144,13 +146,19 @@ struct Fixture{
         VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=pool;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
         Check(vkAllocateCommandBuffers(dev,&ca,&cmd),"command buffer");
         fence=std::make_unique<gpu::FrameFences<1>>();if(!fence->Init(dev))throw std::runtime_error("frame fence init");
-        CreateBuffer(verts,3*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        CreateBuffer(verts,6*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         CreateBuffer(indices,3*sizeof(uint16_t),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         const uint16_t idx[]={2,0,1};
         std::memcpy(indices.data,idx,sizeof(idx));
         CreateBuffer(uniform,4096,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         CreateBuffer(readback,W*H*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+        for(auto format:{VK_FORMAT_D24_UNORM_S8_UINT,VK_FORMAT_D32_SFLOAT_S8_UINT}){
+            VkFormatProperties fp{};vkGetPhysicalDeviceFormatProperties(physical,format,&fp);
+            if(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT){depth_format=format;break;}
+        }
+        if(depth_format==VK_FORMAT_UNDEFINED)throw std::runtime_error("No depth/stencil format");
+        CreateImage(depth,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,depth_format,VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT);
         CreateImage(texture,2,2,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
         // Constant-color image is a synthetic sampled texture, not a guest decoder test.
         Begin();
@@ -167,18 +175,24 @@ struct Fixture{
         ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
         ad.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;ad.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
         ad.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;ad.finalLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-        VkAttachmentReference ar{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
-        VkSubpassDescription sp{};sp.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sp.colorAttachmentCount=1;sp.pColorAttachments=&ar;
+        VkAttachmentDescription attachments[2]{ad,{}};
+        auto& da_depth=attachments[1];da_depth.format=depth_format;da_depth.samples=VK_SAMPLE_COUNT_1_BIT;
+        da_depth.loadOp=da_depth.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_CLEAR;
+        da_depth.storeOp=da_depth.stencilStoreOp=VK_ATTACHMENT_STORE_OP_STORE;
+        da_depth.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;da_depth.finalLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        VkAttachmentReference ar{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},zr{1,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription sp{};sp.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sp.colorAttachmentCount=1;sp.pColorAttachments=&ar;sp.pDepthStencilAttachment=&zr;
         VkSubpassDependency deps[2]{};
         deps[0].srcSubpass=VK_SUBPASS_EXTERNAL;deps[0].dstSubpass=0;
-        deps[0].srcStageMask=VK_PIPELINE_STAGE_TRANSFER_BIT;deps[0].dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        deps[0].srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;deps[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        deps[0].srcStageMask=VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;deps[0].dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;deps[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         deps[1].srcSubpass=0;deps[1].dstSubpass=VK_SUBPASS_EXTERNAL;
         deps[1].srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;deps[1].dstStageMask=VK_PIPELINE_STAGE_TRANSFER_BIT;
         deps[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;deps[1].dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
-        VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};rp.attachmentCount=1;rp.pAttachments=&ad;rp.subpassCount=1;rp.pSubpasses=&sp;rp.dependencyCount=2;rp.pDependencies=deps;
+        VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};rp.attachmentCount=2;rp.pAttachments=attachments;rp.subpassCount=1;rp.pSubpasses=&sp;rp.dependencyCount=2;rp.pDependencies=deps;
         Check(vkCreateRenderPass(dev,&rp,nullptr,&pass),"render pass");
-        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=pass;fi.attachmentCount=1;fi.pAttachments=&target.view;fi.width=W;fi.height=H;fi.layers=1;
+        VkImageView views[]={target.view,depth.view};
+        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=pass;fi.attachmentCount=2;fi.pAttachments=views;fi.width=W;fi.height=H;fi.layers=1;
         Check(vkCreateFramebuffer(dev,&fi,nullptr,&fb),"framebuffer");
         std::array<VkDescriptorSetLayoutBinding,10> bindings{};
         for(uint32_t i=0;i<10;++i)bindings[i]={i,i<2?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER:i<6?VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:VK_DESCRIPTOR_TYPE_SAMPLER,1,VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT,nullptr};
@@ -212,7 +226,7 @@ struct Fixture{
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=data.size()*4;ci.pCode=data.data();
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
-    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi){
+    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state){
         if(pipeline){vkDestroyPipeline(dev,pipeline,nullptr);pipeline={};}
         if(vs){vkDestroyShaderModule(dev,vs,nullptr);vs={};}
         if(fs){vkDestroyShaderModule(dev,fs,nullptr);fs={};}
@@ -230,22 +244,27 @@ struct Fixture{
         VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.pViewports=&vp;vps.scissorCount=1;vps.pScissors=&sc;
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineColorBlendAttachmentState cb{};cb.colorWriteMask=15;cb.blendEnable=blend;
-        cb.srcColorBlendFactor=cb.srcAlphaBlendFactor=VK_BLEND_FACTOR_SRC_ALPHA;
-        cb.dstColorBlendFactor=cb.dstAlphaBlendFactor=VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-        cb.colorBlendOp=cb.alphaBlendOp=VK_BLEND_OP_ADD;
+        gpu::State state{};
+        state.simple[gpu::kMColorWriteEnable/4]=0x01010101;
+        state.simple[gpu::kMBlendEnable/4]=blend;
+        state.simple[gpu::kMSrcBlend/4]=0x302;state.simple[gpu::kMDestBlend/4]=0x303;
+        state.simple[gpu::kMBlendOp/4]=0x8006;
+        auto raster=hulkpocket::vkexp::TranslateRaster(override_state?*override_state:state);
+        auto& cb=raster.color;
         VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&cb;
-        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};gp.stageCount=2;gp.pStages=stages;gp.pVertexInputState=&vi;gp.pInputAssemblyState=&ia;gp.pViewportState=&vps;gp.pRasterizationState=&rs;gp.pMultisampleState=&ms;gp.pColorBlendState=&bs;gp.layout=pipeline_layout;gp.renderPass=pass;
+        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};gp.stageCount=2;gp.pStages=stages;gp.pVertexInputState=&vi;gp.pInputAssemblyState=&ia;gp.pViewportState=&vps;gp.pRasterizationState=&rs;gp.pMultisampleState=&ms;gp.pColorBlendState=&bs;gp.pDepthStencilState=&raster.depth;gp.layout=pipeline_layout;gp.renderPass=pass;
         Check(vkCreateGraphicsPipelines(dev,VK_NULL_HANDLE,1,&gp,nullptr,&pipeline),"graphics pipeline");
     }
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
     }
-    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false){
-        Pipeline(root,packed,textured,blend,multi);
+    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false){
+        Pipeline(root,packed,textured,blend,multi,state);
         uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
         std::memcpy(verts.data,v,sizeof(v));
+        if(second){for(auto& vert:v){vert.z=.75f;vert.color_or_normal=0xffff0000u;}
+            std::memcpy(static_cast<uint8_t*>(verts.data)+sizeof(v),v,sizeof(v));}
         gpu::DrawConstants dc{};
         dc.surf[0]=W;dc.surf[1]=H;dc.surf[2]=1;dc.surf[3]=1;
         for(unsigned i=0;i<4;++i)dc.wvp[i*5]=dc.wv[i*5]=dc.wvn[i*5]=1;
@@ -255,8 +274,8 @@ struct Fixture{
         dc.mat[4][0]=8;dc.lt[0][0][2]=1;dc.lt[0][4][2]=-1; // directional -Z
         std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
         Begin();
-        VkClearValue clear{};clear.color.float32[2]=blend?1:0;clear.color.float32[3]=1;
-        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=1;ri.pClearValues=&clear;
+        VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=2;ri.pClearValues=clear;
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
@@ -265,6 +284,7 @@ struct Fixture{
             vkCmdBindIndexBuffer(cmd,indices.b,0,VK_INDEX_TYPE_UINT16);
             vkCmdDrawIndexed(cmd,3,1,0,0,0);
         }else vkCmdDraw(cmd,3,1,0,0);
+        if(second)vkCmdDraw(cmd,3,1,3,0);
         vkCmdEndRenderPass(cmd);
         gpu::RenderPassBarrier(cmd);
         VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={W,H,1};
@@ -288,6 +308,24 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,true);Expect("alpha blend",f.Pixel(32,32),{128,0,127,191});
         f.Draw(argv[1],true,true,false);Expect("packed directional modulate",f.Pixel(32,32),{0,0,64,255});
         f.Draw(argv[1],false,true,false,true);Expect("two-stage indexed modulation",f.Pixel(32,32),{64,255,16,255});
-        std::puts("PASS real Vulkan draw, sampled texture, packed lighting, alpha blend, indexed multi-stage modulation and readback");
+        using namespace gpu;
+        State state{};state.simple[kMColorWriteEnable/4]=0x01010101;
+        f.Draw(argv[1],false,false,false,false,&state,true);Expect("overdraw control",f.Pixel(32,32),{255,0,0,255});
+        state.rs[kRsZEnable]=1;state.simple[kMZWriteEnable/4]=1;state.simple[kMZFunc/4]=0x201;
+        f.Draw(argv[1],false,false,false,false,&state,true);Expect("Xbox depth occlusion",f.Pixel(32,32),{0,255,0,255});
+        state.simple[kMZWriteEnable/4]=0;
+        f.Draw(argv[1],false,false,false,false,&state,true);Expect("Xbox depth write disabled",f.Pixel(32,32),{255,0,0,255});
+        state.rs[kRsZEnable]=0;state.rs[kRsStencilEnable]=1;state.rs[kRsStencilFail]=0x1e00;
+        state.simple[kMStencilFunc/4]=0x202;state.simple[kMStencilMask/4]=255;state.simple[kMStencilWriteMask/4]=255;
+        state.simple[kMStencilPass/4]=0x1e02;state.simple[kMStencilZFail/4]=0x1e00;
+        f.Draw(argv[1],false,false,false,false,&state,true);Expect("Xbox stencil increment and reject",f.Pixel(32,32),{0,255,0,255});
+        state.simple[kMStencilWriteMask/4]=0;
+        f.Draw(argv[1],false,false,false,false,&state,true);Expect("Xbox stencil write mask",f.Pixel(32,32),{255,0,0,255});
+        state.rs[kRsStencilEnable]=0;state.simple[kMColorWriteEnable/4]=0x10000;
+        f.Draw(argv[1],false,false,false,false,&state);Expect("Xbox color write mask",f.Pixel(32,32),{0,0,0,255});
+        state.rs[kRsZEnable]=2;bool rejected=false;
+        try{(void)hulkpocket::vkexp::TranslateRaster(state);}catch(const std::invalid_argument&){rejected=true;}
+        if(!rejected)throw std::runtime_error("Unsupported W-buffer silently accepted");
+        std::puts("PASS real Vulkan draw, sampled texture, packed lighting, alpha blend, indexed multi-stage modulation, Xbox depth/stencil and color masks, readback");
     }catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}
 }
