@@ -53,7 +53,7 @@ def main():
                 raise RuntimeError("Unexpected ELF architecture")
             symbols = subprocess.check_output([str(a.ndk_bin / "llvm-nm"), "-D", "--defined-only", str(pending)], text=True)
             names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
-            for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint", "hulk_entry_probe", "hulk_entry_execute"):
+            for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint", "hulk_entry_probe", "hulk_entry_execute", "hulk_entry_execute_with_kernel"):
                 if name not in names:
                     raise RuntimeError("Missing export: " + name)
             pending.replace(a.output)
