@@ -3,6 +3,7 @@
 #include "xbe_graphics_boundary.h"
 #include "image_symbols.h"
 #include <cstdio>
+#include <cstring>
 #include <stdexcept>
 #include <string_view>
 #include <initializer_list>
