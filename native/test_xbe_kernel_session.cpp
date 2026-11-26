@@ -1,4 +1,5 @@
 #include "xbe_kernel_session.h"
+#include "hulk_kernel_objects.h"
 #include <cassert>
 #include <atomic>
 using namespace hulkpocket;
@@ -99,6 +100,10 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,189,{0x10110,0,1,0});
     assert(c->eax==0);
     auto ev=memory->Read32(0x10110);
+    call(*c,base,cb,246,{ev,0x10c00,0x10b00});
+    assert(c->eax==0 && memory->Read32(0x10b00)!=0);
+    call(*c,base,cb,246,{ev,0x10d00,0x10b00});
+    assert(c->eax==0xc0000024u);
     memory->Write32(0x10118,0);memory->Write32(0x1011c,0);
     call(*c,base,cb,233,{ev,0,0x10118});
     assert(c->eax==0x102);
@@ -183,7 +188,9 @@ int main() {
     int fd=open(path.c_str(),O_CREAT|O_WRONLY|O_EXCL,0600);
     assert(fd>=0 && write(fd,"Hulk",4)==4);
     close(fd);
-    XbeKernelSession session(mem,0x09000000,0x01000000,tls,nullptr,dir);
+    HulkKernelDataRegistry registry;
+    RegisterDispatcherObjectTypes(mem,registry,0x10c00);
+    XbeKernelSession session(mem,0x09000000,0x01000000,tls,nullptr,dir,&registry);
     assert(session.Run(entry,cpu,0x1000)==0);
     assert(ran==1);
     assert(mem.Read32(0x0A000404)==1);

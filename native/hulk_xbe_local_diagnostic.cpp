@@ -5,6 +5,7 @@
 #include "hulk_kernel_missing_data.h"
 #include "hulk_kernel_launch_data.h"
 #include "hulk_kernel_profile.h"
+#include "hulk_kernel_objects.h"
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -130,6 +131,9 @@ int main(int argc,char** argv) {
                 RegisterLaunchData(guest,registry,0x07200100,0,"\\Device\\CdRom0\\default.xbe");
                 RegisterKernelProfile(guest,registry,0x07200200,kRetailDiagnosticProfile);
                 std::cout << "Xbox retail diagnostic profile: kernel 1.0.5838.1, hardware flags 0x20" << '\n';
+                RegisterDispatcherObjectTypes(guest,registry,0x07200400);
+                RegisterDiagnosticIdeQueue(guest,registry,0x07200600);
+                std::cout << "Diagnostic dispatcher object types and empty IDE queue registered" << '\n';
                 auto guards=PlanMissingKernelDataGuards(registry,imports,guest,0x08000000,0x08200000);
                 for(auto g:guards) std::cout << "Unsupported data ordinal " << g.ordinal
                     << " guard=0x" << std::hex << g.address << std::dec << '\n';
@@ -167,7 +171,7 @@ int main(int argc,char** argv) {
                         Dl_info module_info{};
                         dladdr(reinterpret_cast<void*>(entry),&module_info);
                         InstallGuestFaultHandler(guest.Base(),reinterpret_cast<uintptr_t>(module_info.dli_fbase));
-                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root);
+                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry);
                         int status=session.Run(entry,cpu,loaded.entry);
                         std::cerr << "Guest entry status: " << status << std::endl;
                         _exit(status==0?0:5);

@@ -36,6 +36,7 @@ private:
     XbeDiscFiles files_;
     XbeTlsTemplate tls_;
     const HulkKernelClock* clock_;
+    const HulkKernelDataRegistry* registry_;
     std::mutex lock_;
     std::condition_variable cv_;
     std::array<Worker,16> workers_{};
@@ -432,7 +433,13 @@ private:
                 Check(cpu,3);auto h=Arg(cpu,0);
                 auto body=h==0xfffffffeu?mem_.Read32(cpu.fs_base+0x28):Body(h);
                 if(!body){Ret(cpu,3,0xc0000008u);return;}
-                if(Arg(cpu,1)) throw std::runtime_error("Typed object reference not implemented");
+                auto requested=Arg(cpu,1);
+                if(requested) {
+                    uint32_t ordinal_type=259;
+                    if(events_.count(h)) ordinal_type=semaphore_limits_.count(body)?30:16;
+                    const auto actual=registry_?registry_->Resolve(ordinal_type).guest_data:0;
+                    if(!actual || actual!=requested){Ret(cpu,3,0xc0000024u);return;}
+                }
                 Output(Arg(cpu,2),body);Ret(cpu,3,0);return;
             }
             case 254: case 255: CreateThread(cpu,ordinal); return;
@@ -473,8 +480,8 @@ private:
     }
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
-                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={})
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),files_(mem,disc_root),tls_(tls),clock_(clock) {}
+                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr)
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),files_(mem,disc_root),tls_(tls),clock_(clock),registry_(registry) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

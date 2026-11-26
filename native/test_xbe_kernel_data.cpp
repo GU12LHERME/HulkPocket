@@ -1,5 +1,6 @@
 #include "hulk_kernel_clock.h"
 #include "hulk_kernel_profile.h"
+#include "hulk_kernel_objects.h"
 #include "hulk_kernel_launch_data.h"
 #include <cassert>
 #include <cstring>
@@ -27,6 +28,13 @@ int main() {
     assert(m.Read32(0x10300)==0x20 && m.Read32(0x10304)==0xb1d3);
     assert(m.Read32(0x10308)==1 && m.Read32(0x1030c)==(5838u|0x10000u));
     assert(m.Read32(0x10310)==3 && m.Read32(0x10314)==0);
+    RegisterDispatcherObjectTypes(m,retail,0x10400);
+    RegisterDiagnosticIdeQueue(m,retail,0x10600);
+    const auto ev=retail.Resolve(16).guest_data;
+    assert(ev==0x10400 && m.Read32(ev)==0xfe00003c && m.Read32(ev+4)==0xfe000044);
+    assert(m.Read32(ev+24)==0x76657645);
+    assert(retail.Resolve(259).guest_data==0x10500);
+    assert(m.Read32(0x10628)==0x10628 && m.Read32(0x1062c)==0x10628);
     HulkKernelDataRegistry conflict;
     conflict.Register(157,0x10300,4,m);
     bool rejected=false;

@@ -23,5 +23,15 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
         -ldl -o "$out"
     args=()
     if [[ -n "$disc" ]]; then args+=(--disc-root "$disc"); fi
-    "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}"
+    execution_log=$(mktemp)
+    trap 'rm -f "$execution_log"' EXIT
+    status=0
+    "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
+    cat "$execution_log"
+    pc=$(sed -n 's/.*pc_minus_module_base=\(0x[0-9A-Fa-f]*\).*/\1/p' "$execution_log" | tail -n 1)
+    if [[ -n "$pc" && -x "$PREFIX/bin/llvm-addr2line" ]]; then
+        echo "Fault native function:"
+        "$PREFIX/bin/llvm-addr2line" -f -C -e "$module" "$pc" || true
+    fi
+    exit "$status"
 } 2>&1 | tee "$log"
