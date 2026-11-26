@@ -60,6 +60,36 @@ int main(){
         if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,255,0,255})line_pixel=true;
     assert(line_pixel);
     assert((backend.ReadPixel(32,20)==std::array<uint8_t,4>{0,0,0,255}));
+    // Verify the restricted diagnostic replay uses real XYZ diffuse input
+    // and does not repair guest viewport state or consume the raw guard.
+    {
+        constexpr uint32_t dev=0x16000,shader=0x19000;
+        mem.Write32(dev+0x794,shader);mem.Write32(shader+4,0x400);
+        for(unsigned i=0;i<16;++i)mem.Write32(shader+0x14+16*i+8,2);
+        mem.Write32(shader+0x14+8,0x32);
+        mem.Write32(shader+0x14+3*16+4,12);mem.Write32(shader+0x14+3*16+8,0x40);
+        mem.Write32(dev+0xef4,0x3f800000);
+        mem.Write32(dev+0xef8,0x3f080000);mem.Write32(dev+0xefc,0x3f080000);
+        for(unsigned tr:{0u,1u,6u})for(unsigned i=0;i<4;++i)
+            mem.Write32(dev+0xc60+64*tr+20*i,0x3f800000);
+        struct XYZ{float x,y,z;uint32_t color;};
+        const XYZ xyz[]={{-.75f,0,.5f,0xffff00ff},{.75f,0,.5f,0xffff00ff}};
+        mem.Write(0x80105000,xyz,sizeof(xyz));
+        call("D3DDevice_SetStreamSource",{0,0x10200,sizeof(XYZ)});
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x42);
+        call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+        bridge.ReplayFixedLinesDiagnostic(0,2);
+        bool replay_pixel=false;
+        for(unsigned y=30;y<=33;++y)
+            if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,0,255,255})replay_pixel=true;
+        assert(replay_pixel&&bridge.Snapshot().viewport.w==0&&mem.Read32(dev+0xee8)==0);
+        mem.Write32(0x10340,0);mem.Write32(0x10344,0);
+        mem.Write32(0x10348,64);mem.Write32(0x1034c,64);
+        mem.Write32(0x10350,0);mem.Write32(0x10354,0x3f800000);
+        call("D3DDevice_SetViewport",{0x10340});
+        call("D3DDevice_SetStreamSource",{0,0x10200,sizeof(V)});
+        call("D3DDevice_SetVertexShader",{0x44});
+    }
     // Quad conversion and native strips exercise the Xbox primitive assembler.
     const V quad[]={{8,8,.5,1,0xff00ff00},{56,8,.5,1,0xff00ff00},
                     {56,56,.5,1,0xff00ff00},{8,56,.5,1,0xff00ff00}};

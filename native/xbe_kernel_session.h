@@ -97,10 +97,24 @@ private:
         XbeD3d8Bridge bridge;
         uint32_t owner;
         unsigned setter_calls=0;
+        std::array<uint32_t,6> last_viewport{};
+        uint32_t last_viewport_call=0,last_viewport_caller=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
             :buffers(mem,pool,physical),bridge(mem,backend),owner(thread){}
     };
     std::unique_ptr<LiveD3dDevice> live_d3d_;
+    void TraceViewport(LiveD3dDevice& live,uint32_t ordinal,uint32_t caller){
+        std::array<uint32_t,6> now{};
+        for(unsigned i=0;i<now.size();++i)now[i]=mem_.Read32(live.buffers.DeviceAddress()+0xee0+4*i);
+        if(now!=live.last_viewport){
+            std::fprintf(stderr,"D3D VIEWPORT CHANGE previous_id=%08X previous_caller=%08X current_id=%08X current_caller=%08X old=%u,%u,%u,%u new=%u,%u,%u,%u z=%08X,%08X\n",
+                live.last_viewport_call,live.last_viewport_caller,ordinal,caller,
+                live.last_viewport[0],live.last_viewport[1],live.last_viewport[2],live.last_viewport[3],
+                now[0],now[1],now[2],now[3],now[4],now[5]);
+            live.last_viewport=now;
+        }
+        live.last_viewport_call=ordinal;live.last_viewport_caller=caller;
+    }
     void DrainLivePush(LiveD3dDevice& live){
         auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
         if(end==begin)return;
@@ -169,6 +183,7 @@ private:
             throw std::runtime_error("Original-state guest readback mismatch");
         std::fprintf(stderr,"D3D ORIGINAL STATE HANDOFF PASS: color=%08X depth=%08X z=%u\n",
             live.rt.header,live.zs.header,live.rs[gpu::kRsZEnable]);
+        TraceViewport(*owned,kGraphicsCreate,mem_.Read32(cpu.esp));
         live_d3d_=std::move(owned);
     }
 #endif
@@ -485,6 +500,8 @@ private:
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+        if(live_d3d_&&live_d3d_->owner==cpu.thread_handle)
+            TraceViewport(*live_d3d_,ordinal,mem_.IsCommitted(cpu.esp,4)?mem_.Read32(cpu.esp):0);
         if(ordinal==kDefaultSimple||ordinal==kDefaultRender||ordinal==kDefaultTexture||
             (ordinal>=kDefaultComplexBase&&ordinal<kDefaultComplexBase+gpu::kRsMax)){
             const unsigned n=ordinal==kDefaultSimple?0:ordinal==kDefaultRender?2:ordinal==kDefaultTexture?3:1;
@@ -868,8 +885,26 @@ private:
                     for(auto v:synced.transforms[slot])std::fprintf(stderr," %08X",std::bit_cast<uint32_t>(v));
                     std::fprintf(stderr,"\n");
                 }
-                if(!synced.viewport.w||!synced.viewport.h)
+                if(!synced.viewport.w||!synced.viewport.h){
+                    if(!indexed&&Arg(cpu,0)==2){
+                        gpu::ScopedGuestMemory scope(mem_);
+                        gpu::TextureDesc desc{};
+                        if(!gpu::DescribeSurface(synced.rt,desc))
+                            throw std::runtime_error("D3D diagnostic replay target description failed");
+                        live.backend.ReadbackColor(synced.rt);
+                        auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
+                        std::vector<uint8_t> before(pixels,pixels+size_t(desc.pitch)*desc.height);
+                        live.bridge.ReplayFixedLinesDiagnostic(Arg(cpu,1),Arg(cpu,2));
+                        live.backend.ReadbackColor(synced.rt);
+                        unsigned changed=0;
+                        for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width;++x){
+                            size_t at=size_t(y)*desc.pitch+4*x;
+                            if(std::memcmp(before.data()+at,pixels+at,4))++changed;
+                        }
+                        std::fprintf(stderr,"D3D ORIGINAL LINE REPLAY (diagnostic target viewport %ux%u): changed_pixels=%u; not faithful guest draw or presented frame\n",desc.width,desc.height,changed);
+                    }
                     throw std::runtime_error("D3D original viewport has zero extent; investigate device initialization");
+                }
                 throw std::runtime_error("D3D original geometry assembled; raw raster translation pending");
 #else
                 throw std::runtime_error("D3D draw requires GLES backend");

@@ -324,6 +324,40 @@ public:
             throw std::runtime_error("Guest diffuse geometry assembly failed");
         return a.vertex_count;
     }
+    // Diagnostic replay only: a zero guest viewport cannot produce a faithful
+    // draw. Project the verified original XYZ+diffuse line stream onto the
+    // allocated color target using the game's actual transforms. Keep all
+    // guest state and the unresolved raw-packet guard intact; caller must stop.
+    void ReplayFixedLinesDiagnostic(uint32_t start,uint32_t count){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!initialized_||state_.vs_handle!=0x42||state_.vs||state_.ps||
+           !count||count>262144||count%2||state_.viewport.w||state_.viewport.h||
+           state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||
+           state_.viewport.max_z!=1||state_.ss_offset_x||state_.ss_offset_y||
+           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
+           state_.rs[gpu::kRsSpecularEnable]||state_.rs[gpu::kRsVertexBlend]||
+           state_.rs[gpu::kRsStencilEnable]||state_.scissor_count||
+           std::any_of(state_.textures.begin(),state_.textures.end(),[](auto p){return p!=0;})||
+           std::any_of(state_.palettes.begin(),state_.palettes.end(),[](auto p){return p!=0;}))
+            throw std::logic_error("Unsupported zero-viewport diagnostic line replay profile");
+        gpu::TextureDesc desc{};
+        if(!gpu::DescribeSurface(state_.rt,desc)||!desc.width||!desc.height)
+            throw std::invalid_argument("Missing replay target extent");
+        auto replay=state_;
+        replay.viewport={0,0,desc.width,desc.height,0,1};
+        // Reduced fixed-function profile: texture sampling, lighting, fog,
+        // stencil and polygon culling are inactive for these unlit lines.
+        // This does not translate hardware clip, multisample or raster hints.
+        replay.rs.fill(0);replay.tss={};replay.simple.fill(0);
+        replay.rs[gpu::kRsZEnable]=state_.rs[gpu::kRsZEnable];
+        for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,
+                    gpu::kMBlendEnable,gpu::kMSrcBlend,gpu::kMDestBlend,gpu::kMBlendOp,
+                    gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
+                    gpu::kMDitherEnable,gpu::kMShadeMode})
+            replay.simple[m>>2]=state_.simple[m>>2];
+        backend_.Draw(replay,2,start,count,nullptr);
+        backend_.Flush();
+    }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");
