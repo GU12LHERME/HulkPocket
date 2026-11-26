@@ -1,0 +1,33 @@
+name: XBE Vulkan renderer experiment
+on:
+  push:
+    branches: [experiment-vulkan-runtime]
+    paths:
+      - 'native/vulkan_experiment/**'
+      - 'third_party/scda-vulkan/**'
+      - 'third_party/xboxxberecomp/gpu/**'
+      - '.github/workflows/xbe-vulkan-experiment.yml'
+  workflow_dispatch:
+jobs:
+  shader-and-lifetime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Vulkan headers and validator
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev spirv-tools ninja-build
+      - name: Build upstream reference and Hulk shader compiler
+        run: |
+          cmake -S native/vulkan_experiment -B /tmp/hulk-vk -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/hulk-vk --parallel 2
+      - name: Run upstream lifetime tests and compile Hulk shaders
+        run: ctest --test-dir /tmp/hulk-vk --output-on-failure
+      - name: Validate emitted Vulkan SPIR-V
+        run: |
+          test -f /tmp/hulk-vk/spv/packed-lit.vert.spv
+          for f in /tmp/hulk-vk/spv/*.spv; do spirv-val --target-env vulkan1.1 "$f"; done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hulk-vulkan-shader-probe
+          path: /tmp/hulk-vk/spv
+          if-no-files-found: ignore
