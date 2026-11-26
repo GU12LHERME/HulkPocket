@@ -1,4 +1,5 @@
 #include "xbe_entry_session.h"
+#include "xbe_kernel_pool_calls.h"
 #include <cassert>
 using namespace hulkpocket;
 int main() {
@@ -23,4 +24,23 @@ int main() {
     assert(s.cpu.fcw==0x037f && s.cpu.mxcsr==0x1f80);
     assert(m.Read32(0x13000)==0xFE000044);
     assert(m.Read32(0x13004)==0x16000);
+    XbeKernelPool pool(m,0x2000000,static_cast<uint32_t>(m.PageSize()));
+    auto& cpu=s.cpu;
+    uint32_t sp=s.bootstrap.initial_esp-16;
+    cpu.esp=sp;
+    m.Write32(sp,0x15000);
+    m.Write32(sp+4,32);
+    m.Write32(sp+8,0x1234);
+    assert(DispatchPoolCall(15,cpu,m,pool));
+    assert(cpu.esp==sp+12 && cpu.eax==0x2000000);
+    auto allocated=cpu.eax;
+    cpu.esp=sp;
+    m.Write32(sp+4,allocated);
+    assert(DispatchPoolCall(17,cpu,m,pool));
+    assert(cpu.esp==sp+8 && pool.Outstanding()==0);
+    cpu.esp=sp;
+    m.Write32(sp+4,16);
+    assert(DispatchPoolCall(14,cpu,m,pool));
+    assert(cpu.eax==allocated && cpu.esp==sp+8);
+    assert(!DispatchPoolCall(399,cpu,m,pool));
 }
