@@ -619,6 +619,27 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0);
     call(*c,base,cb,233,{ev,0,0x10118});
     assert(c->eax==0xc0000008u);
+    // Mutant ownership, recursive waits, signal state, duplicate handle and release.
+    call(*c,base,cb,192,{0x10a00,0,1});assert(c->eax==0);
+    auto mutant=memory->Read32(0x10a00);
+    call(*c,base,cb,246,{mutant,0,0x10a04});assert(c->eax==0);
+    auto mutant_body=memory->Read32(0x10a04);
+    assert(memory->Read32(mutant_body+4)==0);
+    call(*c,base,cb,233,{mutant,0,0x10118});assert(c->eax==0);
+    assert(memory->Read32(mutant_body+4)==0xffffffffu);
+    call(*c,base,cb,197,{mutant,0x10a08,0});assert(c->eax==0);
+    auto duplicate=memory->Read32(0x10a08);
+    call(*c,base,cb,221,{duplicate,0x10a0c});assert(c->eax==0);
+    assert(memory->Read32(0x10a0c)==0xffffffffu);
+    call(*c,base,cb,221,{mutant,0x10a0c});assert(c->eax==0);
+    assert(memory->Read32(0x10a0c)==0&&memory->Read32(mutant_body+4)==1);
+    call(*c,base,cb,221,{mutant,0});assert(c->eax==0xc0000046u);
+    call(*c,base,cb,225,{mutant,0});assert(c->eax==0xc0000008u);
+    call(*c,base,cb,233,{mutant,0,0x10118});assert(c->eax==0);
+    call(*c,base,cb,230,{mutant,mutant,0,0,0x10118});assert(c->eax==0);
+    call(*c,base,cb,221,{mutant,0});assert(c->eax==0);
+    c->ecx=mutant_body;call(*c,base,cb,250,{});
+    call(*c,base,cb,187,{duplicate});call(*c,base,cb,187,{mutant});
     call(*c,base,cb,193,{0x10a00,0,0,2});
     assert(c->eax==0);
     auto sem=memory->Read32(0x10a00);

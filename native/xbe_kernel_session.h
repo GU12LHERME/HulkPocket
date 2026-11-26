@@ -68,6 +68,8 @@ private:
     // held by in-flight waits. References are tracked independently of handles.
     struct Event { uint32_t body; bool manual; };
     std::map<uint32_t,uint32_t> semaphore_limits_;
+    struct Mutant {uint32_t owner=0,depth=0;bool abandoned=false;};
+    std::map<uint32_t,Mutant> mutants_;
     std::map<uint32_t,Event> events_;
     uint32_t next_event_=0x2000;
     uint32_t next_completion_=0x60000000;
@@ -306,6 +308,7 @@ private:
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
             ReleaseD3dOwner(child.thread_handle);
 #endif
+            AbandonMutants(child.thread_handle);
             w.finished=true;
             mem_.Write32(w.pcr+0x404,1); // dispatcher SignalState
             if(result && !stopping_){worker_failure_=result;stopping_=true;}
@@ -415,6 +418,7 @@ private:
         uint32_t header=mem_.Read32(body),type=header&255u;
         if(thread_settings_.count(body))return true;
         if(object_references_.count(body)&&object_references_.at(body))return true;
+        if(mutants_.count(body))return type==2;
         if(timer_types_.count(body))return type==8+timer_types_.at(body);
         if(pointer_events_.count(body))return type==pointer_events_.at(body);
         for(const auto& item:events_)if(item.second.body==body)return true;
@@ -428,22 +432,61 @@ private:
         if(w) return w->pcr+0x400;
         return 0;
     }
+    bool Ready(uint32_t body,uint32_t thread)const{
+        auto it=mutants_.find(body);
+        if(it!=mutants_.end())return !it->second.depth||it->second.owner==thread;
+        return mem_.Read32(body+4)!=0;
+    }
+    void SyncMutant(uint32_t body,const Mutant& m){
+        mem_.Write32(body+4,1u-m.depth);
+        mem_.Write32(body+24,m.depth?ThreadBody(m.owner):0);
+        const uint8_t abandoned=m.abandoned?1:0;
+        mem_.Write(body+28,&abandoned,1);
+    }
+    uint32_t ThreadBody(uint32_t thread)const{
+        for(size_t i=0;i<count_;++i)if(workers_[i].handle==thread)return workers_[i].pcr+0x400;
+        return 0;
+    }
+    uint32_t Consume(uint32_t body,uint32_t thread){
+        auto it=mutants_.find(body);
+        if(it!=mutants_.end()){
+            auto& m=it->second;
+            if(m.depth>=0x7fffffffu)throw std::runtime_error("Mutant recursion limit");
+            auto result=m.abandoned?0x80u:0u;
+            m.owner=thread;++m.depth;m.abandoned=false;SyncMutant(body,m);return result;
+        }
+        auto type=mem_.Read32(body)&255u;
+        if(type==1||type==9)mem_.Write32(body+4,0);
+        else if(type==5)mem_.Write32(body+4,mem_.Read32(body+4)-1);
+        return 0;
+    }
+    uint32_t ReleaseMutant(uint32_t body,uint32_t thread,uint32_t out){
+        auto it=mutants_.find(body);
+        if(it==mutants_.end())return 0xc0000024u;
+        auto& m=it->second;
+        if(!m.depth||m.owner!=thread)return 0xc0000046u;
+        if(out&&!mem_.IsCommitted(out,4))return 0xc000000du;
+        Output(out,1u-m.depth);
+        if(!--m.depth)m.owner=0;
+        SyncMutant(body,m);cv_.notify_all();return 0;
+    }
+    void AbandonMutants(uint32_t thread){
+        for(auto& [body,m]:mutants_)if(m.depth&&m.owner==thread){
+            m.depth=0;m.owner=0;m.abandoned=true;SyncMutant(body,m);
+        }
+    }
     uint32_t WaitBody(X86Context& cpu,uint32_t body,uint32_t timeout,
                       std::unique_lock<std::mutex>& lock) {
         if(!body) return 0xc0000008u;
         const auto deadline=Deadline(timeout);
         for(;;){
             Pause(cpu,lock);ServiceDpc(cpu,lock);
-            if(mem_.Read32(body+4))break;
+            if(Ready(body,cpu.thread_handle))break;
             if(Steady::now()>=deadline)return 0x102;
             if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
             cv_.wait_until(lock,NextTimer(deadline));
         }
-        // Synchronization event is consumed by exactly one waiter.
-        const auto type=mem_.Read32(body)&255u;
-        if(type==1||type==9) mem_.Write32(body+4,0);
-        else if(type==5) mem_.Write32(body+4,mem_.Read32(body+4)-1);
-        return 0;
+        return Consume(body,cpu.thread_handle);
     }
     void Critical(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Check(cpu,1); const auto addr=Arg(cpu,0);
@@ -534,7 +577,7 @@ private:
         for(unsigned i=0;i<1024&&sound_.TakeStreamDone(d);++i){
             if(!d.callback){
                 auto e=events_.find(d.packet_context);
-                if(e==events_.end()||semaphore_limits_.count(e->second.body)||timer_types_.count(e->second.body))
+                if(e==events_.end()||semaphore_limits_.count(e->second.body)||timer_types_.count(e->second.body)||mutants_.count(e->second.body))
                     throw std::runtime_error("Invalid stream completion event");
                 mem_.Write32(e->second.body+4,1);cv_.notify_all();continue;
             }
@@ -624,7 +667,7 @@ private:
                 Check(cpu,n);std::array<uint32_t,8> a{};for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
                 if(ordinal==kSoundStreamProcess&&!sound_.HasStreamCallback(a[0])&&a[1]&&mem_.IsCommitted(a[1],20)){
                     auto e=mem_.Read32(a[1]+16);
-                    if(e&&(!events_.count(e)||semaphore_limits_.count(events_.at(e).body)||timer_types_.count(events_.at(e).body))){
+                    if(e&&(!events_.count(e)||semaphore_limits_.count(events_.at(e).body)||timer_types_.count(events_.at(e).body)||mutants_.count(events_.at(e).body))){
                         Ret(cpu,n,0x88780032u);return;
                     }
                 }
@@ -1371,7 +1414,7 @@ private:
                 Check(cpu,10);
                 if(Arg(cpu,2))throw std::runtime_error("Directory APC not implemented");
                 auto event=Arg(cpu,1);
-                if(event&&(!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){
+                if(event&&(!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body)||mutants_.count(events_.at(event).body))){
                     Ret(cpu,10,0xc0000008u);return;
                 }
                 auto status=files_.QueryDirectory(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7),Arg(cpu,8),(Arg(cpu,9)&255u)!=0);
@@ -1438,7 +1481,7 @@ private:
                 Check(cpu,8);
                 if(Arg(cpu,2)) throw std::runtime_error("File APC not implemented");
                 auto event=Arg(cpu,1);
-                if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
+                if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body)||mutants_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
                 uint32_t completion_key=0;
                 auto port=files_.Completion(Arg(cpu,0),completion_key);
                 auto context=Arg(cpu,3),iosb=Arg(cpu,4);
@@ -1461,7 +1504,7 @@ private:
                 Check(cpu,8);
                 if(Arg(cpu,2))throw std::runtime_error("Metadata write APC not implemented");
                 auto event=Arg(cpu,1);
-                if(event&&(!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){
+                if(event&&(!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body)||mutants_.count(events_.at(event).body))){
                     Ret(cpu,8,0xc0000008u);return;
                 }
                 auto status=files_.WriteMetadata(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
@@ -1727,6 +1770,9 @@ private:
                     auto old=mem_.Read32(signal+4);
                     if(!semaphore_limits_.count(signal)||old>=semaphore_limits_.at(signal)){Ret(cpu,5,0xc0000047u);return;}
                     mem_.Write32(signal+4,old+1);
+                }else if(type==2){
+                    auto status=ReleaseMutant(signal,cpu.thread_handle,0);
+                    if(status){Ret(cpu,5,status);return;}
                 }else{Ret(cpu,5,0xc0000024u);return;}
                 cv_.notify_all();
                 auto result=WaitBody(cpu,wait,Arg(cpu,4),lock);Ret(cpu,5,result);return;
@@ -1745,6 +1791,30 @@ private:
                 mem_.Write32(body+8,body+8);mem_.Write32(body+12,body+8);
                 events_.emplace(h,Event{body,type==0});Output(out,h);
                 Ret(cpu,4,0);return;
+            }
+            case 192: {
+                Check(cpu,3);auto out=Arg(cpu,0),attrs=Arg(cpu,1),owner=Arg(cpu,2)&255u;
+                if(!out||!mem_.IsCommitted(out,4)){Ret(cpu,3,0xc000000du);return;}
+                if(attrs){
+                    if(!mem_.IsCommitted(attrs,12)){Ret(cpu,3,0xc000000du);return;}
+                    if(mem_.Read32(attrs)||mem_.Read32(attrs+4)||mem_.Read32(attrs+8))
+                        throw std::runtime_error("Named/attributed mutant not implemented");
+                }
+                if(mutants_.size()>=1024){Ret(cpu,3,0xc0000017u);return;}
+                auto body=pool_.Allocate(32);
+                if(!body){Ret(cpu,3,0xc0000017u);return;}
+                InitDispatcher(body,32,2,1);
+                mem_.Write32(body+16,body+16);mem_.Write32(body+20,body+16);
+                Mutant m{owner?cpu.thread_handle:0u,owner?1u:0u,false};
+                mutants_.emplace(body,m);SyncMutant(body,m);
+                auto h=next_event_;next_event_+=4;
+                events_.emplace(h,Event{body,false});Output(out,h);
+                std::fprintf(stderr,"HULK MUTANT CREATE PASS handle=%08X body=%08X owner=%08X depth=%u\n",h,body,m.owner,m.depth);
+                Ret(cpu,3,0);return;
+            }
+            case 221: {
+                Check(cpu,2);auto h=Arg(cpu,0),body=Body(h);
+                Ret(cpu,2,body?ReleaseMutant(body,cpu.thread_handle,Arg(cpu,1)):0xc0000008u);return;
             }
             case 193: {
                 Check(cpu,4);auto out=Arg(cpu,0),initial=Arg(cpu,2),limit=Arg(cpu,3);
@@ -1792,7 +1862,7 @@ private:
                 const auto deadline=Deadline(Arg(cpu,5));
                 auto ready=[&]{
                     if(stopping_)return true;
-                    auto signal=[&](uint32_t b){return mem_.Read32(b+4)!=0;};
+                    auto signal=[&](uint32_t b){return Ready(b,cpu.thread_handle);};
                     return kind?std::any_of(bodies.begin(),bodies.end(),signal):
                                 std::all_of(bodies.begin(),bodies.end(),signal);
                 };
@@ -1803,21 +1873,20 @@ private:
                     if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
                     cv_.wait_until(lock,NextTimer(deadline));
                 }while(!ready());
-                auto consume=[&](uint32_t body){
-                    auto type=mem_.Read32(body)&255u;
-                    if(type==1||type==9)mem_.Write32(body+4,0);
-                    else if(type==5)mem_.Write32(body+4,mem_.Read32(body+4)-1);
-                };
-                if(!kind){for(auto body:bodies)consume(body);Ret(cpu,6,0);return;}
-                for(uint32_t i=0;i<n;++i)if(mem_.Read32(bodies[i]+4)){
-                    consume(bodies[i]);Ret(cpu,6,i);return;
+                if(!kind){
+                    uint32_t result=0;
+                    for(uint32_t i=0;i<n;++i)if(Consume(bodies[i],cpu.thread_handle)&&!result)result=0x80+i;
+                    Ret(cpu,6,result);return;
+                }
+                for(uint32_t i=0;i<n;++i)if(Ready(bodies[i],cpu.thread_handle)){
+                    Ret(cpu,6,i+Consume(bodies[i],cpu.thread_handle));return;
                 }
                 throw std::runtime_error("Multiwait lost signal");
             }
             case 225: case 186: {
                 const unsigned n=ordinal==225?2:1;Check(cpu,n);
                 auto it=events_.find(Arg(cpu,0));
-                if(it==events_.end()||semaphore_limits_.count(it->second.body)||timer_types_.count(it->second.body)){Ret(cpu,n,0xc0000008u);return;}
+                if(it==events_.end()||semaphore_limits_.count(it->second.body)||timer_types_.count(it->second.body)||mutants_.count(it->second.body)){Ret(cpu,n,0xc0000008u);return;}
                 auto body=it->second.body;
                 if(ordinal==225) Output(Arg(cpu,1),mem_.Read32(body+4));
                 mem_.Write32(body+4,ordinal==225?1:0);
@@ -1847,7 +1916,7 @@ private:
                 if(requested) {
                     uint32_t ordinal_type=259;
                     if(events_.count(h)){
-                        ordinal_type=timer_types_.count(body)?31:semaphore_limits_.count(body)?30:16;
+                        ordinal_type=mutants_.count(body)?22:timer_types_.count(body)?31:semaphore_limits_.count(body)?30:16;
                     }
                     const auto actual=registry_?registry_->Resolve(ordinal_type).guest_data:0;
                     if(!actual || actual!=requested){Ret(cpu,3,0xc0000024u);return;}
