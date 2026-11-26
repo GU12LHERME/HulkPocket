@@ -1,4 +1,5 @@
 #include "hulk_xbe_preflight.h"
+#include "xbe_bootstrap.h"
 #include "xbe_kernel_imports.h"
 #include "xbe_image_memory_loader.h"
 #include "xbox_guest_address_space.h"
@@ -17,10 +18,11 @@
 // from your own game and trusted source code.
 int main(int argc,char** argv) {
     std::vector<std::string> paths;
-    bool imports_requested=false;
+    bool imports_requested=false, bootstrap_requested=false;
     for (int i=1; i<argc; ++i) {
         const std::string arg(argv[i]);
         if (arg=="--imports") imports_requested=true;
+        else if (arg=="--bootstrap") bootstrap_requested=true;
         else if (arg.rfind("--",0)==0) {
             std::cerr << "unknown diagnostic option: " << arg << '\n';
             return 2;
@@ -29,7 +31,7 @@ int main(int argc,char** argv) {
         }
     }
     if(paths.size()!=1 && paths.size()!=2) {
-        std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so] [--imports]\n";
+        std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so] [--imports] [--bootstrap]\n";
         return 2;
     }
     try {
@@ -70,6 +72,16 @@ int main(int argc,char** argv) {
             std::cout << "Ordinals:";
             for(auto ordinal:imports.ordinals) std::cout << ' ' << ordinal;
             std::cout << '\n';
+        }
+        if(bootstrap_requested) {
+            // Diagnostic-only arena, not a production Xbox allocator.
+            const auto state=hulkpocket::PrepareXbeBootstrap(loaded,guest,0x04000000,0x06000000);
+            std::cout << "Bootstrap memory prepared: entry=0x" << std::hex
+                      << state.entry << ", esp=0x" << state.initial_esp
+                      << ", tls_data=0x" << state.tls_data << std::dec
+                      << ", tls_bytes=" << state.tls_size
+                      << ", tls_callbacks_present=" << (state.tls.callbacks!=0) << '\n';
+            std::cout << "CPU dispatch, TLS index and callbacks remain uninitialized.\n";
         }
         if(paths.size() == 2) {
             hulkpocket::PortableXbeImage native(paths[1]);
