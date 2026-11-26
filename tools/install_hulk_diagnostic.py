@@ -85,6 +85,7 @@ def main():
         env.setdefault("HULK_DRAW_LIMIT","128")
         env.setdefault("HULK_WATCHDOG_SECONDS","240")
         env.setdefault("HULK_COMPACT_AUDIO_TRACE","1")
+        env.setdefault("HULK_COMPACT_REPORT","1")
         return subprocess.call(["bash","tools/run_hulk_next.sh"],cwd=repo,env=env)
     return 0
 if __name__=="__main__":

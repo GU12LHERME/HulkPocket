@@ -45,5 +45,5 @@ log="$downloads/HulkPocket-$(date +%Y%m%d-%H%M%S).txt"
         python tools/extend_hulk_generated.py "${args[@]}" --recompiler "$recompiler" --base "$base" --output "$output"
         base="$output"
     fi
-    bash tools/run_hulk_diagnostic.sh "$sdk" "$base" "$cache" "$xbe" "$disc"
+    HULK_SINGLE_REPORT="${HULK_COMPACT_REPORT:-0}" bash tools/run_hulk_diagnostic.sh "$sdk" "$base" "$cache" "$xbe" "$disc"
 } 2>&1 | tee "$log"

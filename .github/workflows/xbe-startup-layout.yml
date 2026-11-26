@@ -64,6 +64,7 @@ jobs:
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Validate local diagnostic script
         run: |
+          python3 tools/compact_hulk_report.py --self-test
           bash -n tools/run_hulk_diagnostic.sh
           bash -n tools/run_hulk_next.sh
       - name: Verify strong generated graphics override

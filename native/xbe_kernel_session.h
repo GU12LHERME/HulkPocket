@@ -113,6 +113,17 @@ private:
         std::unique_ptr<gpu::State> diagnostic_line_profile,diagnostic_texture_profile;
         unsigned diagnostic_texture_returns=0;
         uint64_t last_frame_hash=0;
+        const bool compact_capture=std::getenv("HULK_COMPACT_REPORT")&&
+            std::strcmp(std::getenv("HULK_COMPACT_REPORT"),"1")==0;
+        std::vector<uint8_t> last_presented_pixels;
+        unsigned last_presented_width=0,last_presented_height=0,last_presented_pitch=0;
+        void SaveLastPresented()const{
+            if(last_presented_pixels.empty())return;
+            if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
+                try{WriteDiagnosticBitmap(path,last_presented_pixels.data(),last_presented_width,last_presented_height,last_presented_pitch);}
+                catch(const std::exception& ex){std::fprintf(stderr,"D3D SWAP BITMAP FAILED: %s\n",ex.what());}
+            }
+        }
         unsigned identical_frames=0;
         const unsigned diagnostic_draw_limit=DiagnosticBudget("HULK_DRAW_LIMIT",kDiagnosticDrawsPerFrame,512);
         const unsigned frame_limit=DiagnosticFrameLimit();
@@ -152,6 +163,7 @@ private:
     }
     void ReleaseD3dOwner(uint32_t thread){
         if(live_d3d_&&live_d3d_->owner==thread){
+            live_d3d_->SaveLastPresented();
             live_d3d_.reset();
             std::fprintf(stderr,"D3D persistent diagnostic device released on owner thread\n");
         }
@@ -1275,7 +1287,12 @@ private:
                 }
                 live.backend.ReadbackColor(state.rt);
                 auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
-                if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
+                if(live.compact_capture){
+                    live.last_presented_pixels.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
+                    live.last_presented_width=desc.width;live.last_presented_height=desc.height;live.last_presented_pitch=desc.pitch;
+                    if(!live.diagnostic_swap_returns||(live.diagnostic_swap_returns+1)%120==0||
+                        live.diagnostic_swap_returns+1>=live.frame_limit)live.SaveLastPresented();
+                }else if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
                     try{WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);}
                     catch(const std::exception& ex){std::fprintf(stderr,"D3D SWAP BITMAP FAILED: %s\n",ex.what());}
                 }

@@ -62,9 +62,19 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     trap 'rm -f "$execution_log"' EXIT
     # Local opt-in output; never upload original assets or replay pixels.
     export HULK_REPLAY_BITMAP="${HULK_REPLAY_BITMAP:-$(dirname "$log")/HulkPocket-replay-$(date +%Y%m%d-%H%M%S).bmp}"
-    export HULK_AUDIO_PCM="${HULK_AUDIO_PCM:-$(dirname "$log")/HulkPocket-audio-$(date +%Y%m%d-%H%M%S).pcm}"
+    if [[ "${HULK_COMPACT_REPORT:-0}" != 1 || "${HULK_CAPTURE_PCM:-0}" == 1 ]]; then
+        export HULK_AUDIO_PCM="${HULK_AUDIO_PCM:-$(dirname "$log")/HulkPocket-audio-$(date +%Y%m%d-%H%M%S).pcm}"
+    fi
     status=0
-    "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
+    if [[ "${HULK_COMPACT_REPORT:-0}" == 1 ]]; then
+        "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" 2>&1 | python tools/compact_hulk_report.py >"$execution_log" || {
+            statuses=("${PIPESTATUS[@]}")
+            status=${statuses[0]}
+            if (( statuses[1] != 0 )); then echo "Compact diagnostic filter failed"; exit 2; fi
+        }
+    else
+        "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
+    fi
     cat "$execution_log"
     if grep -q "D3D original viewport has zero extent" "$execution_log"; then
         python tools/report_hulk_viewport.py "$generated" "$execution_log" || true
@@ -100,4 +110,4 @@ PY
         fi
     fi
     exit "$status"
-} 2>&1 | tee "$log"
+} 2>&1 | if [[ "${HULK_SINGLE_REPORT:-0}" == 1 ]]; then cat; else tee "$log"; fi
