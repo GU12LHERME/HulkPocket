@@ -1,4 +1,5 @@
 #include "hulk_xbe_preflight.h"
+#include "xbe_kernel_imports.h"
 #include "xbe_image_memory_loader.h"
 #include "xbox_guest_address_space.h"
 #include <cstdint>
@@ -20,7 +21,7 @@ int main(int argc,char** argv) {
         return 2;
     }
     try {
-        std::ifstream file(argv[1],std::ios::binary|std::ios::ate);
+        std::ifstream file(paths[0],std::ios::binary|std::ios::ate);
         if(!file) throw std::runtime_error("cannot open local XBE");
         const auto length=file.tellg();
         if(length < 0 || static_cast<std::uint64_t>(length)>512u*1024u*1024u)
@@ -38,8 +39,21 @@ int main(int argc,char** argv) {
                   << ", entry=0x" << loaded.entry
                   << ", kernel_thunk=0x" << loaded.kernel_thunk
                   << std::dec << ", sections=" << loaded.sections << '\n';
-        if(argc == 3) {
-            hulkpocket::PortableXbeImage native(argv[2]);
+        if(imports_requested) {
+            const auto imports=hulkpocket::ScanXbeKernelImports(loaded,guest);
+            if(!imports.complete) {
+                std::cerr << "Kernel import inventory unavailable: " << imports.error << '\\n';
+                return 4;
+            }
+            std::cout << "Kernel imports: " << imports.entries
+                      << " entries, " << imports.ordinals.size()
+                      << " unique kernel ordinals\\n";
+            std::cout << "Ordinals:";
+            for(auto ordinal:imports.ordinals) std::cout << ' ' << ordinal;
+            std::cout << '\\n';
+        }
+        if(paths.size() == 2) {
+            hulkpocket::PortableXbeImage native(paths[1]);
             const auto result=hulkpocket::CheckHulkXbePreflight(loaded,native);
             std::cout << "Module match: " << (result.ReadyForGuestCall() ? "PASS" : "REJECT")
                       << ", candidate_region=" << result.region_candidate
