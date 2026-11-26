@@ -41,3 +41,7 @@ At implementation time 4f26c57 passed Linux Vulkan draws, SPIR-V validation and 
 ## D3D8 backend ABI integration
 
 4f26c57 completed all four workflows. The 8aa78a6 CI was still running at implementation time. Extracted the synchronous Vulkan core and introduced VulkanBridgeBackend implementing the current gpu::Backend ABI. The existing XbeD3d8Bridge now has a Vulkan regression that dispatches Xbox Clear/Draw/Present and verifies guest framebuffer pixels. Target size is configurable; explicit clear and guest writeback are supported. Unsupported rotation, surface copy, depth-target binding, viewport variation, gamma and programmable state remain strict errors. This is a direct bridge integration in the standalone native probe, not yet selected in the APK or validated against a real game session. CI pending; GLES untouched.
+
+## D3D8 ABI build correction
+
+The d14f5b0 Vulkan workflow stopped at compile time because cpu/x86_context.h is not vendored. The other Android smoke and APK jobs passed. This correction uses the same pinned TGP482 XboxXBERecomp header and Git blob checksum already used by the GLES/APK workflows, passes its include directory to both host and Android CMake builds, and checks the fixture stack and return ABI. No renderer behavior is changed. CI pending.

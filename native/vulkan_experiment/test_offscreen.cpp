@@ -144,7 +144,7 @@ int main(int argc,char** argv){
             constexpr uint32_t surface=0x20100,buffer=0x20200;
             bridge_mem.Write32(surface,0x50000);bridge_mem.Write32(surface+4,0x110000);
             bridge_mem.Write32(surface+12,0x00011221);bridge_mem.Write32(surface+16,63|(63<<12)|(3<<24));
-            bridge_mem.Write32(buffer+4,0x114000);
+            bridge_mem.Write32(buffer,0x40000);bridge_mem.Write32(buffer+4,0x114000);
             struct Compact{float x,y,z;uint32_t rgba;};
             const Compact compact[]={{-.75f,-.75f,.5f,0x80ff00ff},{.75f,-.75f,.5f,0x80ff00ff},{0,.75f,.5f,0x80ff00ff}};
             bridge_mem.Write(0x80114000,compact,sizeof(compact));
@@ -153,6 +153,7 @@ int main(int argc,char** argv){
                 cpu.esp=0x2f000;bridge_mem.Write32(cpu.esp,0x20000);
                 unsigned n=0;for(auto v:args)bridge_mem.Write32(cpu.esp+4+4*n++,v);
                 bridge.Call(name,cpu,hulkpocket::D3dAbi::Stdcall(unsigned(args.size())));
+                if(cpu.eax||cpu.esp!=0x2f004+4*args.size())throw std::runtime_error("D3D8 ABI stack mismatch");
             };
             call("D3DDevice_SetRenderTarget",{surface,0});
             call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});

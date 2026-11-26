@@ -19,6 +19,10 @@ find_package(Threads REQUIRED)
 get_filename_component(ROOT "../.." ABSOLUTE)
 set(SCDA "${ROOT}/third_party/scda-vulkan")
 set(HULK "${ROOT}/third_party/xboxxberecomp")
+set(HULK_SDK_DIR "" CACHE PATH "Pinned XboxXBERecomp runtime header directory")
+if(NOT EXISTS "${HULK_SDK_DIR}/cpu/x86_context.h")
+    message(FATAL_ERROR "Set HULK_SDK_DIR to the pinned SDK runtime directory (cpu/x86_context.h required)")
+endif()
 # Separate executables: the older reference and the newer Hulk state ABI
 # must never be mixed or linked together.
 if(NOT ANDROID)
@@ -39,7 +43,7 @@ endif()
 
 add_executable(hulk_vulkan_offscreen test_offscreen.cpp "${HULK}/gpu/shaders.cpp"
     "${HULK}/gpu/texture.cpp" "${HULK}/gpu/vertex.cpp" "${ROOT}/native/xbox_guest_address_space.cpp")
-target_include_directories(hulk_vulkan_offscreen PRIVATE "${HULK}" "${SCDA}/src")
+target_include_directories(hulk_vulkan_offscreen PRIVATE "${HULK}" "${SCDA}/src" "${HULK_SDK_DIR}")
 target_compile_options(hulk_vulkan_offscreen PRIVATE -UNDEBUG)
 target_compile_definitions(hulk_vulkan_offscreen PRIVATE ENABLE_HLSL)
 target_link_libraries(hulk_vulkan_offscreen PRIVATE Threads::Threads glslang glslang-default-resource-limits)

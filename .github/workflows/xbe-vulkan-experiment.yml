@@ -15,9 +15,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Vulkan headers and validator
         run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers spirv-tools ninja-build
+      - name: Fetch pinned Xbox runtime ABI header
+        run: |
+          mkdir -p /tmp/hulk-sdk/cpu
+          curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
+          test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Build upstream reference and Hulk shader compiler
         run: |
-          cmake -S native/vulkan_experiment -B /tmp/hulk-vk -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S native/vulkan_experiment -B /tmp/hulk-vk -G Ninja -DCMAKE_BUILD_TYPE=Release -DHULK_SDK_DIR=/tmp/hulk-sdk
           cmake --build /tmp/hulk-vk --parallel 2
       - name: Run reference tests, shader compiler and real offscreen Vulkan draws
         run: |
@@ -40,7 +45,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/28.2.13676358/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_static \
-            -DBUILD_SHARED_LIBS=OFF -DFETCHCONTENT_SOURCE_DIR_GLSLANG=/tmp/hulk-vk/_deps/glslang-src
+            -DHULK_SDK_DIR=/tmp/hulk-sdk -DBUILD_SHARED_LIBS=OFF -DFETCHCONTENT_SOURCE_DIR_GLSLANG=/tmp/hulk-vk/_deps/glslang-src
           cmake --build /tmp/hulk-vk-android --target hulk_vulkan_offscreen --parallel 2
           cp /tmp/hulk-vk-android/hulk_vulkan_offscreen /tmp/hulk-vk/android-probe/hulk-vulkan-probe
           "$ndk/llvm-readelf" -h /tmp/hulk-vk/android-probe/hulk-vulkan-probe | grep AArch64 >/dev/null
