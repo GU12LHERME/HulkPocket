@@ -303,11 +303,57 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0xc0000034u);
     call(*c,base,cb,187,{disc});assert(c->eax==0);
     memory->Write32(0x10950,0);
+    // Actual RP6 calls use the DOS namespace pseudo-handle, not a
+    // directory descriptor. Exercise the observed flags and masks.
+    constexpr uint32_t dos_root=0xfffffffdu;
+    const char dos_disc[]="D:\\";
+    memory->Write(0x10900,dos_disc,sizeof(dos_disc));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    memory->Write32(0x10950,dos_root);
+    call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x00800021});
+    assert(c->eax==0);
+    call(*c,base,cb,187,{memory->Read32(0x10960)});assert(c->eax==0);
+    const char dos_file[]="D:\\rcfs.txt";
+    memory->Write(0x10900,dos_file,sizeof(dos_file));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,190,{0x10960,0x80100080,0x10950,0x10968,0,0,1,1,0x60});
+    assert(c->eax==0);
+    auto manifest=memory->Read32(0x10960);
+    call(*c,base,cb,219,{manifest,0,0,0,0x10968,0x10980,4,0});
+    assert(c->eax==0&&memory->Read32(0x10980)==0x54534554);
+    call(*c,base,cb,187,{manifest});assert(c->eax==0);
+    const char missing_args[]="D:\\args.txt";
+    memory->Write(0x10900,missing_args,sizeof(missing_args));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,190,{0x10960,0x80100080,0x10950,0x10968,0,0,1,1,0x60});
+    assert(c->eax==0xc0000034u);
+    const char other_drive[]="C:\\rcfs.txt";
+    memory->Write(0x10900,other_drive,sizeof(other_drive));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,1,0x40});
+    assert(c->eax==0xc0000034u);
+    const char partition[]="\\Device\\Harddisk0\\partition1\\";
+    memory->Write(0x10900,partition,sizeof(partition));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x00800021});
+    assert(c->eax==0xc0000034u); // Not part of DOS namespace.
+    memory->Write32(0x10950,0);
+    call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x00800021});
+    assert(c->eax==0);
+    auto hdd=memory->Read32(0x10960);
+    memory->Write32(0x10950,hdd);
+    memory->Write(0x10900,relative,sizeof(relative));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,1,0x40});
+    assert(c->eax==0xc0000034u); // Disc assets cannot appear on empty HDD.
+    call(*c,base,cb,187,{hdd});assert(c->eax==0);
+    memory->Write32(0x10950,dos_root);
     const char escape[]="D:\\..\\outside";
     memory->Write(0x10900,escape,sizeof(escape));
     call(*c,base,cb,289,{0x10940,0x10900});
     call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,0,0x40});
     assert(c->eax==0xc0000034u);
+    memory->Write32(0x10950,0);
     memory->Write32(0x12800,35);
     call(*c,base,cb,181,{0x12800});assert(c->eax==0xc000000du);
     memory->Write32(0x12800,36);
@@ -519,11 +565,16 @@ int main() {
     int fd=open(path.c_str(),O_CREAT|O_WRONLY|O_EXCL,0600);
     assert(fd>=0 && write(fd,"Hulk",4)==4);
     close(fd);
+    std::string manifest_path=std::string(dir)+"/RCFS.TXT";
+    fd=open(manifest_path.c_str(),O_CREAT|O_WRONLY|O_EXCL,0600);
+    assert(fd>=0&&write(fd,"TEST",4)==4);close(fd);
+    char partition_dir[]="/tmp/hulk-partition1-XXXXXX";
+    assert(mkdtemp(partition_dir));
     HulkKernelDataRegistry registry;
     RegisterDispatcherObjectTypes(mem,registry,0x10c00);
-    XbeKernelSession session(mem,0x09000000,0x01000000,tls,nullptr,dir,&registry);
+    XbeKernelSession session(mem,0x09000000,0x01000000,tls,nullptr,dir,&registry,0,partition_dir);
     assert(session.Run(entry,cpu,0x1000)==0);
     assert(ran==1);
     assert(mem.Read32(0x0A000404)==1);
-    assert(unlink(path.c_str())==0 && rmdir(dir)==0);
+    assert(unlink(path.c_str())==0&&unlink(manifest_path.c_str())==0&&rmdir(dir)==0&&rmdir(partition_dir)==0);
 }

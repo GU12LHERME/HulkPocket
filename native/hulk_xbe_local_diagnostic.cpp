@@ -31,11 +31,12 @@
 // from your own game and trusted source code.
 int main(int argc,char** argv) {
     std::vector<std::string> paths;
-    std::string disc_root;
+    std::string disc_root,partition1;
     bool imports_requested=false, bootstrap_requested=false, execute_requested=false;
     for (int i=1; i<argc; ++i) {
         const std::string arg(argv[i]);
         if (arg=="--disc-root" && i+1<argc) disc_root=argv[++i];
+        else if (arg=="--partition1-root" && i+1<argc) partition1=argv[++i];
         else if (arg=="--imports") imports_requested=true;
         else if (arg=="--execute-diagnostic") execute_requested=true;
         else if (arg=="--bootstrap") bootstrap_requested=true;
@@ -50,7 +51,7 @@ int main(int argc,char** argv) {
         std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so] [--imports] [--bootstrap]\n";
         return 2;
     }
-    if(!disc_root.empty() && !execute_requested) { std::cerr << "--disc-root requires execution diagnostic\n"; return 2; }
+    if((!disc_root.empty()||!partition1.empty()) && !execute_requested) { std::cerr << "Disc/partition root requires execution diagnostic\n"; return 2; }
     if(execute_requested && (paths.size()!=2 || bootstrap_requested)) {
         std::cerr << "Execution requires a module and cannot be combined with --bootstrap\n";
         return 2;
@@ -179,7 +180,7 @@ int main(int argc,char** argv) {
                         uint32_t image_pages=0;
                         for(uint64_t a=uint64_t(loaded.base)&~4095ull;a<uint64_t(loaded.base)+loaded.image_size;a+=4096)
                             if(guest.IsCommitted(uint32_t(a),1))++image_pages;
-                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry,image_pages);
+                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry,image_pages,partition1);
                         int status=session.Run(entry,cpu,loaded.entry);
                         std::cerr << "Guest entry status: " << status << std::endl;
                         _exit(status==0?0:5);

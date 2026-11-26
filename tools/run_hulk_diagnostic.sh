@@ -57,6 +57,7 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     fi
     args=()
     if [[ -n "$disc" ]]; then args+=(--disc-root "$disc"); fi
+    if [[ -n "${HULK_PARTITION1_ROOT:-}" ]]; then args+=(--partition1-root "$HULK_PARTITION1_ROOT"); fi
     execution_log=$(mktemp)
     trap 'rm -f "$execution_log"' EXIT
     # Local opt-in output; never upload original assets or replay pixels.

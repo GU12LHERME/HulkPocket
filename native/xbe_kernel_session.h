@@ -1671,8 +1671,8 @@ private:
     }
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
-                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0)
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
+                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0,const std::string& partition1={})
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root,partition1),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

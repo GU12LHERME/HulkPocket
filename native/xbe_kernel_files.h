@@ -17,7 +17,8 @@ namespace hulkpocket {
 // directory descriptor with O_NOFOLLOW; guest paths never become host paths.
 class XbeDiscFiles {
     XboxGuestAddressSpace& mem_;
-    int root_=-1;
+    int root_=-1, partition1_=-1;
+    static constexpr uint32_t kDosDevicesDirectory=0xfffffffdu; // Xbox ObDosDevicesDirectory() == (HANDLE)-3
     struct File {
         int fd; bool directory; uint64_t pos=0;
         explicit File(int value,bool dir):fd(value),directory(dir){}
@@ -51,23 +52,29 @@ class XbeDiscFiles {
         closedir(d);return ambiguous?std::string{}:result;
     }
     int Resolve(std::string path,uint32_t root=0) {
-        if(root_<0) return -1;
         std::replace(path.begin(),path.end(),'/','\\');
         const auto upper=Upper(path);
         size_t start=0;
         int parent=root_;
-        if(root){
+        if(root&&root!=kDosDevicesDirectory){
             auto it=files_.find(root);
             if(it==files_.end()||!it->second->directory)return -1;
             if(!path.empty()&&(path.front()=='\\'||path.find(':')!=std::string::npos))return -1;
             parent=it->second->fd;
         }else{
             start=std::string::npos;
-            for(const std::string prefix:{"\\DEVICE\\CDROM0","\\??\\D:","D:"}){
-                if(upper==prefix){start=prefix.size();break;}
-                if(upper.rfind(prefix+"\\",0)==0){start=prefix.size()+1;break;}
+            // The special DOS directory is a namespace, not a file handle.
+            // Only D: is mapped in that namespace. The internal partition
+            // has a separate, explicitly selected read-only backing.
+            for(const std::string prefix:{"\\DEVICE\\CDROM0","\\??\\D:","D:","\\DEVICE\\HARDDISK0\\PARTITION1"}){
+                if(root==kDosDevicesDirectory&&prefix!="D:")continue;
+                if(upper==prefix)start=prefix.size();
+                else if(upper.rfind(prefix+"\\",0)==0)start=prefix.size()+1;
+                else continue;
+                if(prefix=="\\DEVICE\\HARDDISK0\\PARTITION1")parent=partition1_;
+                break;
             }
-            if(start==std::string::npos)return -1;
+            if(start==std::string::npos||parent<0)return -1;
         }
         int dir=openat(parent,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
         if(dir<0)return -1;
@@ -108,19 +115,33 @@ class XbeDiscFiles {
         out.resize(len);if(len)mem_.Read(p,out.data(),len);
         return out.find('\0')==std::string::npos;
     }
+    bool ValidRoot(uint32_t root)const{
+        return root==0||root==kDosDevicesDirectory||
+            (Contains(root)&&files_.at(root)->directory);
+    }
     static std::string LogName(std::string name){
         for(auto& c:name)if(static_cast<unsigned char>(c)<32||static_cast<unsigned char>(c)>126)c='?';
         return name;
     }
 public:
-    explicit XbeDiscFiles(XboxGuestAddressSpace& mem,const std::string& root={}):mem_(mem) {
+    explicit XbeDiscFiles(XboxGuestAddressSpace& mem,const std::string& root={},const std::string& partition1={}):mem_(mem) {
         if(!root.empty()) {
             root_=open(root.c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
             if(root_<0) throw std::runtime_error("Cannot open selected game directory");
             std::fprintf(stderr,"DISC ROOT OPEN PASS (read-only directory)\n");
         }else std::fprintf(stderr,"DISC ROOT NOT SELECTED\n");
+        if(!partition1.empty()){
+            partition1_=open(partition1.c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+            if(partition1_<0){if(root_>=0)close(root_);throw std::runtime_error("Cannot open selected private Xbox partition1 directory");}
+            struct stat disc{},data{};
+            if(root_>=0&&(fstat(root_,&disc)||fstat(partition1_,&data)||
+                (disc.st_dev==data.st_dev&&disc.st_ino==data.st_ino))){
+                close(root_);close(partition1_);throw std::runtime_error("Disc and Xbox partition1 must be distinct");
+            }
+            std::fprintf(stderr,"XBOX PARTITION1 ROOT OPEN PASS (read-only directory)\n");
+        }
     }
-    ~XbeDiscFiles(){files_.clear();if(root_>=0)close(root_);}
+    ~XbeDiscFiles(){files_.clear();if(root_>=0)close(root_);if(partition1_>=0)close(partition1_);}
     XbeDiscFiles(const XbeDiscFiles&)=delete;
     XbeDiscFiles& operator=(const XbeDiscFiles&)=delete;
     bool Close(uint32_t h) {
@@ -142,7 +163,7 @@ public:
         if((disposition!=1&&disposition!=3)||(options&0x1000u)||
            (access&0x500d0116u))return Finish(iosb,denied);
         if((options&0x41u)==0x41u)return Finish(iosb,invalid);
-        if(root&&(!Contains(root)||!files_.at(root)->directory))return Finish(iosb,bad_handle);
+        if(!ValidRoot(root))return Finish(iosb,bad_handle);
         if(files_.size()>=256)return Finish(iosb,0xc000011fu);
         int fd=Resolve(name,root);
         if(fd<0)return Finish(iosb,missing);
@@ -178,7 +199,7 @@ public:
     uint32_t FullAttributes(uint32_t attrs,uint32_t out){
         if(!mem_.IsCommitted(out,56))return invalid;
         std::string name;uint32_t root=0;if(!Name(attrs,name,root))return invalid;
-        if(root&&(!Contains(root)||!files_.at(root)->directory))return bad_handle;
+        if(!ValidRoot(root))return bad_handle;
         int fd=Resolve(name,root);if(fd<0)return missing;
         struct stat st{};int status=fstat(fd,&st);close(fd);
         if(status||st.st_size<0)return 0xc0000185u;
