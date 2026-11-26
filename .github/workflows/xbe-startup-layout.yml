@@ -32,7 +32,7 @@ jobs:
       - name: Fetch pinned SDK context
         run: |
           mkdir -p /tmp/hulk-sdk/cpu
-          curl --fail --silent --show-error --location https://api.github.com/repos/TGP482/XboxXBERecomp/git/blobs/a02e10b8e2069920529d79d1f4e2413c73cb5f10 | python3 -c 'import json,sys,base64; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["content"]))' > /tmp/hulk-sdk/cpu/x86_context.h
+          curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Host tests
         run: |
