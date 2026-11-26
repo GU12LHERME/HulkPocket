@@ -427,6 +427,11 @@ struct VulkanCore{
     void RestoreColor(const uint8_t* bgra,uint32_t pitch){
         if(!bgra||pitch<uint64_t(W)*4||frame_valid)throw std::invalid_argument("Invalid Vulkan restored color");
         ClearFrame(0xf3,0,1,0);
+        ReplaceColor(bgra,pitch);
+    }
+    // Update the color image without discarding existing depth/stencil.
+    void ReplaceColor(const uint8_t* bgra,uint32_t pitch){
+        if(!bgra||pitch<uint64_t(W)*4||!frame_valid)throw std::invalid_argument("Invalid Vulkan color replacement");
         EnsureBuffer(staging,VkDeviceSize(W)*H*4,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         auto* dst=static_cast<uint8_t*>(staging.data);
         for(uint32_t y=0;y<H;++y)for(uint32_t x=0;x<W;++x){

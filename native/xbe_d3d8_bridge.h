@@ -159,6 +159,11 @@ class XbeD3d8Bridge {
             }
             gpu::ApplyPixelConstants(state_,a[0],a[2]);return 0;
         }
+        if(name=="D3DDevice_CopyRects") {
+            Count(a,5);
+            if(!a[0]||!a[3])throw std::invalid_argument("Missing D3D copy surface");
+            backend_.Copy(Surface(a[0]),Surface(a[3]),a[2],a[1],a[4],1.f,1.f);return 0;
+        }
         if(name=="D3DDevice_SetRenderTarget") {
             Count(a,2);auto color=Surface(a[0]),depth=Surface(a[1]);
             state_.rt=color;state_.zs=depth;ViewportConstants();return 0;

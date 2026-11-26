@@ -83,8 +83,59 @@ public:
         }
         core_.Draw({},false,false,false,false,&s,false,&a,true,true,true);
     }
-    void Copy(const gpu::Surface&,const gpu::Surface&,uint32_t,uint32_t,uint32_t,float,float)override{
-        throw std::logic_error("Vulkan surface copy not integrated");
+    void Copy(const gpu::Surface& src,const gpu::Surface& dst,uint32_t count,uint32_t rects,uint32_t points,float kx,float ky)override{
+        if(kx!=1.f||ky!=1.f||count>4096||(count&&!rects)||(!count&&(rects||points)))
+            throw std::invalid_argument("Unsupported Vulkan scaled or malformed copy");
+        auto describe=[](const gpu::Surface& s){
+            gpu::TextureDesc d{};
+            if(!gpu::DescribeSurface(s,d)||!d.linear||d.format!=0x12||d.depth!=1||d.levels!=1||
+               !d.width||!d.height||d.width>4096||d.height>4096||d.pitch<uint64_t(d.width)*4||
+               uint64_t(d.pitch)*d.height>64*1024*1024)
+                throw std::invalid_argument("Unsupported Vulkan copy surface");
+            gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
+            return d;
+        };
+        auto a=describe(src),b=describe(dst);
+        struct Region{uint32_t x,y,w,h,dx,dy;};
+        std::vector<Region> regions;
+        const auto* rp=count?gpu::CheckedGuestRange(rects,uint64_t(count)*16):nullptr;
+        const auto* dp=points?gpu::CheckedGuestRange(points,uint64_t(count)*8):nullptr;
+        for(unsigned i=0;i<(count?count:1);++i){
+            int32_t r[4]={0,0,int32_t(a.width),int32_t(a.height)};
+            if(rp)std::memcpy(r,rp+size_t(i)*16,16);
+            int32_t d[2]={r[0],r[1]};
+            if(dp)std::memcpy(d,dp+size_t(i)*8,8);
+            if(r[0]<0||r[1]<0||r[2]<r[0]||r[3]<r[1]||uint32_t(r[2])>a.width||uint32_t(r[3])>a.height||
+               d[0]<0||d[1]<0||uint64_t(d[0])+uint32_t(r[2]-r[0])>b.width||
+               uint64_t(d[1])+uint32_t(r[3]-r[1])>b.height)
+                throw std::invalid_argument("Vulkan copy rectangle outside surface");
+            if(r[0]!=r[2]&&r[1]!=r[3])regions.push_back({uint32_t(r[0]),uint32_t(r[1]),uint32_t(r[2]-r[0]),
+                uint32_t(r[3]-r[1]),uint32_t(d[0]),uint32_t(d[1])});
+        }
+        if(regions.empty())return;
+        auto overlap=[](uint32_t x,uint64_t n,uint32_t y,uint64_t m){
+            return uint64_t(x)<uint64_t(y)+m&&uint64_t(y)<uint64_t(x)+n;
+        };
+        auto active=[&](const gpu::TextureDesc& d){
+            if(!target_.header||!overlap(d.data,uint64_t(d.pitch)*d.height,address_,uint64_t(pitch_)*core_.H))return false;
+            if(d.data!=address_||d.pitch!=pitch_||d.width!=core_.W||d.height!=core_.H||!core_.frame_valid)
+                throw std::logic_error("Unsupported Vulkan partial target alias");
+            return true;
+        };
+        if(depth_header_&&(overlap(a.data,uint64_t(a.pitch)*a.height,depth_address_,uint64_t(depth_pitch_)*core_.H)||
+                          overlap(b.data,uint64_t(b.pitch)*b.height,depth_address_,uint64_t(depth_pitch_)*core_.H)))
+            throw std::logic_error("Vulkan copy aliases depth");
+        bool from_target=active(a),to_target=active(b);
+        if(from_target||to_target)Writeback();
+        const auto* source=gpu::CheckedGuestRange(a.data,uint64_t(a.pitch)*a.height);
+        auto* dest=gpu::CheckedGuestRange(b.data,uint64_t(b.pitch)*b.height);
+        // Snapshot before any write: self/overlapping copies cannot corrupt
+        // later source rows. Keep destination pitch padding untouched.
+        std::vector<uint8_t> snapshot(source,source+size_t(a.pitch)*a.height);
+        for(auto r:regions)for(unsigned y=0;y<r.h;++y)
+            std::memcpy(dest+size_t(r.dy+y)*b.pitch+size_t(r.dx)*4,
+                        snapshot.data()+size_t(r.y+y)*a.pitch+size_t(r.x)*4,size_t(r.w)*4);
+        if(to_target)core_.ReplaceColor(dest,b.pitch);
     }
     std::array<uint8_t,4> ReadPixel(uint32_t x,uint32_t y){if(!core_.frame_valid||x>=core_.W||y>=core_.H)throw std::out_of_range("Invalid Vulkan pixel read");return core_.Pixel(x,y);}
     void ReadbackColor(const gpu::Surface& s){Target(s);Writeback();}

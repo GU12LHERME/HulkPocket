@@ -411,6 +411,32 @@ int main(int argc,char** argv){
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("stencil masked color inside",backend.ReadPixel(32,32),{128,128,64,255});
                 Expect("stencil masked color outside",backend.ReadPixel(4,4),{0,0,255,255});
+                // Capture current render target to a pitched guest surface.
+                // Copy a rectangle back into the active image, preserving
+                // both untouched pixels and the previous stencil attachment.
+                constexpr uint32_t copy_surface=0x20600,copy_rect=0x27400,copy_point=0x27420;
+                bridge_mem.Write32(copy_surface,0x50000);bridge_mem.Write32(copy_surface+4,0x116000);
+                bridge_mem.Write32(copy_surface+12,0x00011221);bridge_mem.Write32(copy_surface+16,63|(63<<12)|(3<<24));
+                call("D3DDevice_CopyRects",{surface,0,0,copy_surface,0});
+                if(bridge_mem.Read32(0x80116000+(32*64+32)*4)!=0xff808040||
+                   bridge_mem.Read32(0x80116000)!=0xff0000ff)
+                    throw std::runtime_error("Vulkan render target copy mismatch");
+                uint32_t cr[4]={0,0,8,8},cp[2]={28,28};
+                bridge_mem.Write(copy_rect,cr,sizeof(cr));bridge_mem.Write(copy_point,cp,sizeof(cp));
+                call("D3DDevice_CopyRects",{copy_surface,copy_rect,1,surface,copy_point});
+                Expect("copy into live framebuffer",backend.ReadPixel(32,32),{0,0,255,255});
+                Expect("copy preserves nearby color",backend.ReadPixel(40,32),{128,128,64,255});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("copy preserves stencil",backend.ReadPixel(32,32),{128,128,64,255});
+                Expect("copy stencil outside",backend.ReadPixel(4,4),{0,0,255,255});
+                // Overlap must read the original source even when writing
+                // across its own rows, not cascade newly written pixels.
+                bridge_mem.Write32(0x80116000,0xff010203);bridge_mem.Write32(0x80116004,0xff040506);
+                uint32_t overlap_rect[4]={0,0,2,1},overlap_point[2]={1,0};
+                bridge_mem.Write(copy_rect,overlap_rect,sizeof(overlap_rect));bridge_mem.Write(copy_point,overlap_point,sizeof(overlap_point));
+                call("D3DDevice_CopyRects",{copy_surface,copy_rect,1,copy_surface,copy_point});
+                if(bridge_mem.Read32(0x80116004)!=0xff010203||bridge_mem.Read32(0x80116008)!=0xff040506)
+                    throw std::runtime_error("Overlapping Vulkan copy corrupted source");
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
