@@ -24,3 +24,34 @@ __attribute__((visibility("default"))) int hulk_entry_probe(uint32_t expected) {
     }
 }
 }
+
+#include <stdexcept>
+namespace {
+void stop_kernel(X86Context&, uint8_t*, uint32_t ordinal) {
+    std::fprintf(stderr,"Unsupported kernel ordinal: %u\n",ordinal);
+    throw std::runtime_error("Kernel service not implemented");
+}
+}
+// Trusted local caller must prepare the guest memory and CPU first.
+// Run in an isolated diagnostic process: native faults are not C++ exceptions.
+extern "C" __attribute__((visibility("default")))
+int hulk_entry_execute(X86Context* cpu, uint8_t* base, uint32_t entry) {
+    if(!cpu || !base || entry!=X86EntryPoint || !cpu->esp ||
+       !cpu->fs_base || !cpu->thread_handle) return 2;
+    try {
+        size_t n=0;
+        while(n<1000000 && X86FuncMappings[n].host) ++n;
+        if(!n || n==1000000) return 3;
+        hulkpocket::PortableXbeDispatch dispatch(
+            X86FuncMappings,n,X86CodeBase,X86CodeEnd,stop_kernel);
+        hulkpocket::ScopedXbeDispatch scope(dispatch);
+        std::fprintf(stderr,"Entering guest at %08X ESP=%08X\n",entry,cpu->esp);
+        dispatch.Call(*cpu,base,entry);
+        std::fprintf(stderr,"Guest entry returned\n");
+        return 0;
+    } catch(const std::exception& e) {
+        std::fprintf(stderr,"Guest stopped: %s; last indirect target=%08X\n",
+                     e.what(),cpu->last_icall);
+        return 1;
+    }
+}
