@@ -18,7 +18,7 @@ inline X86Context PrepareInitialCpu(const XbeBootstrapState& boot,
     ctx.esp=boot.initial_esp-4;
     ctx.fs_base=kpcr;
     ctx.thread_handle=thread_handle;
-    ctx.fcw=0x037f;
+    ctx.fcw=0x027f;
     ctx.mxcsr=0x1f80;
     mem.Write32(ctx.esp,return_address);
     return ctx;
