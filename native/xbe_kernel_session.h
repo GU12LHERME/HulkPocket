@@ -621,7 +621,8 @@ private:
                 if(!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
                     throw std::runtime_error("D3D state setter without owned live device");
                 auto& live=*live_d3d_;
-                if(live.setter_calls++>=16384)throw std::runtime_error("D3D live setter diagnostic budget exceeded");
+                if(live.setter_calls++>=DiagnosticSetterLimit(live.frame_limit))
+                    throw std::runtime_error("D3D live setter diagnostic budget exceeded");
                 std::fprintf(stderr,"D3D LIVE SETTER caller=%08X id=%08X ECX=%08X EDX=%08X stack_args=%u\n",
                     mem_.Read32(cpu.esp),ordinal,cpu.ecx,cpu.edx,n);
                 for(unsigned i=0;i<n;++i)std::fprintf(stderr,"D3D LIVE ARG %u=%08X\n",i,Arg(cpu,i));

@@ -93,6 +93,12 @@ inline unsigned DiagnosticBudget(const char* name,unsigned fallback,unsigned max
 inline unsigned DiagnosticFrameLimit(){
     return DiagnosticBudget("HULK_FRAME_LIMIT",kDiagnosticFrameLimit,1800);
 }
+// Keep the historical floor for short sessions, with a bounded per-frame
+// allowance for extended ones. The frame ceiling is at most 1800.
+constexpr unsigned DiagnosticSetterLimit(unsigned frames){
+    const unsigned bounded=frames>1800?1800:frames;
+    return bounded*128u>16384u?bounded*128u:16384u;
+}
 using GraphicsCallback=void(*)(X86Context&,uint8_t*,uint32_t);
 inline thread_local GraphicsCallback graphics_callback=nullptr;
 class ScopedGraphicsCallback {

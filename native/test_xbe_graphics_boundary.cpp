@@ -47,6 +47,13 @@ int main(){
     assert(DiagnosticFrameLimit()==600);
     swap(60,true);swap(599,true);swap(600,false);
     complete_swap=false;swap(60,false);complete_swap=true;
+    assert(DiagnosticSetterLimit(60)==16384);
+    assert(DiagnosticSetterLimit(600)==76800);
+    assert(DiagnosticSetterLimit(1800)==230400);
+    assert(DiagnosticSetterLimit(0xffffffffu)==230400);
+    assert(setenv("HULK_FRAME_LIMIT","1800",1)==0);
+    assert(DiagnosticFrameLimit()==1800);
+    swap(600,true);swap(1799,true);swap(1800,false);
     assert(setenv("HULK_FRAME_LIMIT","1801",1)==0);
     assert(DiagnosticFrameLimit()==60);swap(60,false);
     assert(setenv("HULK_FRAME_LIMIT","60oops",1)==0);
