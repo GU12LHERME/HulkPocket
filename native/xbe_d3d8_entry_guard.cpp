@@ -283,6 +283,34 @@ COMPLEX_HOOK(D3DDevice_SetRenderState_RopZRead,164)
 COMPLEX_HOOK(D3DDevice_SetRenderState_DoNotCullUncompressed,165)
 #endif
 #endif
+// Preserve the generated XDK light lists and original routines. Observe
+// only verified stdcall symbols, then invoke the original implementation.
+#ifdef IMAGE_NAMED
+#define ORIGINAL(name) CAT(__imp__sub_,name)
+#else
+#define ORIGINAL(name) CAT(__imp__sub_,SYM_##name)
+#endif
+#define LIGHT_OBSERVER(name,id) \
+extern "C" void ORIGINAL(name)(X86Context&,uint8_t*); \
+extern "C" __attribute__((visibility("default"))) \
+void GUEST(name)(X86Context& ctx,uint8_t* base){ \
+    if(Stdcall(#name)&&hulkpocket::graphics_callback){ \
+        auto observation=ctx;hulkpocket::graphics_callback(observation,base,hulkpocket::id); \
+    } \
+    ORIGINAL(name)(ctx,base); \
+}
+#if HAS_D3DDevice_SetMaterial
+LIGHT_OBSERVER(D3DDevice_SetMaterial,kLightingMaterialTrace)
+#endif
+#if HAS_D3DDevice_SetLight
+LIGHT_OBSERVER(D3DDevice_SetLight,kLightingLightTrace)
+#endif
+#if HAS_D3DDevice_LightEnable
+LIGHT_OBSERVER(D3DDevice_LightEnable,kLightingEnableTrace)
+#endif
+#undef LIGHT_OBSERVER
+#undef ORIGINAL
+
 #if HAS_D3DDevice_MakeSpace
 HOOK(D3DDevice_MakeSpace,hulkpocket::kDefaultMakeSpace)
 #endif

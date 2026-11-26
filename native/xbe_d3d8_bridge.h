@@ -41,6 +41,8 @@ class XbeD3d8Bridge {
     Nv2aConstantCursor push_constants_{};
     std::mutex lock_;
     bool initialized_=false;
+    bool material_captured_=false;
+    uint32_t light_defined_=0;
     uint32_t presents_=0;
     static float Float(uint32_t x){return std::bit_cast<float>(x);}
     uint32_t Read(uint64_t a){return gpu::ReadGuest32(a);}
@@ -225,6 +227,34 @@ public:
             }
         }
         state_.simple=next;state_.rs=captured.rs;state_.tss=captured.tss;
+    }
+    // Only read valid, finite D3DMATERIAL8 / D3DLIGHT8 records. Keep
+    // unknown lights distinct from disabled ones; never invent a default.
+    bool ObserveMaterial(uint32_t p){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!p||!mem_.IsCommitted(p,68))return false;
+        std::array<float,17> value{};
+        std::memcpy(value.data(),gpu::CheckedGuestRange(p,68),68);
+        if(!std::all_of(value.begin(),value.end(),[](float f){return std::isfinite(f);})||value[16]<0)return false;
+        state_.material=value;material_captured_=true;return true;
+    }
+    bool ObserveLight(uint32_t index,uint32_t p){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(index>=8||!p||!mem_.IsCommitted(p,104))return false;
+        std::array<uint32_t,26> words{};
+        std::memcpy(words.data(),gpu::CheckedGuestRange(p,104),104);
+        if(words[0]<1||words[0]>3)return false;
+        for(unsigned i=1;i<26;++i)if(!std::isfinite(std::bit_cast<float>(words[i])))return false;
+        state_.lights[index]=words;light_defined_|=1u<<index;return true;
+    }
+    bool ObserveLightEnable(uint32_t index,uint32_t enabled){
+        std::lock_guard guard(lock_);
+        if(index>=8)return false;
+        if(enabled)state_.light_enable|=1u<<index;else state_.light_enable&=~(1u<<index);
+        return true;
+    }
+    std::pair<bool,uint32_t> LightingCoverage(){
+        std::lock_guard guard(lock_);return {material_captured_,light_defined_};
     }
     // Transfer state-only setter updates without resetting render targets,
     // streams, shader constants or the pending NV2A constant cursor.

@@ -55,7 +55,7 @@ public:
                         ++n;
                         if(line.starts_with("HULK INPUT ")||line.starts_with("Guest stopped:")||
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||
-                           line.starts_with("D3D PACKED NORMAL GEOMETRY PASS")||line.starts_with("Guest entry status:")){
+                           line.starts_with("D3D LIGHT ")||line.starts_with("D3D PACKED NORMAL GEOMETRY PASS")||line.starts_with("Guest entry status:")){
                             events.push_back(line);if(events.size()>256)events.pop_front();
                         }
                         if(line.starts_with("D3D ORIGINAL SWAP OFFSCREEN PASS:"))last_swap=line;

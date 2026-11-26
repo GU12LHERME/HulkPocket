@@ -10,6 +10,7 @@ constexpr uint32_t kGraphicsCreate=0x10000,kGraphicsDraw=0x10001,
     kXapiInitDevices=0x10007,kXapiInputOpen=0x10008,kXapiInputClose=0x10009,
     kXapiInputGetState=0x1000a,kXapiInputSetState=0x1000b,kXapiInputGetCapabilities=0x1000c,kGraphicsClear=0x1000d,kViewportTraceEnter=0x1000e,kViewportTraceLeave=0x1000f,kGraphicsBlockOnTime=0x10010,kGraphicsVBlank=0x10011,kStartupTextTrace=0x10012,
     kFiberRead32=0x10013,kFiberWrite32=0x10014;
+constexpr uint32_t kLightingMaterialTrace=0x10015,kLightingLightTrace=0x10016,kLightingEnableTrace=0x10017;
 constexpr uint32_t kSoundCreate=0x10400;
 constexpr uint32_t kSoundReleaseDevice=0x10401;
 constexpr uint32_t kSoundSpeaker=0x10402;

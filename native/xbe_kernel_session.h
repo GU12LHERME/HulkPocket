@@ -1143,6 +1143,16 @@ private:
                     std::fprintf(stderr,"D3D PACKED NORMAL GEOMETRY PASS vertices=%u lighting=%u specular=%u ambient=%08X diffuse_source=%u ambient_source=%u\n",
                         vertices,synced.rs[gpu::kRsLighting],synced.rs[gpu::kRsSpecularEnable],synced.rs[gpu::kRsAmbient],
                         synced.rs[gpu::kRsDiffuseMaterialSource],synced.rs[gpu::kRsAmbientMaterialSource]);
+                    auto [material_seen,defined]=live.bridge.LightingCoverage();
+                    std::fprintf(stderr,"D3D LIGHT COVERAGE material=%u defined=%02X enabled=%02X\n",unsigned(material_seen),defined,synced.light_enable);
+                    std::fprintf(stderr,"D3D LIGHT MATERIAL");
+                    for(float f:synced.material)std::fprintf(stderr," %08X",std::bit_cast<uint32_t>(f));
+                    std::fprintf(stderr,"\n");
+                    for(unsigned i=0;i<8;++i)if(defined&(1u<<i)){
+                        std::fprintf(stderr,"D3D LIGHT SLOT %u",i);
+                        for(auto word:synced.lights[i])std::fprintf(stderr," %08X",word);
+                        std::fprintf(stderr,"\n");
+                    }
                     throw std::logic_error("Packed normal geometry verified; original fixed-function lighting/material integration required");
                 }
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
@@ -2129,6 +2139,22 @@ public:
         auto& session=*active_;
         // Pure observation: do not pause, service DPCs, consume stack args
         // or touch the original CPU context while a guest routine is active.
+        if(ordinal==kLightingMaterialTrace||ordinal==kLightingLightTrace||ordinal==kLightingEnableTrace){
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+            auto* live=session.live_d3d_.get();
+            if(live&&live->owner==cpu.thread_handle){
+                auto& mem=session.mem_;
+                auto n=ordinal==kLightingMaterialTrace?1u:2u;
+                if(mem.IsCommitted(cpu.esp,4+4*n)){
+                    auto a=mem.Read32(cpu.esp+4),b=n==2?mem.Read32(cpu.esp+8):0u;
+                    bool ok=ordinal==kLightingMaterialTrace?live->bridge.ObserveMaterial(a):
+                        ordinal==kLightingLightTrace?live->bridge.ObserveLight(a,b):live->bridge.ObserveLightEnable(a,b);
+                    std::fprintf(stderr,"D3D LIGHT OBSERVE id=%08X a=%08X b=%08X accepted=%u\n",ordinal,a,b,unsigned(ok));
+                }
+            }
+#endif
+            return;
+        }
         if(ordinal==kStartupTextTrace){
             auto& mem=session.mem_;
             // The verified call at 001BB339 pushes flag 0, then the

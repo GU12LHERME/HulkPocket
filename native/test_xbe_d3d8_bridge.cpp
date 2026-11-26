@@ -265,6 +265,26 @@ int main(){
         }
     }
 
+    // Actual D3D records, not hardcoded lighting defaults.
+    {
+        std::array<float,17> mat{};mat[0]=.75f;mat[3]=1;mat[16]=16;
+        mem.Write(0x19000,mat.data(),68);
+        assert(bridge.ObserveMaterial(0x19000));
+        assert(bridge.Snapshot().material[0]==.75f);
+        std::array<uint32_t,26> light{};light[0]=3;
+        light[1]=std::bit_cast<uint32_t>(1.0f);light[18]=std::bit_cast<uint32_t>(-1.0f);
+        mem.Write(0x19000,light.data(),104);
+        assert(bridge.ObserveLight(2,0x19000));
+        assert(bridge.ObserveLightEnable(2,1));
+        assert(bridge.Snapshot().light_enable==4);
+        assert(bridge.LightingCoverage().first&&bridge.LightingCoverage().second==4);
+        assert(!bridge.ObserveLight(8,0x19000)&&!bridge.ObserveMaterial(0));
+        light[1]=0x7fc00000;mem.Write(0x19000,light.data(),104);
+        assert(!bridge.ObserveLight(2,0x19000)&&bridge.Snapshot().lights[2][1]==std::bit_cast<uint32_t>(1.0f));
+        assert(bridge.ObserveLightEnable(2,0)&&bridge.Snapshot().light_enable==0);
+        // Clear fixture material memory before the next shader record.
+        std::array<uint8_t,0x114> zero{};mem.Write(0x19000,zero.data(),zero.size());
+    }
     // Reproduce the observed XDK object layout and real line-list count.
     constexpr uint32_t dev2=0x16000,shader=0x19000;
     mem.Write32(dev2+0x794,shader);mem.Write32(shader,1);mem.Write32(shader+4,0x400);

@@ -99,6 +99,7 @@ def main():
                          "D3DDevice_BlockUntilVerticalBlank", "XLaunchNewImageA",
                          "XInitDevices", "XInputOpen", "XInputClose", "XInputGetState",
                          "XInputSetState", "XInputGetCapabilities",
+                         "D3DDevice_SetMaterial", "D3DDevice_SetLight", "D3DDevice_LightEnable",
                          "D3DDevice_SetRenderState_Simple",
                          "D3DDevice_SetRenderStateNotInline",
                          "D3DDevice_SetTextureStageStateNotInline",

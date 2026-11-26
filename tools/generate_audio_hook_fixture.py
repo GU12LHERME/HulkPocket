@@ -11,7 +11,7 @@ def main():
     a=p.parse_args()
     root=pathlib.Path(__file__).resolve().parent.parent
     source=(root/"native/xbe_d3d8_entry_guard.cpp").read_text()
-    names=set(re.findall(r"^(?:SOUND_HOOK|SOUND_STOP|STREAM_CREATE)\(([A-Za-z0-9_]+)[,)]",source,re.M))
+    names=set(re.findall(r"^(?:SOUND_HOOK|SOUND_STOP|STREAM_CREATE|LIGHT_OBSERVER)\(([A-Za-z0-9_]+)[,)]",source,re.M))
     names.update(("Direct3D_CreateDevice","DSound_StreamVtable","DSound_StreamVtable2"))
     boundary=(root/"native/xbe_graphics_boundary.h").read_text()
     ids=set(re.findall(r"\b(kSound\w+)\s*=",boundary))
