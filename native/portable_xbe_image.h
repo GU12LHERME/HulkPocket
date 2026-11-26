@@ -23,6 +23,9 @@ public:
     std::size_t MappingCount() const noexcept { return count_; }
     std::unique_ptr<PortableXbeDispatch> CreateDispatcher(
         PortableXbeDispatch::KernelCall kernel = nullptr) const;
+    using KernelEntry = int (*)(X86Context*, std::uint8_t*, std::uint32_t,
+                                PortableXbeDispatch::KernelCall);
+    KernelEntry ResolveKernelEntry() const;
 private:
     void* handle_ = nullptr;
     const X86FuncMapping* mappings_ = nullptr;
