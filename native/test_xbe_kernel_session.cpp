@@ -293,6 +293,18 @@ int main() {
     }
     memory=&mem;
     mem.Commit(0x10000,0x10000);
+    {
+        HulkKernelDataRegistry clock_registry;
+        HulkKernelClock clock(mem,clock_registry,0x12900,10000);
+        HulkKernelClockPump pump(mem,&clock);
+        auto* tick=reinterpret_cast<uint32_t*>(mem.Base()+0x12900);
+        auto before=__atomic_load_n(tick,__ATOMIC_RELAXED);
+        auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        // No kernel calls in this loop: the guest tick must still advance.
+        while(__atomic_load_n(tick,__ATOMIC_RELAXED)==before&&std::chrono::steady_clock::now()<deadline)
+            std::this_thread::yield();
+        assert(__atomic_load_n(tick,__ATOMIC_RELAXED)>before);
+    }
     mem.Write32(0x10200,0xdeadbeef);
     XbeTlsTemplate tls{0x10200,0x10204,0,0,4,0};
     X86Context cpu{};

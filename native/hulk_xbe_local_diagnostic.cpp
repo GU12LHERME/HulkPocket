@@ -171,11 +171,11 @@ int main(int argc,char** argv) {
                 auto pid=fork();
                 if(pid<0) throw std::runtime_error("fork failed");
                 if(pid==0) {
-                    alarm(15);
                     try {
                         Dl_info module_info{};
                         dladdr(reinterpret_cast<void*>(entry),&module_info);
                         InstallGuestFaultHandler(guest.Base(),reinterpret_cast<uintptr_t>(module_info.dli_fbase));
+                        alarm(15);
                         uint32_t image_pages=0;
                         for(uint64_t a=uint64_t(loaded.base)&~4095ull;a<uint64_t(loaded.base)+loaded.image_size;a+=4096)
                             if(guest.IsCommitted(uint32_t(a),1))++image_pages;

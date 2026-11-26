@@ -377,7 +377,6 @@ private:
     }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
-        if(clock_) clock_->Update(mem_);
         switch(ordinal) {
             case kXapiLaunchImage: {
                 Check(cpu,2);auto path=Arg(cpu,0);
@@ -924,7 +923,7 @@ private:
             { std::lock_guard<std::mutex> lock(lock_);
               if(i>=count_) break;
               worker=std::move(workers_[i].host); }
-            if(worker.joinable()) worker.join();
+            if(worker.joinable()){GuestJoinSignalMask mask;worker.join();}
         }
     }
     void Stop() {
@@ -958,6 +957,7 @@ public:
     int Run(Entry entry,X86Context& cpu,uint32_t address) {
         if(!entry || active_ || entry_) throw std::runtime_error("Invalid kernel session");
         struct Reset { XbeKernelSession& s; ~Reset(){s.entry_=nullptr; active_=nullptr;} } reset{*this};
+        HulkKernelClockPump clock_pump(mem_,clock_);
         stopping_=false; worker_failure_=0;
         if(cpu.fs_base&&mem_.IsCommitted(cpu.fs_base,12)){
             auto top=mem_.Read32(cpu.fs_base+4),bottom=mem_.Read32(cpu.fs_base+8);
