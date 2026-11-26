@@ -444,6 +444,42 @@ jobs:
             -o "$RUNNER_TEMP/hulk-synthetic-xbe-calls-android-arm64"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-calls-android-arm64" |
             grep -q AArch64
+          # Genuine original x86 indirect CALL crossing into the
+          # Xbox kernel ordinal boundary of the Android runtime.
+          python3 tools/create_synthetic_xbe_recompile.py \
+            --profile kernel --output-dir "$RUNNER_TEMP/xbe-kernel-machine-code"
+          "$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host" \
+            "$RUNNER_TEMP/xbe-kernel-machine-code/synthetic.toml" \
+            "$RUNNER_TEMP/xbe-kernel-machine-code/synthetic.xbe" \
+            "$RUNNER_TEMP/xbe-kernel-machine-code/generated"
+          python3 tools/prepare_xbe_elf.py \
+            --sdk "$RUNNER_TEMP/xbe-sdk" \
+            --generated "$RUNNER_TEMP/xbe-kernel-machine-code/generated" \
+            --output "$RUNNER_TEMP/xbe-kernel-recompiled"
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -static -pthread \
+            -Wall -Wextra -Werror -Wno-unused-parameter \
+            -Wno-unused-variable -Wno-unused-but-set-variable \
+            -Wno-missing-attributes -I native -I "$RUNNER_TEMP/xbe-kernel-recompiled" \
+            native/test_recompiled_xbe_kernel_arm64.cpp \
+            native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp \
+            native/xbox_guest_address_space.cpp native/portable_xbe_dispatch.cpp \
+            "$RUNNER_TEMP/xbe-kernel-recompiled/x86_func_mapping.cpp" \
+            "$RUNNER_TEMP/xbe-kernel-recompiled/x86_recomp.0.cpp" \
+            -o "$RUNNER_TEMP/execute-xbe-kernel-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/execute-xbe-kernel-arm64" \
+            "$RUNNER_TEMP/xbe-kernel-machine-code/synthetic.xbe"
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 \
+            -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
+            -Wno-unused-but-set-variable -static-libstdc++ \
+            -Wl,-z,max-page-size=16384 -I native -I "$RUNNER_TEMP/xbe-kernel-recompiled" \
+            native/test_recompiled_xbe_kernel_arm64.cpp \
+            native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp \
+            native/xbox_guest_address_space.cpp native/portable_xbe_dispatch.cpp \
+            "$RUNNER_TEMP/xbe-kernel-recompiled/x86_func_mapping.cpp" \
+            "$RUNNER_TEMP/xbe-kernel-recompiled/x86_recomp.0.cpp" \
+            -o "$RUNNER_TEMP/hulk-synthetic-xbe-kernel-android-arm64"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-kernel-android-arm64" | grep -q AArch64
+          echo "Recompiled IA-32 indirect CALL to Xbox kernel ordinal 17 validated under QEMU ARM64." >> "$GITHUB_STEP_SUMMARY"
           echo "Official recompilation validated native ARM64 multi-function x86 call/return stack execution." >> "$GITHUB_STEP_SUMMARY"
           echo "Official x86-to-ARM64 recompilation validated Xbox memory load/arithmetic/store guest instructions." >> "$GITHUB_STEP_SUMMARY"
           echo "Official XBE compiler decoded real synthetic x86 instructions and linked generated C++ into Android ARM64 ELF." >> "$GITHUB_STEP_SUMMARY"
@@ -589,6 +625,15 @@ jobs:
           grep -q hulkpocket_game_code_probe "$RUNNER_TEMP/game-symbols.txt"
           echo "Compiled real platform-independent Hulk Recompiled game logic and RCF archive code as Android ARM64 shared library." >> "$GITHUB_STEP_SUMMARY"
           echo "This is a game-source portability test, not a complete engine or playable APK." >> "$GITHUB_STEP_SUMMARY"
+      - name: Export original x86 kernel-thunk ARM64 smoke
+        uses: actions/upload-artifact@v4
+        with:
+          name: hulkpocket-xbe-kernel-ordinal-arm64-smoke
+          path: |
+            ${{ runner.temp }}/hulk-synthetic-xbe-kernel-android-arm64
+            ${{ runner.temp }}/xbe-kernel-machine-code/synthetic.xbe
+          if-no-files-found: error
+          retention-days: 7
       - name: Export native Xbox call/return ARM64 test
         uses: actions/upload-artifact@v4
         with:
