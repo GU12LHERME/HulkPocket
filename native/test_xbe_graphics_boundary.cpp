@@ -1,5 +1,8 @@
 #include "xbe_graphics_boundary.h"
 #include <cassert>
+#include <cmath>
+#include <cstring>
+#include <array>
 #include <stdexcept>
 extern "C" void __imp__sub_0037D900(X86Context&,uint8_t*){assert(false&&"original hardware routine executed");}
 extern "C" void sub_0037D900(X86Context&,uint8_t*) __attribute__((weak,alias("__imp__sub_0037D900")));
@@ -10,6 +13,11 @@ extern "C" void sub_003EAC33(X86Context&,uint8_t*) __attribute__((weak,alias("__
 extern "C" void __imp__sub_003EB6E5(X86Context&,uint8_t*){assert(false&&"original XInputOpen executed");}
 extern "C" void sub_003EB6E5(X86Context&,uint8_t*) __attribute__((weak,alias("__imp__sub_003EB6E5")));
 extern "C" void sub_00381DF0(X86Context&,uint8_t*);
+extern "C" void sub_003441F0(X86Context&,uint8_t*);
+extern "C" void sub_003442BC(X86Context&,uint8_t*);
+extern "C" void sub_0034420D(X86Context&,uint8_t*);
+extern "C" void sub_003442D9(X86Context&,uint8_t*);
+extern "C" void sub_00346694(X86Context&,uint8_t*);
 using namespace hulkpocket;
 static uint32_t swap_count=0;
 static bool complete_swap=true;
@@ -24,6 +32,26 @@ static void callback(X86Context& c,uint8_t*,uint32_t id){
     if(complete_create){c.eax=0;c.esp+=28;}
 }
 int main(){
+    // Exact USA symbol addresses; x87 stack TOP can wrap and cdecl
+    // return must pop only the return address, not the arguments.
+    {
+        X86Context m{};m.top=7;m.eax=123;m.zf=1;m.st[0]=77;
+        auto unary=[&](X86Func* f,double arg,double expected){
+            m.esp=32;m.st[7]=arg;f(m,nullptr);
+            assert(m.esp==36&&m.top==7&&m.eax==123&&m.zf==1&&m.st[0]==77);
+            assert(std::abs(m.st[7]-expected)<1e-12);
+        };
+        unary(sub_003441F0,0,std::acos(0.));
+        unary(sub_003442BC,.5,std::asin(.5));
+        unary(sub_0034420D,1,0);
+        unary(sub_003442D9,-.5,std::asin(-.5));
+        std::array<uint8_t,128> mem{};
+        double x=2,y=3;std::memcpy(mem.data()+36,&x,8);std::memcpy(mem.data()+44,&y,8);
+        m.esp=32;m.st[7]=3;sub_00346694(m,mem.data());
+        assert(m.st[7]==8&&m.esp==36&&m.top==7&&m.st[0]==77);
+        m.esp=32;m.st[7]=2;sub_003441F0(m,nullptr);
+        assert(std::isnan(m.st[7])&&m.esp==36); // do not clamp genuine domain errors
+    }
     ScopedGraphicsCallback scoped(callback);X86Context c{};c.esp=0x1000;
     bool stopped=false;
     try{sub_0037D900(c,nullptr);}catch(const std::runtime_error&){stopped=true;}

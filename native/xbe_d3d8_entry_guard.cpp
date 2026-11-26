@@ -4,6 +4,8 @@
 #include "image_symbols.h"
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <initializer_list>
@@ -49,6 +51,83 @@ constexpr bool Stdcall(std::string_view name){
 #define GUEST(name) CAT(sub_,name)
 #else
 #define GUEST(name) CAT(sub_,SYM_##name)
+#endif
+// The pinned MIT XboxXBERecomp runtime/xdk/crt_math.cpp documents
+// stale ZF across generated CRT helper calls, producing random NaNs.
+// Mirror its x87 BODY ABI, not the outer C stack wrapper. Only named,
+// nonzero generated symbols are replaced. Keep ST depth and caller cleanup.
+namespace {
+[[maybe_unused]] void TraceCrtMath(const char* name,double x,double y,double result,unsigned& calls,unsigned& failures){
+    if(calls<4){
+        ++calls;
+        std::fprintf(stderr,"HULK CRT MATH %s x=%a y=%a result=%a\n",name,x,y,result);
+    }
+    if(!std::isfinite(result)&&failures<8){
+        ++failures;
+        std::fprintf(stderr,"HULK CRT MATH NONFINITE %s x=%a y=%a result=%a\n",name,x,y,result);
+    }
+}
+[[maybe_unused]] void ValidateCrtReturn(X86Context& ctx,unsigned extra=0){
+    if(ctx.esp>std::numeric_limits<uint32_t>::max()-4-extra)
+        throw std::out_of_range("CRT math stack overflow");
+}
+}
+#define CRT_UNARY(name,fn) \
+extern "C" __attribute__((visibility("default"))) \
+void GUEST(name)(X86Context& ctx,uint8_t*){ \
+    ValidateCrtReturn(ctx); \
+    auto& st=ctx.st[ctx.top&7];const double x=st;st=std::fn(x);ctx.esp+=4; \
+    static thread_local unsigned calls=0,failures=0; \
+    TraceCrtMath(#name,x,0,st,calls,failures); \
+}
+#if HAS_crt_sin
+CRT_UNARY(crt_sin,sin)
+#endif
+#if HAS_crt_cos
+CRT_UNARY(crt_cos,cos)
+#endif
+#if HAS_crt_tan
+CRT_UNARY(crt_tan,tan)
+#endif
+#if HAS_crt_asin
+CRT_UNARY(crt_asin,asin)
+#endif
+#if HAS_crt_acos
+CRT_UNARY(crt_acos,acos)
+#endif
+#if HAS_crt_atan
+CRT_UNARY(crt_atan,atan)
+#endif
+#if HAS_crt_sqrt
+CRT_UNARY(crt_sqrt,sqrt)
+#endif
+#if HAS_crt_log
+CRT_UNARY(crt_log,log)
+#endif
+#if HAS_crt_log10
+CRT_UNARY(crt_log10,log10)
+#endif
+#if HAS__CIacos
+CRT_UNARY(_CIacos,acos)
+#endif
+#if HAS__CIasin
+CRT_UNARY(_CIasin,asin)
+#endif
+#undef CRT_UNARY
+#if HAS_crt_pow
+extern "C" __attribute__((visibility("default")))
+void GUEST(crt_pow)(X86Context& ctx,uint8_t* base){
+    ValidateCrtReturn(ctx,16);
+    if(!base)throw std::invalid_argument("Missing CRT guest memory");
+    double x,y;
+    // x and y are above return address. Like generated loads, access
+    // through guest base; guest fault handler handles uncommitted pages.
+    std::memcpy(&x,base+ctx.esp+4,8);
+    std::memcpy(&y,base+ctx.esp+12,8);
+    auto& st=ctx.st[ctx.top&7];st=std::pow(x,y);ctx.esp+=4;
+    static thread_local unsigned calls=0,failures=0;
+    TraceCrtMath("crt_pow",x,y,st,calls,failures);
+}
 #endif
 #define HOOK(name,id) extern "C" __attribute__((visibility("default"))) \
     void GUEST(name)(X86Context& ctx,uint8_t* base){Boundary(ctx,base,id,#name,Stdcall(#name));}
