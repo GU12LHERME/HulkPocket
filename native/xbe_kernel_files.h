@@ -19,8 +19,8 @@ class XbeDiscFiles {
     XboxGuestAddressSpace& mem_;
     int root_=-1;
     struct File {
-        int fd; uint64_t pos=0;
-        explicit File(int value):fd(value){}
+        int fd; bool directory; uint64_t pos=0;
+        explicit File(int value,bool dir):fd(value),directory(dir){}
         ~File(){if(fd>=0)close(fd);}
         File(const File&)=delete;
         File& operator=(const File&)=delete;
@@ -50,15 +50,28 @@ class XbeDiscFiles {
         }
         closedir(d);return ambiguous?std::string{}:result;
     }
-    int Resolve(std::string path) {
+    int Resolve(std::string path,uint32_t root=0) {
         if(root_<0) return -1;
         std::replace(path.begin(),path.end(),'/','\\');
         const auto upper=Upper(path);
-        size_t start=std::string::npos;
-        for(const std::string prefix:{"\\DEVICE\\CDROM0\\","\\??\\D:\\","D:\\"})
-            if(upper.rfind(prefix,0)==0){start=prefix.size();break;}
-        if(start==std::string::npos || start==path.size()) return -1;
-        int dir=dup(root_); if(dir<0) return -1;
+        size_t start=0;
+        int parent=root_;
+        if(root){
+            auto it=files_.find(root);
+            if(it==files_.end()||!it->second->directory)return -1;
+            if(!path.empty()&&(path.front()=='\\'||path.find(':')!=std::string::npos))return -1;
+            parent=it->second->fd;
+        }else{
+            start=std::string::npos;
+            for(const std::string prefix:{"\\DEVICE\\CDROM0","\\??\\D:","D:"}){
+                if(upper==prefix){start=prefix.size();break;}
+                if(upper.rfind(prefix+"\\",0)==0){start=prefix.size()+1;break;}
+            }
+            if(start==std::string::npos)return -1;
+        }
+        int dir=openat(parent,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+        if(dir<0)return -1;
+        if(start==path.size())return dir;
         while(start<path.size()) {
             auto end=path.find('\\',start);
             auto part=path.substr(start,end==std::string::npos?end:end-start);
@@ -66,14 +79,14 @@ class XbeDiscFiles {
                part.find('\0')!=std::string::npos){close(dir);return -1;}
             auto match=Match(dir,part);
             if(match.empty()){close(dir);return -1;}
-            const bool last=end==std::string::npos;
+            const bool last=end==std::string::npos||end+1==path.size();
             int fd=openat(dir,match.c_str(),O_RDONLY|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK|
-                          (last?0:O_DIRECTORY));
+                          (end==std::string::npos?0:O_DIRECTORY));
             close(dir);
-            if(fd<0) return -1;
-            if(last) {
+            if(fd<0)return -1;
+            if(last){
                 struct stat st{};
-                if(fstat(fd,&st)||!S_ISREG(st.st_mode)){close(fd);return -1;}
+                if(fstat(fd,&st)||(!S_ISREG(st.st_mode)&&!S_ISDIR(st.st_mode))){close(fd);return -1;}
                 return fd;
             }
             dir=fd;start=end+1;
@@ -84,15 +97,20 @@ class XbeDiscFiles {
         if(!mem_.IsCommitted(iosb,8)) return invalid;
         mem_.Write32(iosb,status);mem_.Write32(iosb+4,info);return status;
     }
-    bool Name(uint32_t attrs,std::string& out) {
-        if(!mem_.IsCommitted(attrs,12)||mem_.Read32(attrs)) return false;
+    bool Name(uint32_t attrs,std::string& out,uint32_t& root) {
+        if(!mem_.IsCommitted(attrs,12)) return false;
+        root=mem_.Read32(attrs);
         auto desc=mem_.Read32(attrs+4);
-        if(!mem_.IsCommitted(desc,8)) return false;
+        if(!mem_.IsCommitted(desc,8))return false;
         auto len=mem_.Read32(desc)&0xffffu, max=mem_.Read32(desc)>>16;
         auto p=mem_.Read32(desc+4);
-        if(!len||len>max||len>4096||!mem_.IsCommitted(p,len)) return false;
-        out.resize(len);mem_.Read(p,out.data(),len);
+        if(len>max||len>4096||(!len&&!root)||(len&&!mem_.IsCommitted(p,len)))return false;
+        out.resize(len);if(len)mem_.Read(p,out.data(),len);
         return out.find('\0')==std::string::npos;
+    }
+    static std::string LogName(std::string name){
+        for(auto& c:name)if(static_cast<unsigned char>(c)<32||static_cast<unsigned char>(c)>126)c='?';
+        return name;
     }
 public:
     explicit XbeDiscFiles(XboxGuestAddressSpace& mem,const std::string& root={}):mem_(mem) {
@@ -111,17 +129,31 @@ public:
     }
     uint32_t Open(uint32_t out,uint32_t access,uint32_t attrs,uint32_t iosb,uint32_t disposition,uint32_t options) {
         if(!mem_.IsCommitted(out,4)||!mem_.IsCommitted(iosb,8))return invalid;
-        // FILE_OPEN / FILE_OPEN_IF are allowed only for existing read-only files.
-        if((disposition!=1&&disposition!=3)||(options&0x1001u)||
+        // Decode first for diagnostics even when policy denies the request.
+        std::string name;uint32_t root=0;
+        if(!Name(attrs,name,root)){
+            std::fprintf(stderr,"DISC NAME INVALID attrs=%08X root=%08X options=%08X\n",attrs,root,options);
+            return Finish(iosb,invalid);
+        }
+        std::fprintf(stderr,"DISC REQUEST root=%08X access=%08X disposition=%u options=%08X name=%s\n",
+            root,access,disposition,options,LogName(name).c_str());
+        // FILE_DIRECTORY_FILE is not a write. FILE_DELETE_ON_CLOSE is.
+        // Never create or modify a file; OPEN_IF only opens existing entries.
+        if((disposition!=1&&disposition!=3)||(options&0x1000u)||
            (access&0x500d0116u))return Finish(iosb,denied);
-        std::string name;
-        if(!Name(attrs,name))return Finish(iosb,invalid);
+        if((options&0x41u)==0x41u)return Finish(iosb,invalid);
+        if(root&&(!Contains(root)||!files_.at(root)->directory))return Finish(iosb,bad_handle);
         if(files_.size()>=256)return Finish(iosb,0xc000011fu);
-        int fd=Resolve(name);
-        std::fprintf(stderr,"DISC OPEN %s status=%08X\n",name.c_str(),fd<0?missing:0u);
+        int fd=Resolve(name,root);
         if(fd<0)return Finish(iosb,missing);
+        struct stat st{};
+        if(fstat(fd,&st)){close(fd);return Finish(iosb,0xc0000185u);}
+        const bool directory=S_ISDIR(st.st_mode);
+        if(directory&&(options&0x40u)){close(fd);return Finish(iosb,0xc00000bau);}
+        if(!directory&&(options&1u)){close(fd);return Finish(iosb,0xc0000103u);}
         std::shared_ptr<File> file;
-        try{file=std::make_shared<File>(fd);}catch(...){close(fd);throw;}
+        try{file=std::make_shared<File>(fd,directory);}catch(...){close(fd);throw;}
+        std::fprintf(stderr,"DISC OPEN PASS type=%s name=%s\n",directory?"directory":"file",LogName(name).c_str());
         auto h=next_;next_+=4;
         files_.emplace(h,std::move(file));mem_.Write32(out,h);
         return Finish(iosb,0,1);
@@ -145,8 +177,9 @@ public:
     }
     uint32_t FullAttributes(uint32_t attrs,uint32_t out){
         if(!mem_.IsCommitted(out,56))return invalid;
-        std::string name;if(!Name(attrs,name))return invalid;
-        int fd=Resolve(name);if(fd<0)return missing;
+        std::string name;uint32_t root=0;if(!Name(attrs,name,root))return invalid;
+        if(root&&(!Contains(root)||!files_.at(root)->directory))return bad_handle;
+        int fd=Resolve(name,root);if(fd<0)return missing;
         struct stat st{};int status=fstat(fd,&st);close(fd);
         if(status||st.st_size<0)return 0xc0000185u;
         std::array<uint32_t,14> data{};
@@ -156,15 +189,18 @@ public:
         // FileBasicInformation convention using last-modified time for creation.
         put64(0,ticks(st.st_mtime));put64(2,ticks(st.st_atime));
         put64(4,ticks(st.st_mtime));put64(6,ticks(st.st_ctime));
-        const auto size=uint64_t(st.st_size);
+        const bool directory=S_ISDIR(st.st_mode);
+        const auto size=directory?0ull:uint64_t(st.st_size);
         put64(8,(size+4095)&~uint64_t(4095));put64(10,size);
-        data[12]=1; // FILE_ATTRIBUTE_READONLY
+        data[12]=directory?0x11:1; // READONLY and optionally DIRECTORY
         mem_.Write(out,data.data(),sizeof(data));return 0;
     }
     uint32_t Read(uint32_t h,uint32_t iosb,uint32_t buf,uint32_t len,uint32_t offset) {
         if(!mem_.IsCommitted(iosb,8)||!mem_.IsCommitted(buf,len)||len>64u*1024*1024)return invalid;
         auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
-        auto& f=*it->second;int64_t pos=-2;
+        auto& f=*it->second;
+        if(f.directory)return Finish(iosb,0xc00000bau);
+        int64_t pos=-2;
         if(offset){if(!mem_.IsCommitted(offset,8))return Finish(iosb,invalid);mem_.Read(offset,&pos,8);}
         if(pos==-2)pos=static_cast<int64_t>(f.pos);
         if(pos<0||uint64_t(pos)+len>uint64_t(INT64_MAX))return Finish(iosb,invalid);
@@ -181,14 +217,15 @@ public:
         struct stat st{};if(fstat(it->second->fd,&st))return Finish(iosb,0xc0000185u);
         std::array<uint32_t,14> data{};
         auto put64=[&](unsigned i,uint64_t v){data[i]=uint32_t(v);data[i+1]=uint32_t(v>>32);};
-        uint32_t need=0;const auto size=uint64_t(st.st_size);
+        uint32_t need=0;const bool directory=it->second->directory;
+        const auto size=directory?0ull:uint64_t(st.st_size);
         const auto time=uint64_t(int64_t(st.st_mtime)+11644473600LL)*10000000;
         switch(cls) {
-            case 4:need=40;for(unsigned i=0;i<8;i+=2)put64(i,time);data[8]=0x80;break;
-            case 5:need=24;put64(0,(size+4095)&~uint64_t(4095));put64(2,size);data[4]=1;break;
-            case 14:need=8;put64(0,it->second->pos);break;
+            case 4:need=40;for(unsigned i=0;i<8;i+=2)put64(i,time);data[8]=directory?0x11:0x80;break;
+            case 5:need=24;put64(0,(size+4095)&~uint64_t(4095));put64(2,size);data[4]=1;data[5]=directory?0x100:0;break;
+            case 14:if(directory)return Finish(iosb,invalid);need=8;put64(0,it->second->pos);break;
             case 34:need=56;for(unsigned i=0;i<8;i+=2)put64(i,time);
-                put64(8,(size+4095)&~uint64_t(4095));put64(10,size);data[12]=0x80;break;
+                put64(8,(size+4095)&~uint64_t(4095));put64(10,size);data[12]=directory?0x11:0x80;break;
             default:return Finish(iosb,invalid);
         }
         if(len<need)return Finish(iosb,small);
@@ -199,6 +236,7 @@ public:
         if(!mem_.IsCommitted(iosb,8))return invalid;
         auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
         if(cls!=14)return Finish(iosb,denied);
+        if(it->second->directory)return Finish(iosb,invalid);
         if(len<8||!mem_.IsCommitted(in,8))return Finish(iosb,invalid);
         int64_t pos;mem_.Read(in,&pos,8);
         if(pos<0)return Finish(iosb,invalid);

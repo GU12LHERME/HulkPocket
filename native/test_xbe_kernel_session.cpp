@@ -272,6 +272,37 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,219,{alias_file,0,0,0,0x10968,0x10980,4,0});
     assert(c->eax==0&&memory->Read32(0x10980)==0x6b6c7548);
     call(*c,base,cb,187,{alias_file});assert(c->eax==0);
+    // Open the actual disc directory, then use its real handle to open a
+    // relative asset. Exercise the access masks observed on RP6.
+    const char disc_name[]="\\Device\\CdRom0";
+    memory->Write(0x10900,disc_name,sizeof(disc_name));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x21});
+    assert(c->eax==0);
+    const auto disc=memory->Read32(0x10960);
+    call(*c,base,cb,211,{disc,0x10968,0x10990,24,5});
+    assert(c->eax==0&&memory->Read32(0x109a4)==0x100);
+    const char relative[]="data.bin";
+    memory->Write(0x10900,relative,sizeof(relative));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    memory->Write32(0x10950,disc);
+    call(*c,base,cb,190,{0x10960,0x80100080,0x10950,0x10968,0,0,1,1,0x60});
+    assert(c->eax==0);
+    const auto relative_file=memory->Read32(0x10960);
+    call(*c,base,cb,219,{relative_file,0,0,0,0x10968,0x10980,4,0});
+    assert(c->eax==0&&memory->Read32(0x10980)==0x6b6c7548);
+    call(*c,base,cb,187,{relative_file});assert(c->eax==0);
+    call(*c,base,cb,190,{0x10960,0x40000000,0x10950,0x10968,0,0,1,1,0x60});
+    assert(c->eax==0xc0000022u);
+    call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x1000});
+    assert(c->eax==0xc0000022u);
+    const char relative_escape[]="..\\outside";
+    memory->Write(0x10900,relative_escape,sizeof(relative_escape));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,1,0x40});
+    assert(c->eax==0xc0000034u);
+    call(*c,base,cb,187,{disc});assert(c->eax==0);
+    memory->Write32(0x10950,0);
     const char escape[]="D:\\..\\outside";
     memory->Write(0x10900,escape,sizeof(escape));
     call(*c,base,cb,289,{0x10940,0x10900});

@@ -1212,8 +1212,8 @@ private:
                 unsigned n=ordinal==190?9:6;Check(cpu,n);
                 auto status=files_.Open(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),
                     ordinal==190?Arg(cpu,7):1,Arg(cpu,n-1));
-                std::fprintf(stderr,"DISC OPEN CALL ordinal=%u caller=%08X access=%08X attrs=%08X status=%08X\n",
-                    ordinal,mem_.Read32(cpu.esp),Arg(cpu,1),Arg(cpu,2),status);
+                std::fprintf(stderr,"DISC OPEN CALL ordinal=%u caller=%08X access=%08X attrs=%08X disposition=%u options=%08X status=%08X\n",
+                    ordinal,mem_.Read32(cpu.esp),Arg(cpu,1),Arg(cpu,2),ordinal==190?Arg(cpu,7):1,Arg(cpu,n-1),status);
                 Ret(cpu,n,status);return;
             }
             case 219: {
