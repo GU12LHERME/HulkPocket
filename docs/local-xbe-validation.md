@@ -170,3 +170,40 @@ pela ferramenta oficial e compilado em ARM64**, é executado com
 a memória virtual Xbox no dispositivo. Ele não renderiza gráficos,
 não usa o Hulk e não demonstra que os serviços Xbox necessários
 ao jogo estão implementados.
+
+## 7. Mapear imports e recursos de inicialização do XBE local (Android)
+
+O diagnóstico CLI ganhou `--imports`, para ler **somente a
+tabela de imports do kernel Xbox no XBE original**. Ele informa
+a quantidade de entries, a quantidade de ordinais únicos e
+a lista dos ordinais solicitados. Não chama nenhum deles.
+A leitura é limitada, valida o fim da tabela e rejeita entradas
+que não sejam descritores originais `0x80000000 | ordinal`.
+O arquivo deve ser uma cópia obtida legitimamente.
+
+O relatório também imprime `tls`, `stack_commit`,
+`heap_reserve`, `heap_commit` e `init_flags`.
+Esses campos são apenas inventariados: **não há
+inicialização de heap, pilha, TLS ou kernel Xbox ainda**.
+
+No Termux, a partir de uma cópia local do XBE e do executável
+Android AArch64 atualizado do artefato
+`hulkpocket-xbe-preflight-cli-arm64`:
+
+```bash
+chmod +x ~/hulk-xbe-local-diagnostic-android-arm64
+~/hulk-xbe-local-diagnostic-android-arm64 ~/default.xbe --imports
+```
+
+O resultado de ordinais é útil para planejar serviços e
+registrar quais dependências precisam ser escritas. Evite
+enviar seu XBE, ISO, bibliotecas geradas ou arquivos de
+jogo completos; compartilhe apenas o texto do relatório
+se quiser analisar o que falta. Não há suporte a
+descompactar imagens de disco dentro desse diagnóstico.
+
+**Limite importante:** o inventário é estático.
+Um ordinal listado não prova que ele será chamado na
+inicialização nem indica a ordem das chamadas. Um símbolo
+não listado ainda pode ser acessado por outros mecanismos,
+como hooks do XDK ou imports dinâmicos.
