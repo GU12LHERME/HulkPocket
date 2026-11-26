@@ -12,6 +12,7 @@ import pathlib
 import re
 import subprocess
 import tempfile
+import hashlib
 
 from prepare_xbe_elf import prepare
 from audit_xbe_elf import audit
@@ -30,6 +31,7 @@ def build(
     sdk: pathlib.Path, generated: pathlib.Path, ndk_bin: pathlib.Path,
     output: pathlib.Path, audit_output: pathlib.Path | None = None,
     termux: bool = False, audit_only: bool = False,
+    cache: pathlib.Path | None = None,
 ) -> pathlib.Path:
     compiler = ndk_bin / ("clang++" if termux else "aarch64-linux-android29-clang++")
     if termux:
@@ -44,22 +46,45 @@ def build(
         if not tool.is_file():
             raise FileNotFoundError(f"Android NDK tool missing: {tool}")
     output.parent.mkdir(parents=True, exist_ok=True)
+    if cache is not None:
+        cache = cache.resolve()
+        cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="hulkpocket-xbe-elf-") as temporary:
         work = pathlib.Path(temporary)
         source_dir = work / "prepared"
-        object_dir = work / "objects"
-        object_dir.mkdir()
+        object_dir = work / "objects" if cache is None else cache
+        object_dir.mkdir(exist_ok=True)
         prepare(generated, sdk, source_dir)
         objects: list[pathlib.Path] = []
-        for source in generated_sources(source_dir):
+        fingerprint = hashlib.sha256()
+        fingerprint.update(subprocess.check_output([str(compiler), "--version"]))
+        fingerprint.update(str(compiler.resolve()).encode())
+        for file in sorted(source_dir.rglob("*")):
+            if file.is_file():
+                fingerprint.update(str(file.relative_to(source_dir)).encode())
+                fingerprint.update(hashlib.sha256(file.read_bytes()).digest())
+        fingerprint.update(pathlib.Path(__file__).read_bytes())
+        key = fingerprint.hexdigest()
+        if cache is not None:
+            object_dir = cache / key
+            object_dir.mkdir(exist_ok=True)
+        sources = generated_sources(source_dir)
+        for index, source in enumerate(sources, 1):
             obj = object_dir / (source.stem + ".o")
+            if cache is not None and obj.is_file():
+                print(f"[{index}/{len(sources)}] cached {source.name}", flush=True)
+                objects.append(obj)
+                continue
+            print(f"[{index}/{len(sources)}] compiling {source.name}", flush=True)
+            pending = obj.with_suffix(".partial")
             command = [
                 str(compiler), "-std=c++20", "-O2", "-fPIC",
                 "-fno-strict-aliasing", "-Wall", "-Wextra",
-                "-Wno-unused-parameter", "-Wno-unused-variable",
-                "-I", str(source_dir), "-c", str(source), "-o", str(obj),
+                "-Wno-unused-parameter", "-Wno-unused-variable", "-Wno-unused-but-set-variable",
+                "-I", str(source_dir), "-c", str(source), "-o", str(pending),
             ]
             subprocess.run(command, check=True)
+            pending.replace(obj)
             objects.append(obj)
         if audit_output is not None:
             report = audit(nm, objects)
@@ -97,8 +122,9 @@ def main() -> None:
     parser.add_argument("--audit-output", type=pathlib.Path, default=None)
     parser.add_argument("--termux", action="store_true", help="Use native Android clang++ in --ndk-bin")
     parser.add_argument("--audit-only", action="store_true", help="Compile and inventory imports without linking")
+    parser.add_argument("--cache", type=pathlib.Path, help="Private persistent object cache; use a single build at a time")
     args = parser.parse_args()
-    result = build(args.sdk, args.generated, args.ndk_bin, args.output, args.audit_output, args.termux, args.audit_only)
+    result = build(args.sdk, args.generated, args.ndk_bin, args.output, args.audit_output, args.termux, args.audit_only, args.cache)
     print(f"{'Private import audit' if args.audit_only else 'Validated Android ARM64 ELF'}: {result}")
 
 if __name__ == "__main__":
