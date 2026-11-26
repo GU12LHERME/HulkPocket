@@ -48,8 +48,13 @@ class HulkLiveFibers {
         const auto next=Read(Add(ctx_.esp,4));
         const auto stack=Read(Add(ctx_.fs_base,4));
         const auto index=Read(layout_.fiber_tls_index_va);
-        if(index>(UINT32_MAX-stack)/4)throw std::out_of_range("Invalid fiber TLS index");
-        const auto tls=Read(Add(stack,index*4));
+        if(switches_<8)
+            std::fprintf(stderr,"HULK FIBER TLS thread=%08X fs=%08X stack_base=%08X index_va=%08X index=%08X next=%08X\n",
+                ctx_.thread_handle,ctx_.fs_base,stack,layout_.fiber_tls_index_va,index,next);
+        const auto slot=HulkFiberTlsSlot(stack,index);
+        const auto tls=Read(slot);
+        if(switches_<8)
+            std::fprintf(stderr,"HULK FIBER TLS SLOT addr=%08X pointer=%08X\n",slot,tls);
         const auto current=Read(Add(tls,0x10));
         if(!next||!current||next==pending_root||current==pending_root||ctx_.esp<20)
             throw std::runtime_error("Invalid XDK fiber record");

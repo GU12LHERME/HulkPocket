@@ -24,6 +24,19 @@ inline constexpr HulkXdkFiberLayout kHulkUsaFiberLayout{
     0x004E5A9C, 0x0035551D, 0x00355439
 };
 
+// XDK static TLS uses a DWORD index relative to StackBase, often negative
+// (e.g. FFFFFFD3 = -45, for 180 bytes of TLS). The x86 scaled address
+// wraps at 32 bits; reject addresses outside the supported per-thread
+// TLS arena rather than treating every negative index as overflow.
+inline uint32_t HulkFiberTlsSlot(uint32_t stack_base,uint32_t index){
+    const int64_t signed_index=index<=0x7fffffffu?int64_t(index):int64_t(index)-0x100000000ll;
+    const int64_t slot=int64_t(stack_base)+4*signed_index;
+    if(!stack_base||stack_base%4||signed_index < -0x4000||signed_index > 0x4000||
+       slot<=0||slot>0xfffffffcll)
+        throw std::out_of_range("Invalid fiber TLS index");
+    return uint32_t(slot);
+}
+
 // Extract the complete XDK 5849 fiber chain from the actual SDK context:
 //
 //   arg: guest[ESP+4] = next fiber record
@@ -49,9 +62,8 @@ XboxGuestFiberSwap HulkXdkSwitchToFiber(
     const std::uint32_t next = read32(ctx.esp + 4);
     const std::uint32_t stack_base = read32(ctx.fs_base + 4);
     const std::uint32_t index = read32(layout.fiber_tls_index_va);
-    if (!next || !stack_base || index > (0xFFFFFFFFu - stack_base) / 4)
-        throw std::out_of_range("invalid Hulk guest TLS chain");
-    const std::uint32_t tls = read32(stack_base + index * 4);
+    if (!next) throw std::out_of_range("invalid Hulk guest TLS chain");
+    const std::uint32_t tls = read32(HulkFiberTlsSlot(stack_base,index));
     if (!tls || tls > 0xFFFFFFEFu)
         throw std::out_of_range("invalid Hulk TLS pointer");
     const std::uint32_t current = read32(tls + 0x10);

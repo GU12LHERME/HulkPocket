@@ -10,15 +10,19 @@ struct Fixture {
     XboxGuestAddressSpace mem;
     X86Context ctx{};
     std::vector<int> steps;
-    Fixture(){
+    explicit Fixture(bool negative){
         mem.Commit(a,0x2000);mem.Commit(stack_base,0x1000);
         mem.Commit(stack_a,0x2000);mem.Commit(stack_b,0x2000);
         mem.Commit(kHulkUsaFiberLayout.fiber_tls_index_va,4);
         ctx.host=this;ctx.fs_base=fs;ctx.esp=stack_a+0x1000;
         ctx.ebx=0xa001;ctx.ebp=0xa004;
-        mem.Write32(fs,0x7777);mem.Write32(fs+4,stack_base);
-        mem.Write32(kHulkUsaFiberLayout.fiber_tls_index_va,3);
-        mem.Write32(stack_base+12,tls);mem.Write32(tls+0x10,a);
+        // RP6 actual TLS reservation is 180 bytes; index is -45 DWORDs.
+        // Keep the old positive-index synthetic case as a regression test.
+        const uint32_t top=negative?stack_base+0x1000:stack_base;
+        const uint32_t index=negative?0xffffffd3u:3u;
+        mem.Write32(fs,0x7777);mem.Write32(fs+4,top);
+        mem.Write32(kHulkUsaFiberLayout.fiber_tls_index_va,index);
+        mem.Write32(negative?top-180:top+12,tls);mem.Write32(tls+0x10,a);
         const uint32_t frame[]={0x5555,0xb001,0xb002,0xb003,0xb004,kHulkUsaFiberLayout.bootstrap_va,0xdead};
         for(unsigned i=0;i<7;++i)mem.Write32(stack_b+0x1000+4*i,frame[i]);
         mem.Write32(b+0xc,stack_b+0x1000);
@@ -59,9 +63,19 @@ struct Fixture {
 };
 }
 int main(){
-    Fixture f;
-    ScopedGraphicsCallback checked(Fixture::Memory);
-    HulkLiveFibers scope(f.ctx,f.mem.Base(),Fixture::Guest,kHulkUsaFiberLayout);
-    scope.Run(0x20a016);
-    assert(f.steps==std::vector<int>({1,2,3,4,5})&&!HulkLiveFibers::Active());
+    assert(HulkFiberTlsSlot(0x0a3f0000,0xffffffd3u)==0x0a3eff4c);
+    assert(HulkFiberTlsSlot(0x20000,3)==0x2000c);
+    for(auto index:{0x4001u,0xffffbfffu,0x40000000u}){
+        bool rejected=false;
+        try{(void)HulkFiberTlsSlot(0x0a3f0000,index);}
+        catch(const std::out_of_range&){rejected=true;}
+        assert(rejected);
+    }
+    for(bool negative:{false,true}){
+        Fixture f(negative);
+        ScopedGraphicsCallback checked(Fixture::Memory);
+        HulkLiveFibers scope(f.ctx,f.mem.Base(),Fixture::Guest,kHulkUsaFiberLayout);
+        scope.Run(0x20a016);
+        assert(f.steps==std::vector<int>({1,2,3,4,5})&&!HulkLiveFibers::Active());
+    }
 }
