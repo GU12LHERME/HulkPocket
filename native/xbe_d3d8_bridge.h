@@ -273,11 +273,26 @@ public:
         if(Read(uint64_t(ptr)+4)!=0x400||Read(uint64_t(ptr)+8)||Read(uint64_t(ptr)+12)||
            Read(uint64_t(device)+0x784))
             throw std::logic_error("Unsupported guest shader program or flags");
-        for(unsigned st=0;st<4;++st)
-            if(Read(uint64_t(device)+0xf88+4*st)||Read(uint64_t(device)+0xf98+4*st))
-                throw std::logic_error("Fixed diffuse shader requires unbound textures and palettes");
+        std::array<uint32_t,4> textures{};
+        for(unsigned st=0;st<4;++st){
+            textures[st]=Read(uint64_t(device)+0xf88+4*st);
+            if(Read(uint64_t(device)+0xf98+4*st)||(st&&textures[st]))
+                throw std::logic_error("Fixed diffuse path requires at most one nonpaletted texture");
+        }
+        if(textures[0]){
+            gpu::TextureDesc d{};
+            if(!gpu::Describe(textures[0],d)||d.depth!=1||d.cube||d.levels!=1||
+               d.linear||d.format!=6||Read(uint64_t(textures[0])+8)||Read(uint64_t(textures[0])+16))
+                throw std::logic_error("Unsupported original texture resource");
+            if(push_constants_.texture_words[0]!=3||
+               Read(uint64_t(textures[0])+4)!=state_.simple[0x1b00>>2]||
+               Read(uint64_t(textures[0])+12)!=state_.simple[0x1b04>>2])
+                throw std::logic_error("Guest texture header disagrees with NV2A binding");
+            (void)DescribeNv2aSwizzledTexture(state_.simple[0x1b00>>2],state_.simple[0x1b04>>2]);
+        }
         uint32_t fvf=0;
-        for(uint32_t candidate:{0x42u,0x44u}){
+        for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u}){
+            if(bool(candidate&0x100u)!=bool(textures[0]))continue;
             gpu::VertexShader layout;
             gpu::FvfInputs(candidate,layout);
             bool match=true;
@@ -297,7 +312,7 @@ public:
         if(!fvf)throw std::logic_error("Guest fixed vertex declaration not equivalent to supported diffuse FVF");
         auto next=state_;
         next.vs_handle=fvf;next.vs.reset();next.ps.reset();
-        next.textures.fill(0);next.palettes.fill(0);
+        next.textures=textures;next.palettes.fill(0);
         next.base_vertex=Read(uint64_t(device)+0x1c);
         // Copy the actual matrices instead of using the standalone identity.
         for(unsigned tr:{0u,1u,6u}){
@@ -323,7 +338,7 @@ public:
             throw std::invalid_argument("Invalid guest geometry request");
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         gpu::Assembled a;
-        if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=9)
+        if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=(state_.textures[0]?0x209u:9u))
             throw std::runtime_error("Guest diffuse geometry assembly failed");
         return a.vertex_count;
     }
@@ -378,6 +393,58 @@ public:
             replay.simple[m>>2]=state_.simple[m>>2];
         backend_.Draw(replay,2,start,count,nullptr);
         backend_.Flush();
+    }
+    // First original textured quad: use the checked real declaration,
+    // resource, matrices, viewport and blend/alpha/depth parameters.
+    // This is an offscreen diagnostic replay, not general NV2A draw
+    // translation: culling, multisampling and raw clip state are pending.
+    void ReplayTexturedQuadDiagnostic(uint32_t start,uint32_t count){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!initialized_||state_.vs_handle!=0x142||state_.vs||state_.ps||
+           !state_.textures[0]||start||count!=4||state_.scissor_count||
+           state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||
+           state_.viewport.max_z!=1||state_.ss_offset_x||state_.ss_offset_y||
+           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
+           state_.rs[gpu::kRsSpecularEnable]||state_.rs[gpu::kRsVertexBlend]||
+           state_.rs[gpu::kRsStencilEnable]||
+           std::any_of(state_.textures.begin()+1,state_.textures.end(),[](auto p){return p!=0;})||
+           std::any_of(state_.palettes.begin(),state_.palettes.end(),[](auto p){return p!=0;}))
+            throw std::logic_error("Unsupported original textured quad profile");
+        gpu::TextureDesc desc{},tex{};
+        if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height||
+           !gpu::Describe(state_.textures[0],tex)||tex.levels!=1||tex.format!=6||tex.linear)
+            throw std::logic_error("Textured quad requires full target and swizzled single-mip ARGB");
+        const auto& st=state_.tss[0];
+        // RP6 stage 0: clamp, bilinear, modulate diffuse * texture for
+        // both RGB and alpha. Arg0 is unused by a two-input modulate.
+        if(st[gpu::kTssAddressU]!=3||st[gpu::kTssAddressV]!=3||
+           st[gpu::kTssAddressW]!=3||st[gpu::kTssMinFilter]!=2||
+           st[gpu::kTssMagFilter]!=2||st[gpu::kTssMipFilter]||
+           st[gpu::kTssMipLodBias]||st[gpu::kTssMaxMipLevel]||
+           st[gpu::kTssMaxAnisotropy]!=1||st[gpu::kTssColorKeyOp]||
+           st[gpu::kTssColorSign]||st[gpu::kTssAlphaKill]||
+           st[gpu::kTssColorOp]!=4||st[gpu::kTssColorArg1]!=0||st[gpu::kTssColorArg2]!=2||
+           st[gpu::kTssAlphaOp]!=4||st[gpu::kTssAlphaArg1]!=0||st[gpu::kTssAlphaArg2]!=2||
+           st[gpu::kTssResultArg]!=1||st[gpu::kTssTextureTransformFlags]||st[gpu::kTssTexCoordIndex])
+            throw std::logic_error("Unsupported original quad texture combiner");
+        for(unsigned i=1;i<4;++i)
+            if(state_.tss[i][gpu::kTssColorOp]>1||state_.tss[i][gpu::kTssAlphaOp]>1)
+                throw std::logic_error("Additional active texture stage");
+        auto replay=state_;
+        replay.rs.fill(0);replay.tss={};replay.simple.fill(0);
+        replay.rs[gpu::kRsZEnable]=state_.rs[gpu::kRsZEnable];
+        for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,
+                    gpu::kMBlendEnable,gpu::kMSrcBlend,gpu::kMDestBlend,gpu::kMBlendOp,
+                    gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
+                    gpu::kMDitherEnable,gpu::kMShadeMode})
+            replay.simple[m>>2]=state_.simple[m>>2];
+        auto& dst=replay.tss[0];
+        for(auto k:{gpu::kTssAddressU,gpu::kTssAddressV,gpu::kTssMinFilter,gpu::kTssMagFilter,
+                    gpu::kTssColorOp,gpu::kTssAlphaOp})dst[k]=st[k];
+        // Multiplication commutes; normalize argument order to the GLES
+        // implementation without changing the guest's stored state.
+        dst[gpu::kTssColorArg1]=dst[gpu::kTssAlphaArg1]=2;
+        backend_.Draw(replay,6,start,count,nullptr);backend_.Flush();
     }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);

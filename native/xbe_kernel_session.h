@@ -928,6 +928,28 @@ private:
                 const bool opted_in=allow&&std::strcmp(allow,"1")==0;
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=Arg(cpu,1),count=Arg(cpu,2);
+                if(!indexed&&caller==0x0031c10f&&Arg(cpu,0)==6&&fvf==0x142&&start==0&&count==4){
+                    gpu::ScopedGuestMemory scope(mem_);
+                    gpu::TextureDesc desc{};
+                    if(!gpu::DescribeSurface(synced.rt,desc))
+                        throw std::runtime_error("Textured quad target description failed");
+                    live.backend.ReadbackColor(synced.rt);
+                    auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
+                    std::vector<uint8_t> before(pixels,pixels+size_t(desc.pitch)*desc.height);
+                    live.bridge.ReplayTexturedQuadDiagnostic(start,count);
+                    live.backend.ReadbackColor(synced.rt);
+                    unsigned changed=0;
+                    for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width;++x){
+                        size_t at=size_t(y)*desc.pitch+4*x;
+                        if(std::memcmp(before.data()+at,pixels+at,4))++changed;
+                    }
+                    std::fprintf(stderr,"D3D ORIGINAL TEXTURED QUAD REPLAY: vertices=%u changed_pixels=%u (reduced state; not presented)\n",vertices,changed);
+                    if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path)
+                        WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
+                    // Capture the first actual textured output before allowing
+                    // guest continuation: raw clip/cull/MSAA are still pending.
+                    throw std::runtime_error("D3D original textured quad replay completed; inspect bitmap");
+                }
                 const bool same_caller=caller==0x0031c10f&&!indexed&&Arg(cpu,0)==2&&
                     start==0&&count>0&&count<=1020&&count%2==0;
                 const bool first=!live.diagnostic_draw_returns;

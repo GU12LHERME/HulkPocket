@@ -355,5 +355,57 @@ int main(){
     assert(outside&&cpu.esp==0x1f000);
     auto fence=backend.Fence();assert(!backend.FencePending(fence));backend.WaitFence(fence);
     assert(bridge.Present(0x10100)==1);
+    // Recreate the RP6 original XYZ/diffuse/UV declaration (24-byte
+    // stride), one swizzled texture, and the observed combiner order.
+    {
+        constexpr uint32_t dev=0x16000,shader=0x19000;
+        mem.Write32(dev+0x794,shader);mem.Write32(shader+4,0x400);
+        for(unsigned i=0;i<16;++i){
+            const uint32_t a=shader+0x14+16*i;
+            mem.Write32(a,0);mem.Write32(a+4,0);mem.Write32(a+8,2);mem.Write32(a+12,0);
+        }
+        mem.Write32(shader+0x14+8,0x32);
+        mem.Write32(shader+0x14+3*16+4,12);mem.Write32(shader+0x14+3*16+8,0x40);
+        mem.Write32(shader+0x14+9*16+4,16);mem.Write32(shader+0x14+9*16+8,0x22);
+        for(unsigned tr:{0u,1u,6u})mem.Write(dev+0xc60+64*tr,identity,sizeof(identity));
+        const uint32_t viewport[]={0,0,64,64,0,0x3f800000,0x3f080000,0x3f080000};
+        mem.Write(dev+0xee0,viewport,sizeof(viewport));
+        mem.Write32(dev+0xf88,0x10400);
+        mem.Write32(0x1040c,0x01110621);mem.Write(0x80106000,tex,sizeof(tex));
+        const uint32_t push[]={0x1b00|(2u<<18),0x106000,0x01110621,0x1b0c|(1u<<18),0};
+        mem.Write(0x11800,push,sizeof(push));
+        bridge.ApplyPush(0x11800,0x11800+sizeof(push));
+        auto profile=bridge.Snapshot();profile.rs.fill(0);profile.tss={};
+        profile.simple.fill(0);profile.simple[gpu::kMColorWriteEnable>>2]=0x01010101;
+        // AdoptLiveSetters also mirrors raw state; retain the verified pair.
+        profile.simple[0x1b00>>2]=0x106000;profile.simple[0x1b04>>2]=0x01110621;
+        auto& st=profile.tss[0];
+        st[gpu::kTssAddressU]=st[gpu::kTssAddressV]=st[gpu::kTssAddressW]=3;
+        st[gpu::kTssMinFilter]=st[gpu::kTssMagFilter]=2;
+        st[gpu::kTssMaxAnisotropy]=1;st[gpu::kTssResultArg]=1;
+        st[gpu::kTssColorOp]=st[gpu::kTssAlphaOp]=4;
+        st[gpu::kTssColorArg2]=st[gpu::kTssAlphaArg2]=2;
+        for(unsigned i=1;i<4;++i)profile.tss[i][gpu::kTssColorOp]=profile.tss[i][gpu::kTssAlphaOp]=1;
+        bridge.AdoptLiveSetters(profile);
+        struct QuadVertex {float x,y,z;uint32_t color;float u,v;};
+        const QuadVertex quad[]={{-1,1,.5f,0xffffffff,0,0},{1,1,.5f,0xffffffff,1,0},
+                                 {-1,-1,.5f,0xffffffff,0,1},{1,-1,.5f,0xffffffff,1,1}};
+        mem.Write(0x80105000,quad,sizeof(quad));
+        call("D3DDevice_SetStreamSource",{0,0x10200,sizeof(QuadVertex)});
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x142);
+        assert(bridge.VerifyGuestGeometry(6,0,4,0)==4);
+        call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+        bridge.ReplayTexturedQuadDiagnostic(0,4);
+        assert((backend.ReadPixel(8,8)==std::array<uint8_t,4>{255,0,0,255}));
+        assert((backend.ReadPixel(56,56)==std::array<uint8_t,4>{255,255,255,255}));
+        assert(bridge.Snapshot().tss[0][gpu::kTssColorArg1]==0);
+        bool guarded=false;
+        try{call("D3DDevice_DrawVertices",{6,0,4});}catch(const std::logic_error&){guarded=true;}
+        assert(guarded);
+        mem.Write32(0x10404,0x107000);
+        bool mismatch=false;
+        try{bridge.SyncFixedDiffuseShader(dev);}catch(const std::logic_error&){mismatch=true;}
+        assert(mismatch);
+    }
     std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");
 }
