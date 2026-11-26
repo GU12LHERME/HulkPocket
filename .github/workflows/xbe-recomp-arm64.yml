@@ -72,27 +72,27 @@ jobs:
           "$ndk/aarch64-linux-android29-clang++" -fPIC -shared \
             -Wl,-z,defs -Wl,-z,max-page-size=16384 \
             native/aarch64_context.S -o "$RUNNER_TEMP/libhulkpocket-fiber-android.so"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-fiber-android.so" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-fiber-android.so" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC -shared \
             -Wall -Wextra -Werror -Wl,-z,defs -Wl,-z,max-page-size=16384 \
             -I native native/native_fiber.cpp native/aarch64_context.S \
             -o "$RUNNER_TEMP/libhulkpocket-native-fiber-android.so"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-native-fiber-android.so" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-native-fiber-android.so" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC -shared \
             -Wall -Wextra -Werror -Wl,-z,defs -Wl,-z,max-page-size=16384 \
             -I native native/xbox_fiber_scheduler.cpp native/native_fiber.cpp \
             native/aarch64_context.S -o "$RUNNER_TEMP/libhulkpocket-fiber-dispatcher-android.so"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-fiber-dispatcher-android.so" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-fiber-dispatcher-android.so" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native \
             -c native/test_xbox_guest_fiber_state.cpp \
             -o "$RUNNER_TEMP/hulk-guest-fiber-registers-android.o"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-guest-fiber-registers-android.o" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-guest-fiber-registers-android.o" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native \
             -c native/test_xbox_fiber_bridge.cpp \
             -o "$RUNNER_TEMP/hulk-guest-fiber-bridge-android.o"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-guest-fiber-bridge-android.o" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-guest-fiber-bridge-android.o" | grep AArch64 >/dev/null
           echo "ARM64 fiber context switching passed suspend/resume under QEMU and linked with Android NDK." >> "$GITHUB_STEP_SUMMARY"
       - name: Test actual XboxXBERecomp SDK X86Context against native ARM64 fiber adapter
         run: |
@@ -247,22 +247,22 @@ jobs:
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             -c native/test_xbe_sdk_fiber_adapter.cpp \
             -o "$RUNNER_TEMP/xbe-sdk-fiber-test-android.o"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/xbe-sdk-fiber-test-android.o" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/xbe-sdk-fiber-test-android.o" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             -c native/test_hulk_xdk_fiber_hook.cpp \
             -o "$RUNNER_TEMP/hulk-xdk-switch-hook-android.o"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xdk-switch-hook-android.o" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xdk-switch-hook-android.o" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             -c native/test_hulk_xdk_fiber_bootstrap.cpp \
             -o "$RUNNER_TEMP/hulk-xdk-bootstrap-android.o"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xdk-bootstrap-android.o" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xdk-bootstrap-android.o" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             -c native/test_xbe_sdk_icall_binding.cpp \
             -o "$RUNNER_TEMP/xbe-sdk-icall-binding-android.o"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/xbe-sdk-icall-binding-android.o" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/xbe-sdk-icall-binding-android.o" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC \
             -Wall -Wextra -Werror -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             -c native/test_portable_xbe_dispatch.cpp \
@@ -277,12 +277,12 @@ jobs:
             native/xbox_fiber_scheduler.cpp \
             native/native_fiber.cpp native/aarch64_context.S -ldl \
             -o "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" | grep AArch64 >/dev/null
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -fPIC -shared \
             -Wall -Wextra -Werror -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             native/test_portable_xbe_image_module.cpp \
             -o "$RUNNER_TEMP/libsynthetic-xbe-code-android.so"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libsynthetic-xbe-code-android.so" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libsynthetic-xbe-code-android.so" | grep AArch64 >/dev/null
           # Standalone Android ARM64 diagnostic for physical Retroid tests.
           # This is NOT an APK, does not ship game code, and never executes
           # the original Xbox entry point.
@@ -296,7 +296,7 @@ jobs:
             native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp -ldl \
             -o "$RUNNER_TEMP/hulk-xbe-local-diagnostic-android-arm64"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xbe-local-diagnostic-android-arm64" |
-            grep -q AArch64
+            grep AArch64 >/dev/null
           "$ndk/llvm-nm" -D -C "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" > "$RUNNER_TEMP/hulk-runtime-exported-symbols.txt"
           grep -Fq 'x86_icall(X86Context' "$RUNNER_TEMP/hulk-runtime-exported-symbols.txt"
           echo "Portable XboxXBERecomp x86_icall ARM64 ELF shared library linked with Android NDK; synthetic game entry only." >> "$GITHUB_STEP_SUMMARY"
@@ -324,7 +324,7 @@ jobs:
             -DANDROID_STL=c++_static -DBUILD_SHARED_LIBS=OFF \
             -DXBE_SDK_DIR="$RUNNER_TEMP/xbe-sdk" -DCMAKE_BUILD_TYPE=Release
           cmake --build "$RUNNER_TEMP/xbe-recompiler-android" --target xbe_recomp_host --parallel 2
-          "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$RUNNER_TEMP/xbe-recompiler-android/xbe_recomp_host" | grep -q AArch64
+          "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$RUNNER_TEMP/xbe-recompiler-android/xbe_recomp_host" | grep AArch64 >/dev/null
           mkdir -p "$RUNNER_TEMP/android-recompiler-package"
           cp "$RUNNER_TEMP/xbe-recompiler-android/xbe_recomp_host" "$RUNNER_TEMP/android-recompiler-package/xbe_recomp_android"
           cp "$RUNNER_TEMP/xbe-sdk-commit.txt" "$RUNNER_TEMP/android-recompiler-package/"
@@ -357,7 +357,7 @@ jobs:
             --ndk-bin "$ndk" \
             --audit-output "$RUNNER_TEMP/actual-recompiler-imports.json" \
             --output "$RUNNER_TEMP/libsynthetic-recompiled-opcodes-android.so"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libsynthetic-recompiled-opcodes-android.so" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/libsynthetic-recompiled-opcodes-android.so" | grep AArch64 >/dev/null
           # Execute the genuine compiler's translation of IA-32
           # instructions on the Linux host through the same SDK
           # guest function dispatch used by the Android runtime.
@@ -401,7 +401,7 @@ jobs:
             "$RUNNER_TEMP/xbe-recompiled-real-opcodes/x86_recomp.0.cpp" \
             -o "$RUNNER_TEMP/hulk-synthetic-xbe-opcodes-android-arm64"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-opcodes-android-arm64" |
-            grep -q AArch64
+            grep AArch64 >/dev/null
           # More representative original IA-32 workload:
           # read Xbox RAM, perform arithmetic, and write the result.
           python3 tools/create_synthetic_xbe_recompile.py \
@@ -437,7 +437,7 @@ jobs:
             "$RUNNER_TEMP/xbe-memory-recompiled/x86_func_mapping.cpp" \
             "$RUNNER_TEMP/xbe-memory-recompiled/x86_recomp.0.cpp" \
             -o "$RUNNER_TEMP/hulk-synthetic-xbe-memory-android-arm64"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-memory-android-arm64" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-memory-android-arm64" | grep AArch64 >/dev/null
           # Real original x86 CALL and RET across separately discovered
           # caller/callee functions, checking guest x86 stack unwinding.
           python3 tools/create_synthetic_xbe_recompile.py \
@@ -474,7 +474,7 @@ jobs:
             "$RUNNER_TEMP/xbe-calls-recompiled/x86_recomp.0.cpp" \
             -o "$RUNNER_TEMP/hulk-synthetic-xbe-calls-android-arm64"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-calls-android-arm64" |
-            grep -q AArch64
+            grep AArch64 >/dev/null
           # Genuine original x86 indirect CALL crossing into the
           # Xbox kernel ordinal boundary of the Android runtime.
           python3 tools/create_synthetic_xbe_recompile.py \
@@ -509,7 +509,7 @@ jobs:
             "$RUNNER_TEMP/xbe-kernel-recompiled/x86_func_mapping.cpp" \
             "$RUNNER_TEMP/xbe-kernel-recompiled/x86_recomp.0.cpp" \
             -o "$RUNNER_TEMP/hulk-synthetic-xbe-kernel-android-arm64"
-          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-kernel-android-arm64" | grep -q AArch64
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-synthetic-xbe-kernel-android-arm64" | grep AArch64 >/dev/null
           echo "Recompiled IA-32 indirect CALL to Xbox kernel ordinal 17 validated under QEMU ARM64." >> "$GITHUB_STEP_SUMMARY"
           echo "Official recompilation validated native ARM64 multi-function x86 call/return stack execution." >> "$GITHUB_STEP_SUMMARY"
           echo "Official x86-to-ARM64 recompilation validated Xbox memory load/arithmetic/store guest instructions." >> "$GITHUB_STEP_SUMMARY"
@@ -584,7 +584,7 @@ jobs:
             "$RUNNER_TEMP/xbe-elf/x86_func_mapping.cpp" \
             "$RUNNER_TEMP/xbe-elf/x86_recomp.0.cpp" \
             -o "$RUNNER_TEMP/libprepared-xbe-code-android.so"
-          "$bin/llvm-readelf" -h "$RUNNER_TEMP/libprepared-xbe-code-android.so" | grep -q AArch64
+          "$bin/llvm-readelf" -h "$RUNNER_TEMP/libprepared-xbe-code-android.so" | grep AArch64 >/dev/null
           "$bin/llvm-nm" -D "$RUNNER_TEMP/libprepared-xbe-code-android.so" |
             grep 'X86FuncMappings'
           # Full reusable local build command. Compiles each generated

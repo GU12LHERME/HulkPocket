@@ -28,6 +28,28 @@ jobs:
         run: |
           test -f /tmp/hulk-vk/spv/packed-lit.vert.spv
           for f in /tmp/hulk-vk/spv/*.spv; do spirv-val --target-env vulkan1.1 "$f"; done
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Compile the same pixel probe for Android ARM64
+        run: |
+          sdkmanager 'ndk;28.2.13676358'
+          ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p /tmp/hulk-vk/android-probe/spv
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -static-libstdc++ -pthread \
+            -Wl,-z,max-page-size=16384 \
+            -I third_party/xboxxberecomp -I third_party/scda-vulkan/src \
+            native/vulkan_experiment/test_offscreen.cpp -lvulkan \
+            -o /tmp/hulk-vk/android-probe/hulk-vulkan-probe
+          "$ndk/llvm-readelf" -h /tmp/hulk-vk/android-probe/hulk-vulkan-probe | grep AArch64 >/dev/null
+          cp /tmp/hulk-vk/spv/*.spv /tmp/hulk-vk/android-probe/spv/
+          cp native/vulkan_experiment/run_android_probe.sh /tmp/hulk-vk/android-probe/
+          cp third_party/scda-vulkan/LICENSE /tmp/hulk-vk/android-probe/LICENSE-SCDA
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HulkPocket-Vulkan-RP6-probe-arm64
+          path: /tmp/hulk-vk/android-probe/
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

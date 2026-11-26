@@ -30,7 +30,7 @@ struct Fixture{
     VkCommandPool pool{};VkCommandBuffer cmd{};
     gpu::ImageMemory images;
     std::unique_ptr<gpu::FrameFences<1>> fence;
-    Buffer verts,uniform,readback;
+    Buffer verts,indices,uniform,readback;
     Image target,texture;
     VkRenderPass pass{};VkFramebuffer fb{};VkSampler sampler{};
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
@@ -49,7 +49,7 @@ struct Fixture{
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
             Destroy(target);Destroy(texture);
-            Destroy(verts);Destroy(uniform);Destroy(readback);
+            Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
             vkDestroyDevice(dev,nullptr);
@@ -145,6 +145,9 @@ struct Fixture{
         Check(vkAllocateCommandBuffers(dev,&ca,&cmd),"command buffer");
         fence=std::make_unique<gpu::FrameFences<1>>();if(!fence->Init(dev))throw std::runtime_error("frame fence init");
         CreateBuffer(verts,3*sizeof(Vertex),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        CreateBuffer(indices,3*sizeof(uint16_t),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        const uint16_t idx[]={2,0,1};
+        std::memcpy(indices.data,idx,sizeof(idx));
         CreateBuffer(uniform,4096,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         CreateBuffer(readback,W*H*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
         CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
@@ -209,12 +212,12 @@ struct Fixture{
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=data.size()*4;ci.pCode=data.data();
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
-    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend){
+    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi){
         if(pipeline){vkDestroyPipeline(dev,pipeline,nullptr);pipeline={};}
         if(vs){vkDestroyShaderModule(dev,vs,nullptr);vs={};}
         if(fs){vkDestroyShaderModule(dev,fs,nullptr);fs={};}
         vs=Module(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv"));
-        fs=Module(root/(textured?"modulate.frag.spv":"untextured.frag.spv"));
+        fs=Module(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv"));
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType=stages[1].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";
@@ -238,16 +241,16 @@ struct Fixture{
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
     }
-    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend){
-        Pipeline(root,packed,textured,blend);
-        uint32_t word=packed?(511u<<22):(blend?0x80ff0000u:0xff00ff00u);
+    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false){
+        Pipeline(root,packed,textured,blend,multi);
+        uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
         std::memcpy(verts.data,v,sizeof(v));
         gpu::DrawConstants dc{};
         dc.surf[0]=W;dc.surf[1]=H;dc.surf[2]=1;dc.surf[3]=1;
         for(unsigned i=0;i<4;++i)dc.wvp[i*5]=dc.wv[i*5]=dc.wvn[i*5]=1;
         dc.misc[1]=8; // alpha test: always (shader maps unsupported/always to no discard)
-        dc.texsize[0][0]=dc.texsize[0][1]=2;
+        dc.texsize[0][0]=dc.texsize[0][1]=dc.texsize[1][0]=dc.texsize[1][1]=2;
         dc.mat[0][2]=dc.mat[0][3]=1; // blue diffuse
         dc.mat[4][0]=8;dc.lt[0][0][2]=1;dc.lt[0][4][2]=-1; // directional -Z
         std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
@@ -257,7 +260,11 @@ struct Fixture{
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
-        VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&verts.b,&offset);vkCmdDraw(cmd,3,1,0,0);
+        VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&verts.b,&offset);
+        if(packed||multi){
+            vkCmdBindIndexBuffer(cmd,indices.b,0,VK_INDEX_TYPE_UINT16);
+            vkCmdDrawIndexed(cmd,3,1,0,0,0);
+        }else vkCmdDraw(cmd,3,1,0,0);
         vkCmdEndRenderPass(cmd);
         gpu::RenderPassBarrier(cmd);
         VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={W,H,1};
@@ -280,6 +287,7 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false);Expect("diffuse center",f.Pixel(32,32),{0,255,0,255});Expect("outside triangle",f.Pixel(0,0),{0,0,0,255});
         f.Draw(argv[1],false,false,true);Expect("alpha blend",f.Pixel(32,32),{128,0,127,191});
         f.Draw(argv[1],true,true,false);Expect("packed directional modulate",f.Pixel(32,32),{0,0,64,255});
-        std::puts("PASS real Vulkan draw, sampled texture, packed lighting, alpha blend and readback");
+        f.Draw(argv[1],false,true,false,true);Expect("two-stage indexed modulation",f.Pixel(32,32),{64,255,16,255});
+        std::puts("PASS real Vulkan draw, sampled texture, packed lighting, alpha blend, indexed multi-stage modulation and readback");
     }catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}
 }
