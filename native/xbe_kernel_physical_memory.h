@@ -83,6 +83,11 @@ public:
         }
         return true;
     }
+    uint32_t AllocatedPages() const {
+        uint64_t bytes=0;
+        for(const auto& allocation:live_)bytes+=allocation.second;
+        return uint32_t(bytes/4096);
+    }
     bool IsPersistent(uint32_t address) const {return persistent_.count(address&~4095u)!=0;}
     uint32_t Physical(uint32_t address) const {
         if(!Contains(address,1)) return 0;

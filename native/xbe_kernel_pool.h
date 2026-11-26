@@ -47,6 +47,17 @@ public:
         auto end=uint64_t(it->first)+it->second;
         return addr<end?static_cast<uint32_t>(end-addr):0;
     }
+    uint32_t UsedPages() const {
+        // Count unique 4 KiB Xbox pages occupied by live pool allocations.
+        uint64_t pages=0,previous_end=0;
+        for(const auto& item:live_){
+            auto first=uint64_t(item.first)/4096;
+            auto end=(uint64_t(item.first)+item.second+4095)/4096;
+            pages+=end-std::max(first,previous_end);
+            previous_end=end;
+        }
+        return uint32_t(pages);
+    }
     size_t Outstanding() const { return live_.size(); }
 };
 }

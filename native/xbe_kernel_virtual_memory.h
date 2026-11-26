@@ -102,6 +102,18 @@ public:
         }
         mem_.Write(out,data.data(),sizeof(data));return 0;
     }
+    uint32_t ReservedBytes() const {
+        uint64_t bytes=0;
+        for(const auto& r:regions_)bytes+=r.second.size;
+        return uint32_t(bytes);
+    }
+    uint32_t CommittedBytes() const {
+        uint64_t bytes=0;
+        for(const auto& r:regions_)
+            for(uint64_t p=r.first;p<uint64_t(r.first)+r.second.size;p+=mem_.PageSize())
+                if(mem_.IsCommitted(uint32_t(p),1))bytes+=mem_.PageSize();
+        return uint32_t(bytes);
+    }
     uint32_t AllocationSize(uint32_t addr) {
         auto it=Find(addr);
         return it==regions_.end()?0:it->second.size-(addr-it->first);

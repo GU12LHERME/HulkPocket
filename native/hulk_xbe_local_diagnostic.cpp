@@ -176,7 +176,10 @@ int main(int argc,char** argv) {
                         Dl_info module_info{};
                         dladdr(reinterpret_cast<void*>(entry),&module_info);
                         InstallGuestFaultHandler(guest.Base(),reinterpret_cast<uintptr_t>(module_info.dli_fbase));
-                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry);
+                        uint32_t image_pages=0;
+                        for(uint64_t a=uint64_t(loaded.base)&~4095ull;a<uint64_t(loaded.base)+loaded.image_size;a+=4096)
+                            if(guest.IsCommitted(uint32_t(a),1))++image_pages;
+                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry,image_pages);
                         int status=session.Run(entry,cpu,loaded.entry);
                         std::cerr << "Guest entry status: " << status << std::endl;
                         _exit(status==0?0:5);

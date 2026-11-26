@@ -31,7 +31,7 @@ public:
 private:
     struct Worker {
         std::thread host;
-        uint32_t suspend=0, pcr=0, handle=0, id=0;
+        uint32_t suspend=0, pcr=0, handle=0, id=0, stack_pages=0;
         bool finished=false, closed=false;
     };
     XboxGuestAddressSpace& mem_;
@@ -67,6 +67,7 @@ private:
     std::array<KernelTrace,48> recent_{};
     uint64_t trace_seq_=0;
     uint32_t cache_pages_=16;
+    uint32_t image_pages_=0, initial_stack_pages_=0;
     const std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
     bool stopping_=false;
     int worker_failure_=0;
@@ -145,7 +146,7 @@ private:
         InitializeKernelThread(mem_,slot,slot+0x400,top,stack,child.esp,
                                tls_bytes?tls:0,id);
         auto& w=workers_[count_++];
-        w.pcr=slot; w.handle=handle; w.id=id;
+        w.pcr=slot; w.handle=handle; w.id=id; w.stack_pages=uint32_t(committed/4096);
         w.suspend=ordinal==255 && (Arg(cpu,7)&255u)?1u:0u;
         const auto target=system?system:start;
         w.host=std::thread([this,&w,child,target]() mutable {
@@ -697,6 +698,28 @@ private:
                 if(!physical_.Contains(addr,1)) throw std::runtime_error("No physical mapping for guest address");
                 Ret(cpu,1,physical_.Physical(addr));return;
             }
+            case 181: {
+                Check(cpu,1);auto out=Arg(cpu,0);
+                if(!out||!mem_.IsCommitted(out,36)||mem_.Read32(out)!=36){
+                    Ret(cpu,1,0xc000000du);return;
+                }
+                constexpr uint32_t total=0x04000000/4096;
+                auto committed=virtual_.CommittedBytes(),reserved=virtual_.ReservedBytes();
+                auto pool_pages=pool_.UsedPages();
+                uint32_t stacks=initial_stack_pages_;
+                for(size_t i=0;i<count_;++i)stacks+=workers_[i].stack_pages;
+                // Diagnostic allocations use separate host arenas; account
+                // for live Xbox-equivalent pages, not Android total RAM.
+                uint64_t used=uint64_t(kXboxKernelReservedBytes/4096)+physical_.AllocatedPages()+
+                    committed/4096+pool_pages+stacks+image_pages_;
+                uint32_t available=used>=total?0:total-uint32_t(used);
+                const std::array<uint32_t,9> stats={36,total,available,committed,reserved,
+                    0,pool_pages,stacks,image_pages_};
+                mem_.Write(out,stats.data(),sizeof(stats));
+                std::fprintf(stderr,"MmQueryStatistics total=%u available=%u virtual=%u reserved=%u pool=%u stack=%u image=%u\n",
+                    total,available,committed,reserved,pool_pages,stacks,image_pages_);
+                Ret(cpu,1,0);return;
+            }
             case 180: {
                 Check(cpu,1);auto addr=Arg(cpu,0);
                 auto size=physical_.Size(addr);
@@ -890,8 +913,10 @@ private:
             case 258: Check(cpu,1); throw GuestThreadExit{Arg(cpu,0)};
             default: break;
         }
-        if(!DispatchPoolCall(ordinal,cpu,mem_,pool_))
+        if(!DispatchPoolCall(ordinal,cpu,mem_,pool_)){
+            DumpRecent();
             throw std::runtime_error("Unsupported kernel ordinal "+std::to_string(ordinal));
+        }
     }
     void Join() {
         for(size_t i=0;;++i) {
@@ -908,8 +933,8 @@ private:
     }
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
-                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr)
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),files_(mem,disc_root),tls_(tls),clock_(clock),registry_(registry) {}
+                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0)
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),files_(mem,disc_root),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }
@@ -934,6 +959,11 @@ public:
         if(!entry || active_ || entry_) throw std::runtime_error("Invalid kernel session");
         struct Reset { XbeKernelSession& s; ~Reset(){s.entry_=nullptr; active_=nullptr;} } reset{*this};
         stopping_=false; worker_failure_=0;
+        if(cpu.fs_base&&mem_.IsCommitted(cpu.fs_base,12)){
+            auto top=mem_.Read32(cpu.fs_base+4),bottom=mem_.Read32(cpu.fs_base+8);
+            if(top>bottom&&mem_.IsCommitted(bottom,top-bottom))
+                initial_stack_pages_=(top-bottom+4095)/4096;
+        }
         GuestFaultStack fault_stack_scope;
         fault_thread=static_cast<sig_atomic_t>(cpu.thread_handle);
         fault_ordinal=0;fault_return=0;fault_stack=static_cast<sig_atomic_t>(cpu.esp);
