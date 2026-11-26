@@ -27,6 +27,9 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         assert(memory->Read32(c->fs_base+4)-memory->Read32(c->fs_base+8)>0x80000);
         call(*c,base,cb,104,{});
         assert(c->eax==thread);
+        call(*c,base,cb,277,{0x10580});
+        assert(memory->Read32(0x10598)==thread);
+        call(*c,base,cb,294,{0x10580});
         ++ran;
         call(*c,base,cb,258,{42});
         assert(false);
@@ -138,6 +141,15 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,294,{0x10500});
     call(*c,base,cb,294,{0x10500});
     assert(memory->Read32(0x10510)==0xffffffff);
+    // Zero-initialized CRT section, then a section initialized in guest code.
+    call(*c,base,cb,277,{0x10540});
+    assert(memory->Read32(0x10558)==0x10700);
+    call(*c,base,cb,294,{0x10540});
+    memory->Write32(0x10580,0x00040001);
+    memory->Write32(0x10588,0x10588);
+    memory->Write32(0x1058c,0x10588);
+    memory->Write32(0x10590,0xffffffff);
+    call(*c,base,cb,277,{0x10580});
     call(*c,base,cb,255,{0x10100,0,0x100000,24,0x10104,0x3000,0x1234,1,0,0x2000});
     assert(c->eax==0 && ran==0);
     const auto h=memory->Read32(0x10100);
@@ -150,6 +162,9 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(memory->Read32(0x10108)==1);
     call(*c,base,cb,224,{0xdead,0});
     assert(c->eax==0xc0000008u);
+    call(*c,base,cb,294,{0x10580});
+    call(*c,base,cb,233,{h,0,0});
+    assert(c->eax==0 && ran==1);
     return 0;
 }
 }

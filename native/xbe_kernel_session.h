@@ -185,25 +185,48 @@ private:
     }
     void Critical(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Check(cpu,1); const auto addr=Arg(cpu,0);
-        if(!mem_.IsCommitted(addr,28)) throw std::runtime_error("Invalid critical section");
-        if(ordinal==291) {
-            if(critical_.count(addr) && mem_.Read32(addr+0x18))
-                throw std::runtime_error("Reinitializing held critical section");
+        if(addr%4 || !mem_.IsCommitted(addr,28)) throw std::runtime_error("Invalid critical section pointer");
+        auto initialize=[&]{
             mem_.Write32(addr,0x00040001);
             mem_.Write32(addr+4,0); mem_.Write32(addr+8,addr+8); mem_.Write32(addr+12,addr+8);
             mem_.Write32(addr+16,0xffffffff); mem_.Write32(addr+20,0); mem_.Write32(addr+24,0);
-            critical_[addr]=0; Ret(cpu,1,0); return;
+            critical_[addr]=0;
+        };
+        if(ordinal==291) {
+            if(critical_.count(addr) && (mem_.Read32(addr+24)||critical_.at(addr)))
+                throw std::runtime_error("Reinitializing held critical section");
+            initialize();Ret(cpu,1,0);return;
         }
-        if(!critical_.count(addr)) throw std::runtime_error("Uninitialized critical section");
+        if(!critical_.count(addr)) {
+            const auto header=mem_.Read32(addr), signal=mem_.Read32(addr+4);
+            const auto fl=mem_.Read32(addr+8), bl=mem_.Read32(addr+12);
+            const auto count=mem_.Read32(addr+16), depth=mem_.Read32(addr+20), owner=mem_.Read32(addr+24);
+            std::fprintf(stderr,"Critical section first use: ordinal=%u addr=%08X header=%08X signal=%08X list=%08X/%08X lock=%08X depth=%u owner=%08X\n",
+                ordinal,addr,header,signal,fl,bl,count,depth,owner);
+            // XAPI/CRT may initialize the object inline, without invoking ordinal 291.
+            // Also accept a zero/static idle representation on first enter only.
+            const bool empty_header=!header&&!signal&&!fl&&!bl;
+            const bool idle=!owner&&!depth&&(count==0xffffffffu||count==0);
+            if(ordinal==277 && empty_header && idle) initialize();
+            else if((header&0x00ff00ffu)==0x00040001u && signal<=1 &&
+                    fl==addr+8 && bl==addr+8 && ((!depth&&!owner&&count==0xffffffffu) ||
+                    (depth&&owner&&count==depth-1))) {
+                critical_[addr]=0;
+            } else throw std::runtime_error("Unrecognized guest critical section layout");
+        }
         auto me=mem_.Read32(cpu.fs_base+0x28);
         if(!me) throw std::runtime_error("Missing current thread");
+        auto update=[&]{
+            mem_.Write32(addr+16,mem_.Read32(addr+20)+critical_.at(addr)-1);
+        };
         if(ordinal==277) {
-            ++critical_[addr];
+            ++critical_[addr];update();
             do {
                 cv_.wait(lock,[&]{auto owner=mem_.Read32(addr+24);return stopping_ || !owner || owner==me;});
                 Pause(cpu,lock);
             } while(mem_.Read32(addr+24) && mem_.Read32(addr+24)!=me);
             --critical_[addr];
+            mem_.Write32(addr+4,0);
             mem_.Write32(addr+24,me);
             mem_.Write32(addr+20,mem_.Read32(addr+20)+1);
         } else {
@@ -211,10 +234,13 @@ private:
                 throw std::runtime_error("Critical section not owned by current thread");
             auto depth=mem_.Read32(addr+20)-1;
             mem_.Write32(addr+20,depth);
-            if(!depth) {mem_.Write32(addr+24,0);cv_.notify_all();}
+            if(!depth) {
+                mem_.Write32(addr+24,0);
+                mem_.Write32(addr+4,critical_.at(addr)?1:0);
+                cv_.notify_all();
+            }
         }
-        mem_.Write32(addr+16,mem_.Read32(addr+20)-1);
-        Ret(cpu,1,0);
+        update();Ret(cpu,1,0);
     }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
