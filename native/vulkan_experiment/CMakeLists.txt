@@ -30,3 +30,11 @@ target_link_libraries(hulk_shader_probe PRIVATE glslang glslang-default-resource
 enable_testing()
 add_test(NAME reference COMMAND scda_renderer_reference)
 add_test(NAME hulk_shader_compile COMMAND hulk_shader_probe "${CMAKE_CURRENT_BINARY_DIR}/spv")
+
+add_executable(hulk_vulkan_offscreen test_offscreen.cpp)
+target_include_directories(hulk_vulkan_offscreen PRIVATE "${HULK}" "${SCDA}/src")
+target_compile_options(hulk_vulkan_offscreen PRIVATE -UNDEBUG)
+target_link_libraries(hulk_vulkan_offscreen PRIVATE Vulkan::Vulkan Threads::Threads)
+add_test(NAME hulk_vulkan_pixels COMMAND hulk_vulkan_offscreen "${CMAKE_CURRENT_BINARY_DIR}/spv")
+set_tests_properties(hulk_shader_compile PROPERTIES FIXTURES_SETUP shader_files)
+set_tests_properties(hulk_vulkan_pixels PROPERTIES FIXTURES_REQUIRED shader_files TIMEOUT 60)

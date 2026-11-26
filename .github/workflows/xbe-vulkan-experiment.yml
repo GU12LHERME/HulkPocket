@@ -14,13 +14,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Vulkan headers and validator
-        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev spirv-tools ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers spirv-tools ninja-build
       - name: Build upstream reference and Hulk shader compiler
         run: |
           cmake -S native/vulkan_experiment -B /tmp/hulk-vk -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build /tmp/hulk-vk --parallel 2
-      - name: Run upstream lifetime tests and compile Hulk shaders
-        run: ctest --test-dir /tmp/hulk-vk --output-on-failure
+      - name: Run reference tests, shader compiler and real offscreen Vulkan draws
+        run: |
+          export VK_ICD_FILENAMES="$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' | head -n 1)"
+          test -n "$VK_ICD_FILENAMES"
+          ctest --test-dir /tmp/hulk-vk --output-on-failure --verbose
       - name: Validate emitted Vulkan SPIR-V
         run: |
           test -f /tmp/hulk-vk/spv/packed-lit.vert.spv

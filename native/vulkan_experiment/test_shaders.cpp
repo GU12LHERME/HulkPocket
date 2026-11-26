@@ -42,6 +42,9 @@ int main(int argc,char** argv){
         auto a=Compile(lit,EShLangVertex);
         assert(Locations(a).contains(0)&&Locations(a).contains(2)&&Locations(a).contains(9));
         Save(root,"packed-lit.vert.spv",a);
+        s.light_enable=1;
+        auto directional=VulkanVertexHlsl(FixedVertexHlsl(0x205,false,uint64_t(kDecodePacked)<<8,MakeFixedKey(s)),false,false,false);
+        Save(root,"packed-directional.vert.spv",Compile(directional,EShLangVertex));
         auto unlit=Compile(VulkanVertexHlsl(FixedVertexHlsl(0x209,false),false,false,false),EShLangVertex);
         assert(Locations(unlit).contains(0)&&Locations(unlit).contains(3)&&Locations(unlit).contains(9));
         Save(root,"diffuse-uv.vert.spv",unlit);
