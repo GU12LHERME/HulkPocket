@@ -91,6 +91,12 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,149,{0x12600,uint32_t(due),uint32_t(due>>32),0});
     call(*c,base,cb,97,{0x12600});assert(c->eax==1);
     call(*c,base,cb,97,{0x12600});assert(c->eax==0);
+    // Requests for non-recompiled executable images return the same
+    // error as the upstream XAPI replacement instead of rebooting.
+    const char launch[]="C:\\xboxdash.xbe";
+    memory->Write(0x12700,launch,sizeof(launch));
+    call(*c,base,cb,kXapiLaunchImage,{0x12700,0});assert(c->eax==2);
+    call(*c,base,cb,kXapiLaunchImage,{0,0});assert(c->eax==2);
     // SHA-1 of "abc" and RFC 2202 HMAC-SHA1 vector, through the guest ABI.
     const uint8_t sha[]={0xa9,0x99,0x3e,0x36,0x47,0x06,0x81,0x6a,0xba,0x3e,0x25,0x71,0x78,0x50,0xc2,0x6c,0x9c,0xd0,0xd8,0x9d};
     const uint8_t mac[]={0xb6,0x17,0x31,0x86,0x55,0x05,0x72,0x64,0xe2,0x8b,0xc0,0xb6,0xfb,0x37,0x8c,0x8e,0xf1,0x46,0xbe,0x00};

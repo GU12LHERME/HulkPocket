@@ -53,10 +53,11 @@ jobs:
         run: bash -n tools/run_hulk_diagnostic.sh
       - name: Verify strong generated graphics override
         run: |
-          printf '#define HAS_Direct3D_CreateDevice 1\n#define SYM_Direct3D_CreateDevice 0037D900\n' > /tmp/hulk-sdk/image_symbols.h
+          printf '#define HAS_Direct3D_CreateDevice 1\n#define SYM_Direct3D_CreateDevice 0037D900\n#define HAS_XLaunchNewImageA 1\n#define SYM_XLaunchNewImageA 00209C04\n' > /tmp/hulk-sdk/image_symbols.h
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_graphics_boundary.cpp native/xbe_d3d8_entry_guard.cpp -o /tmp/graphics-boundary
           /tmp/graphics-boundary
           nm /tmp/graphics-boundary | grep ' T sub_0037D900$'
+          nm /tmp/graphics-boundary | grep ' T sub_00209C04$'
           python3 -m py_compile tools/link_hulk_cached.py
       - name: Host tests
         run: |

@@ -51,3 +51,14 @@ HOOK(D3DDevice_DrawIndexedVertices,hulkpocket::kGraphicsDrawIndexed)
 #if HAS_D3DDevice_Swap
 HOOK(D3DDevice_Swap,hulkpocket::kGraphicsSwap)
 #endif
+
+#if HAS_XLaunchNewImageA
+// Unlike the graphics checkpoints, a refused external launch returns a
+// normal Win32 error. The host validates the guest stack and launch path.
+extern "C" __attribute__((visibility("default")))
+void GUEST(XLaunchNewImageA)(X86Context& ctx,uint8_t* base){
+    if(!Stdcall("XLaunchNewImageA")||!hulkpocket::graphics_callback)
+        throw std::runtime_error("XLaunchNewImageA requires a checked host adapter");
+    hulkpocket::graphics_callback(ctx,base,hulkpocket::kXapiLaunchImage);
+}
+#endif

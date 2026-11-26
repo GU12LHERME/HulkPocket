@@ -60,6 +60,12 @@ private:
     std::deque<uint32_t> dpc_queue_;
     bool dpc_running_=false;
     std::map<uint32_t,uint32_t> system_allocations_;
+    struct KernelTrace {
+        uint64_t seq=0;uint32_t ordinal=0,thread=0,ret=0,esp=0,eax=0;
+        bool returned=false;
+    };
+    std::array<KernelTrace,48> recent_{};
+    uint64_t trace_seq_=0;
     uint32_t cache_pages_=16;
     const std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
     bool stopping_=false;
@@ -344,10 +350,71 @@ private:
         }
         update();Ret(cpu,1,0);
     }
+    std::string DiagnosticString(uint32_t address,size_t max){
+        if(!address)return "<null>";
+        std::string out;
+        for(size_t i=0;i<max;++i){
+            uint64_t a=uint64_t(address)+i;
+            if(a>=XboxGuestAddressSpace::kSize||!mem_.IsCommitted(uint32_t(a),1)){
+                out+="<unmapped>";return out;
+            }
+            char c=char(mem_.Base()[a]);
+            if(!c)return out;
+            out+=c>=32&&c<127?c:'?';
+        }
+        out+="<truncated>";return out;
+    }
+    void DumpRecent(){
+        std::fprintf(stderr,"Recent guest kernel/host calls (ordinal, thread, return VA, EAX):\n");
+        const uint64_t begin=trace_seq_>recent_.size()?trace_seq_-recent_.size():0;
+        for(uint64_t seq=begin;seq<trace_seq_;++seq){
+            const auto& r=recent_[seq%recent_.size()];
+            if(r.seq!=seq)continue;
+            std::fprintf(stderr,"  %u thread=%08X ret=%08X esp=%08X %s=%08X\n",
+                r.ordinal,r.thread,r.ret,r.esp,r.returned?"result":"entry-eax",r.eax);
+        }
+    }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case kXapiLaunchImage: {
+                Check(cpu,2);auto path=Arg(cpu,0);
+                auto name=DiagnosticString(path,520);
+                std::fprintf(stderr,"XLaunchNewImageA request: path=%s data=%08X caller=%08X\n",
+                    name.c_str(),Arg(cpu,1),mem_.Read32(cpu.esp));
+                // Follow the pinned XDK runtime: refuse launch of another
+                // image not available as a recompiled executable.
+                // Do not silently claim a restart of this title succeeded.
+                std::string upper=name;
+                for(auto& c:upper){if(c>='a'&&c<='z')c=char(c-32);if(c=='/')c='\\';}
+                if(upper=="D:\\DEFAULT.XBE"||upper=="\\DEVICE\\CDROM0\\DEFAULT.XBE"||
+                   upper=="\\??\\D:\\DEFAULT.XBE"||upper=="DEFAULT.XBE"){
+                    DumpRecent();throw std::runtime_error("Self-relaunch requested; quick reboot is not integrated");
+                }
+                Ret(cpu,2,2);return; // ERROR_FILE_NOT_FOUND
+            }
+            case 49: {
+                Check(cpu,1);
+                auto reason=Arg(cpu,0);
+                std::fprintf(stderr,"HalReturnToFirmware reason=%u caller=%08X\n",reason,mem_.Read32(cpu.esp));
+                auto slot=registry_?registry_->Resolve(164).guest_data:0;
+                auto page=slot&&mem_.IsCommitted(slot,4)?mem_.Read32(slot):0;
+                std::fprintf(stderr,"LaunchDataPage=%08X\n",page);
+                if(page&&mem_.IsCommitted(page,4096)){
+                    auto path=DiagnosticString(page+8,520);
+                    std::fprintf(stderr,"Launch header type=%08X title=%08X path=%s flags=%08X\n",
+                        mem_.Read32(page),mem_.Read32(page+4),path.c_str(),mem_.Read32(page+528));
+                }
+                DumpRecent();
+                // Nonreturning firmware routine: never pretend success, never
+                // start Android apps, restart the process or clear user files.
+                throw std::runtime_error("Guest requested firmware exit/relaunch; inspect launch path and caller");
+            }
+            case 95: {
+                Check(cpu,1);std::fprintf(stderr,"KeBugCheck code=%08X caller=%08X\n",Arg(cpu,0),mem_.Read32(cpu.esp));
+                DumpRecent();throw std::runtime_error("Guest kernel bugcheck");
+            }
             case 107: {
                 Check(cpu,3);auto d=Arg(cpu,0),routine=Arg(cpu,1),context=Arg(cpu,2);
                 if(!d||d%4||!mem_.IsCommitted(d,28)||!routine||!mem_.IsCommitted(routine,1))
@@ -855,8 +922,13 @@ public:
         fault_return=0;
         std::unique_lock<std::mutex> lock(active_->lock_);
         if(active_->mem_.IsCommitted(cpu.esp,4)) fault_return=static_cast<sig_atomic_t>(active_->mem_.Read32(cpu.esp));
-        active_->Call(cpu,ordinal,lock);
-        active_->ServiceDpc(cpu,lock);
+        auto& session=*active_;
+        const auto seq=session.trace_seq_++;
+        auto& trace=session.recent_[seq%session.recent_.size()];
+        trace={seq,ordinal,cpu.thread_handle,uint32_t(fault_return),cpu.esp,cpu.eax,false};
+        session.Call(cpu,ordinal,lock);
+        if(trace.seq==seq){trace.eax=cpu.eax;trace.returned=true;}
+        session.ServiceDpc(cpu,lock);
     }
     int Run(Entry entry,X86Context& cpu,uint32_t address) {
         if(!entry || active_ || entry_) throw std::runtime_error("Invalid kernel session");

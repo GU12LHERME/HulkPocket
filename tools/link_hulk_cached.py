@@ -61,7 +61,7 @@ def main():
             header_text = (prepared / "image_symbols.h").read_text()
             named = bool(re.search(r"^#define IMAGE_NAMED 1$", header_text, re.M))
             for hook in ("Direct3D_CreateDevice", "D3DDevice_DrawVertices",
-                         "D3DDevice_DrawIndexedVertices", "D3DDevice_Swap"):
+                         "D3DDevice_DrawIndexedVertices", "D3DDevice_Swap", "XLaunchNewImageA"):
                 if not re.search(r"^#define HAS_" + hook + r" 1$", header_text, re.M):
                     continue
                 match = re.search(r"^#define SYM_" + hook + r" ([0-9A-Fa-f]{8})$", header_text, re.M)
@@ -71,7 +71,7 @@ def main():
                 if not any(len(fields := line.split()) >= 3 and fields[-2:] == ["T", name]
                            for line in symbols.splitlines()):
                     raise RuntimeError("Strong D3D8 hook not linked: " + name)
-                print("Verified D3D8 guest override:", hook, name, flush=True)
+                print("Verified guest override:", hook, name, flush=True)
             pending.replace(a.output)
         finally:
             pending.unlink(missing_ok=True)
