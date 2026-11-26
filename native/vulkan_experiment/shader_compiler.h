@@ -4,6 +4,8 @@
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
 #include <SPIRV/GlslangToSpv.h>
+#include <cstdint>
+#include <utility>
 #include <regex>
 #include <stdexcept>
 #include <string>
