@@ -150,6 +150,28 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==1&&memory->Read32(0x12580)==0x1111&&memory->Read32(0x12584)==0x2222);
     assert(memory->Read32(0x12588)==1&&memory->Read32(0x12504)==0);
     call(*c,base,cb,159,{0x12540,0,0,0,0});assert(c->eax==0&&memory->Read32(0x12544)==0);
+    // Original XDK can inline KeInitializeEvent. Exercise an actual
+    // complete header without registering it through ordinal 108.
+    constexpr uint32_t inline_event=0x125c0;
+    memory->Write32(inline_event,0x00040001);
+    memory->Write32(inline_event+4,1);
+    memory->Write32(inline_event+8,inline_event+8);
+    memory->Write32(inline_event+12,inline_event+8);
+    call(*c,base,cb,159,{inline_event,0,0,0,0});
+    assert(c->eax==0&&memory->Read32(inline_event+4)==0);
+    call(*c,base,cb,145,{inline_event,0,0});
+    assert(c->eax==0&&memory->Read32(inline_event+4)==1);
+    call(*c,base,cb,138,{inline_event});
+    assert(c->eax==1&&memory->Read32(inline_event+4)==0);
+    uint64_t poll=0;memory->Write(0x125d0,&poll,8);
+    call(*c,base,cb,159,{inline_event,0,0,0,0x125d0});
+    assert(c->eax==0x102&&memory->Read32(inline_event+4)==0);
+    // Invalid self-list must fail without fabricating a signal.
+    memory->Write32(inline_event+12,0);
+    auto saved=*c;bool rejected=false;
+    try{call(*c,base,cb,159,{inline_event,0,0,0,0x125d0});}
+    catch(const std::runtime_error&){rejected=true;*c=saved;}
+    assert(rejected&&memory->Read32(inline_event+4)==0);
     call(*c,base,cb,113,{0x12600,1});
     assert(memory->Read32(0x12600)==0x000a0009&&memory->Read32(0x12608)==0x12608);
     // Relative one-shot timer (2 ms). Pointer wait pumps the DPC.

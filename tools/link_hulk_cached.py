@@ -76,7 +76,8 @@ def main():
             header_text = (prepared / "image_symbols.h").read_text()
             named = bool(re.search(r"^#define IMAGE_NAMED 1$", header_text, re.M))
             for hook in ("Direct3D_CreateDevice", "D3DDevice_DrawVertices",
-                         "D3DDevice_DrawIndexedVertices", "D3DDevice_Swap", "D3DDevice_Clear", "XLaunchNewImageA",
+                         "D3DDevice_DrawIndexedVertices", "D3DDevice_Swap", "D3DDevice_Clear",
+                         "D3DDevice_BlockUntilVerticalBlank", "XLaunchNewImageA",
                          "XInitDevices", "XInputOpen", "XInputClose", "XInputGetState",
                          "XInputSetState", "XInputGetCapabilities",
                          "D3DDevice_SetRenderState_Simple",

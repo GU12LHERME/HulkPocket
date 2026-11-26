@@ -67,6 +67,17 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     if grep -q "D3D original viewport has zero extent" "$execution_log"; then
         python tools/report_hulk_viewport.py "$generated" "$execution_log" || true
     fi
+    if grep -q "Unsupported dispatcher pointer wait" "$execution_log"; then
+        python - "$generated" "$execution_log" <<'PY' || true
+import pathlib,re,sys
+sys.path.insert(0,"tools")
+from report_hulk_viewport import caller_context
+log=pathlib.Path(sys.argv[2]).read_text(errors="replace")
+callers={int(x,16) for x in re.findall(r"^KERNEL POINTER WAIT caller=([0-9A-Fa-f]{8})",log,re.M)}
+print("KERNEL WAIT ORIGINAL CALLER CONTEXT")
+caller_context(pathlib.Path(sys.argv[1]),set(sorted(callers)[:16]))
+PY
+    fi
     if grep -q "MISSING GUEST target=" "$execution_log"; then
         python tools/report_missing_guest.py "$xbe" "$generated" --log "$execution_log" || true
     fi

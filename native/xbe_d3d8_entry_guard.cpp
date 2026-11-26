@@ -30,6 +30,7 @@ constexpr bool Stdcall(std::string_view name){
     // A callback that did not complete its stdcall frame must still stop.
     if((id==hulkpocket::kGraphicsCreate||id==hulkpocket::kGraphicsClear)&&
         uint64_t(original_esp)+28==ctx.esp&&ctx.eax==0)return;
+    if(id==hulkpocket::kGraphicsVBlank&&uint64_t(original_esp)+4==ctx.esp&&ctx.eax==0)return;
     if(id==hulkpocket::kGraphicsBlockOnTime&&
         uint64_t(original_esp)+12==ctx.esp&&ctx.eax==0)return;
     if(id==(hulkpocket::kGraphicsDraw|0x1000u)&&
@@ -95,6 +96,9 @@ HOOK(D3DDevice_DrawIndexedVertices,hulkpocket::kGraphicsDrawIndexed)
 #endif
 #if HAS_D3DDevice_Swap
 HOOK(D3DDevice_Swap,hulkpocket::kGraphicsSwap)
+#endif
+#if HAS_D3DDevice_BlockUntilVerticalBlank
+HOOK(D3DDevice_BlockUntilVerticalBlank,hulkpocket::kGraphicsVBlank)
 #endif
 
 #if HAS_XLaunchNewImageA

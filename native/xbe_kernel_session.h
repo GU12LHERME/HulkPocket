@@ -97,7 +97,7 @@ private:
         XbeGlesBackend backend;
         XbeD3d8Bridge bridge;
         uint32_t owner;
-        unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0;
+        unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0,diagnostic_vblanks=0;
         uint32_t diagnostic_vertices=0;
         std::unique_ptr<gpu::State> diagnostic_line_profile;
         static constexpr unsigned diagnostic_draw_limit=8;
@@ -389,6 +389,15 @@ private:
         fault_ordinal=old_ordinal;fault_return=old_return;fault_stack=old_stack;
         if(status||nested.esp!=cpu.esp)throw std::runtime_error("DPC guest callback failed or violated stack ABI");
     }
+    // KeInitializeEvent may be inlined by the original XDK. Accept only
+    // complete, idle dispatcher headers, never zero-filled device storage.
+    bool InlineEvent(uint32_t body){
+        if(!body||body%4||!mem_.IsCommitted(body,16))return false;
+        const auto header=mem_.Read32(body);
+        return (header==0x00040000u||header==0x00040001u)&&
+            mem_.Read32(body+4)<=1&&mem_.Read32(body+8)==body+8&&
+            mem_.Read32(body+12)==body+8;
+    }
     bool PointerObject(uint32_t body){
         if(!body||!mem_.IsCommitted(body,16))return false;
         uint32_t header=mem_.Read32(body),type=header&255u;
@@ -398,7 +407,7 @@ private:
         if(pointer_events_.count(body))return type==pointer_events_.at(body);
         for(const auto& item:events_)if(item.second.body==body)return true;
         for(size_t i=0;i<count_;++i)if(workers_[i].pcr+0x400==body)return true;
-        return false;
+        return InlineEvent(body);
     }
     uint32_t Body(uint32_t h) {
         auto it=events_.find(h);
@@ -786,8 +795,23 @@ private:
                 Check(cpu,5);
                 if(Arg(cpu,3)&255u)throw std::runtime_error("Alertable pointer wait not implemented");
                 auto body=Arg(cpu,0);
+                const auto caller=mem_.Read32(cpu.esp);
+                std::fprintf(stderr,"KERNEL POINTER WAIT caller=%08X object=%08X reason=%08X mode=%08X alert=%08X timeout=%08X thread=%08X\n",
+                    caller,body,Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),cpu.thread_handle);
+                if(body&&mem_.IsCommitted(body,16))
+                    std::fprintf(stderr,"KERNEL WAIT HEADER %08X %08X %08X %08X\n",
+                        mem_.Read32(body),mem_.Read32(body+4),mem_.Read32(body+8),mem_.Read32(body+12));
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(live_d3d_&&live_d3d_->owner==cpu.thread_handle){
+                    const auto dev=live_d3d_->buffers.DeviceAddress();
+                    if(body>=dev&&uint64_t(body)<uint64_t(dev)+XbeD3d8DeviceMemory::device_size)
+                        std::fprintf(stderr,"KERNEL WAIT DEVICE OFFSET=%04X\n",body-dev);
+                }
+#endif
                 if(!PointerObject(body))throw std::runtime_error("Unsupported dispatcher pointer wait");
-                auto result=WaitBody(cpu,body,Arg(cpu,4),lock);Ret(cpu,5,result);return;
+                auto result=WaitBody(cpu,body,Arg(cpu,4),lock);
+                std::fprintf(stderr,"KERNEL POINTER WAIT RETURN caller=%08X status=%08X\n",caller,result);
+                Ret(cpu,5,result);return;
             }
             case kGraphicsCreate: {
                 Check(cpu,6);
@@ -952,6 +976,35 @@ private:
                 throw std::runtime_error("D3D original geometry assembled; raw raster translation pending");
 #else
                 throw std::runtime_error("D3D draw requires GLES backend");
+#endif
+            }
+            case kGraphicsVBlank: {
+                Check(cpu,0);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D vertical wait without owned live device");
+                auto& live=*live_d3d_;
+                const char* allow=std::getenv("HULK_CONTINUE_DRAW");
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_vblanks>=32)
+                    throw std::runtime_error("D3D vertical wait diagnostic continuation not enabled");
+                live.buffers.VerifyInitialTargets();
+                DrainLivePush(live);
+                live.backend.Flush();
+                // Offscreen targets have no physical scanout. Pace on a
+                // monotonic 60 Hz clock, not a fabricated hardware event.
+                constexpr int64_t period_ns=16666667;
+                auto now=Steady::now();
+                auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+                auto next=now+std::chrono::nanoseconds(period_ns-elapsed%period_ns);
+                lock.unlock();
+                std::this_thread::sleep_until(next);
+                lock.lock();
+                Pause(cpu,lock);
+                ++live.diagnostic_vblanks;
+                std::fprintf(stderr,"D3D LIVE VBLANK PASS caller=%08X (offscreen 60 Hz host pacing)\n",mem_.Read32(cpu.esp));
+                Ret(cpu,0,0);return;
+#else
+                throw std::runtime_error("D3D vertical wait requires GLES backend");
 #endif
             }
             case kGraphicsBlockOnTime: {
