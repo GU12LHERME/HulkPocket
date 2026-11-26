@@ -29,6 +29,28 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         call(*c,base,cb,258,{42});
         assert(false);
     }
+    memory->Write32(0x10800,0);memory->Write32(0x10804,0x2000);
+    call(*c,base,cb,184,{0x10800,0,0x10804,0x2000,4});
+    assert(c->eax==0);
+    auto va=memory->Read32(0x10800);
+    assert(va==0x10000000 && !memory->IsCommitted(va,1));
+    call(*c,base,cb,217,{va,0x10820});
+    assert(c->eax==0 && memory->Read32(0x10830)==0x2000);
+    memory->Write32(0x10804,0x1000);
+    call(*c,base,cb,184,{0x10800,0,0x10804,0x1000,4});
+    assert(c->eax==0 && memory->IsCommitted(va,4));
+    memory->Write32(va,0x12345678);
+    call(*c,base,cb,180,{va});
+    assert(c->eax==0x10000);
+    call(*c,base,cb,199,{0x10800,0x10804,0x4000});
+    assert(c->eax==0 && !memory->IsCommitted(va,1));
+    call(*c,base,cb,184,{0x10800,0,0x10804,0x1000,4});
+    assert(c->eax==0 && memory->Read32(va)==0);
+    memory->Write32(0x10804,0);
+    call(*c,base,cb,199,{0x10800,0x10804,0x8000});
+    assert(c->eax==0 && !memory->IsCommitted(va,1));
+    call(*c,base,cb,217,{va,0x10820});
+    assert(c->eax==0 && memory->Read32(0x10830)==0x10000);
     memory->Write(0x10300,"Hulk",5);
     memory->Write(0x10310,"hULK",5);
     call(*c,base,cb,289,{0x10400,0x10300});

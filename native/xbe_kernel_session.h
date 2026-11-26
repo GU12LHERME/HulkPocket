@@ -5,6 +5,7 @@
 #include "hulk_kernel_clock.h"
 #include "xbe_guest_thread_exit.h"
 #include "xbe_kernel_rtl.h"
+#include "xbe_kernel_virtual_memory.h"
 #include <map>
 #include <chrono>
 #include <array>
@@ -27,6 +28,7 @@ private:
     };
     XboxGuestAddressSpace& mem_;
     XbeKernelPool pool_;
+    XbeVirtualMemory virtual_;
     XbeTlsTemplate tls_;
     const HulkKernelClock* clock_;
     std::mutex lock_;
@@ -177,8 +179,11 @@ private:
         if(!me) throw std::runtime_error("Missing current thread");
         if(ordinal==277) {
             ++critical_[addr];
-            cv_.wait(lock,[&]{auto owner=mem_.Read32(addr+24);return stopping_ || !owner || owner==me;});
-            --critical_[addr]; Pause(cpu,lock);
+            do {
+                cv_.wait(lock,[&]{auto owner=mem_.Read32(addr+24);return stopping_ || !owner || owner==me;});
+                Pause(cpu,lock);
+            } while(mem_.Read32(addr+24) && mem_.Read32(addr+24)!=me);
+            --critical_[addr];
             mem_.Write32(addr+24,me);
             mem_.Write32(addr+20,mem_.Read32(addr+20)+1);
         } else {
@@ -195,6 +200,25 @@ private:
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case 184: case 199: {
+                unsigned n=ordinal==184?5:3;Check(cpu,n);
+                auto bp=Arg(cpu,0), sp=Arg(cpu,ordinal==184?2:1);
+                if(!mem_.IsCommitted(bp,4)||!mem_.IsCommitted(sp,4)||bp==sp) {
+                    Ret(cpu,n,0xc000000du);return;
+                }
+                uint32_t b=mem_.Read32(bp), z=mem_.Read32(sp);
+                // Do not accept guest pointers inside the allocation being released.
+                if(ordinal==199 && b>=0x10000000 && b<0x30000000 &&
+                   ((bp>=0x10000000 && bp<0x30000000)||(sp>=0x10000000 && sp<0x30000000)))
+                    throw std::runtime_error("Virtual free output inside virtual arena");
+                auto status=ordinal==184?
+                    (Arg(cpu,1)?0xc000000du:virtual_.Allocate(b,z,Arg(cpu,3),Arg(cpu,4))):
+                    virtual_.Free(b,z,Arg(cpu,2));
+                if(!status){mem_.Write32(bp,b);mem_.Write32(sp,z);}
+                Ret(cpu,n,status);return;
+            }
+            case 217: Check(cpu,2);Ret(cpu,2,virtual_.Query(Arg(cpu,0),Arg(cpu,1)));return;
+            case 180: Check(cpu,1);Ret(cpu,1,virtual_.AllocationSize(Arg(cpu,0)));return;
             case 291: case 277: case 294: Critical(cpu,ordinal,lock); return;
             case 289: Check(cpu,2); InitGuestAnsiString(mem_,Arg(cpu,0),Arg(cpu,1)); Ret(cpu,2,0); return;
             case 270: case 279: {
@@ -297,7 +321,7 @@ private:
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
                      XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr)
-        :mem_(mem),pool_(mem,base,size),tls_(tls),clock_(clock) {}
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),tls_(tls),clock_(clock) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

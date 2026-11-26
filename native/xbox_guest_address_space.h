@@ -16,6 +16,7 @@ public:
     XboxGuestAddressSpace(const XboxGuestAddressSpace&) = delete;
     XboxGuestAddressSpace& operator=(const XboxGuestAddressSpace&) = delete;
 
+    void Decommit(std::uint32_t guest_address, std::size_t bytes);
     void Commit(std::uint32_t guest_address, std::size_t bytes);
     void Read(std::uint32_t guest_address, void* destination, std::size_t bytes) const;
     void Write(std::uint32_t guest_address, const void* source, std::size_t bytes);

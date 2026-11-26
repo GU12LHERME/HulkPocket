@@ -67,6 +67,21 @@ void XboxGuestAddressSpace::Commit(
         committed_[static_cast<std::size_t>(i)] = 1;
 }
 
+void XboxGuestAddressSpace::Decommit(
+    std::uint32_t guest_address, std::size_t bytes) {
+    Validate(guest_address, bytes);
+    if (!bytes) return;
+    if (guest_address % page_ || bytes % page_)
+        throw std::invalid_argument("Unaligned guest decommit");
+    // Replace with fresh inaccessible anonymous pages: recommit must read zero.
+    void* ptr = mmap(base_ + guest_address, bytes, PROT_NONE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED | MAP_NORESERVE, -1, 0);
+    if (ptr == MAP_FAILED)
+        throw std::runtime_error("failed to decommit Xbox guest pages");
+    const auto first = guest_address / page_;
+    for (size_t i=0; i<bytes/page_; ++i) committed_[first+i]=0;
+}
+
 void XboxGuestAddressSpace::Read(
     std::uint32_t guest_address, void* destination, std::size_t bytes) const {
     Validate(guest_address, bytes);
