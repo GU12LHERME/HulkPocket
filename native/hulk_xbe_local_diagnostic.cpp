@@ -39,6 +39,13 @@ int main(int argc,char** argv) {
                   << ", entry=0x" << loaded.entry
                   << ", kernel_thunk=0x" << loaded.kernel_thunk
                   << std::dec << ", sections=" << loaded.sections << '\n';
+        std::cout << "Startup requirements (uninitialized): tls=0x"
+                  << std::uppercase << std::hex << loaded.tls_va
+                  << ", stack_commit=0x" << loaded.stack_commit
+                  << ", heap_reserve=0x" << loaded.heap_reserve
+                  << ", heap_commit=0x" << loaded.heap_commit
+                  << ", init_flags=0x" << loaded.init_flags
+                  << std::dec << '\n';
         if(imports_requested) {
             const auto imports=hulkpocket::ScanXbeKernelImports(loaded,guest);
             if(!imports.complete) {
