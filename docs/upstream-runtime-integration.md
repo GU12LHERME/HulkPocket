@@ -1,0 +1,12 @@
+# Parallel upstream runtime integration
+
+Baseline: 5bd5f1d763edac2e1d3f0abd037b878f1abece9b on experiment-xbe-recomp-android. This independent branch does not replace the tested GLES diagnostic or change the user's original files. Keep incremental RP6 validation on the original branch. Do not merge without device evidence.
+
+Pinned MIT sources:
+- Hulk Recompiled PC: lookingcoding/hulk-ultimate-destruction-recomp-xbox-ver- @ 6603e8a4021a06331f63310ce47b42315d9dbfc6. USA config entry 0x20A016, title 0x56550039, XDK 5849, matches the current observed addresses for CreateDevice, Swap, DrawVertices, XInitDevices. The local recompiler already consumes the upstream config; do not count this as new integration. Refer to title-specific fibers, Bink, RCF and hooks. Do not assume equal title IDs guarantee byte-identical executables.
+- BLACK Android: RanggaCasper/Black-Android @ 8e9c6fc7d570503ea68d039cff16c09339ee6d30. MIT notice retained. Its CMake pins SDK 99078b119b5d5e0d1d6afb1390e29437c0c984c0. Its Vulkan backend depends on SDL3, glslang and game/host APIs. Extracted only the HLSL adaptation routine from native/vk_shader.cpp for independent compatibility testing, no renderer or caching imported.
+- SCDA Android: mogeldev/SCDA-XBERecomp-android @ a81808004c397cbee282031933cdda2972ffad4e. MIT notice retained. Imported src/android/texture_stages.h unchanged, only used in the test. The upstream renderer's Copy and Present signatures differ from the local Backend, and it has title-specific features. Do not copy wholesale.
+
+First gate: generate real fixed-function HLSL using current HulkPocket shader generator, adapt via BLACK and compile/validate SPIR-V for Vulkan 1.1; test the SCDA texture-stage mask against current State. This is a host-only shader compatibility probe, not a Vulkan renderer or native game frame. CI pending. If a compiler or validator rejects the generated code, preserve the failure and correct the incompatibility rather than disabling validation.
+
+Next gates: audit SDK/ABI and memory ownership, prototype Android Vulkan backend with actual offscreen output and original geometry, integrate D3D resource/state handling, then real input, audio, filesystem/saves, fibers and video. Keep existing GLES as reference until a real device test justifies changing renderer. Require actual title screen, tutorial and gameplay, control, audio, save/load and visual/performance tests on RP6 before merging or claiming playability. No original assets or generated game code in CI.

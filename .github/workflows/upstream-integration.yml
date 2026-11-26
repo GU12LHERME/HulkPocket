@@ -1,0 +1,38 @@
+name: Upstream Android runtime integration probe
+on:
+  push:
+    branches: [experiment-upstream-runtime-integration]
+    paths:
+      - 'third_party/black-android/**'
+      - 'third_party/scda-android/**'
+      - 'third_party/xboxxberecomp/gpu/**'
+      - 'native/test_upstream_shader_adapter.cpp'
+      - '.github/workflows/upstream-integration.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shader-probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install SPIR-V tools
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools spirv-tools
+      - name: Generate shaders with HulkPocket and upstream adapters
+        run: |
+          mkdir -p /tmp/hulk-shaders
+          g++ -std=c++20 -O2 -Ithird_party/xboxxberecomp -Ithird_party/black-android -Ithird_party/scda-android native/test_upstream_shader_adapter.cpp third_party/black-android/hlsl_adapter.cpp third_party/xboxxberecomp/gpu/shaders.cpp -o /tmp/hulk-adapter
+          /tmp/hulk-adapter /tmp/hulk-shaders
+      - name: Compile and validate SPIR-V
+        run: |
+          set -eu
+          for shader in /tmp/hulk-shaders/*.hlsl; do
+            case "$shader" in *.vert.hlsl) stage=vert;; *) stage=frag;; esac
+            glslangValidator -D -V --target-env vulkan1.1 --hlsl-iomap --auto-map-bindings --auto-map-locations --shift-texture-binding "$stage" 2 --shift-sampler-binding "$stage" 6 -S "$stage" -e main "$shader" -o "$shader.spv"
+            spirv-val --target-env vulkan1.1 "$shader.spv"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upstream-shader-probe
+          path: /tmp/hulk-shaders/
