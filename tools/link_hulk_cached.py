@@ -35,7 +35,7 @@ def main():
         if not all(o.is_file() for o in objects):
             raise RuntimeError("Matching complete cache not found; no recompilation attempted")
         print(f"Reusing {len(objects)} cached objects", flush=True)
-        for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime"):
+        for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe"):
             obj = work / (name + ".o")
             subprocess.run([str(compiler), "-std=c++20", "-O2", "-fPIC",
                             "-I", str(prepared), "-I", str(root / "native"),
@@ -53,7 +53,7 @@ def main():
                 raise RuntimeError("Unexpected ELF architecture")
             symbols = subprocess.check_output([str(a.ndk_bin / "llvm-nm"), "-D", "--defined-only", str(pending)], text=True)
             names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
-            for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint"):
+            for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint", "hulk_entry_probe"):
                 if name not in names:
                     raise RuntimeError("Missing export: " + name)
             pending.replace(a.output)
