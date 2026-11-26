@@ -1,4 +1,5 @@
 #include "xbe_image_memory_loader.h"
+#include "xbe_kernel_imports.h"
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
@@ -61,6 +62,23 @@ int main() {
     if(memory.IsCommitted(0x11000,4) ||
        !memory.IsCommitted(0x12000,0x1000))
         return 3;
+    // Imported Xbox kernel APIs are encoded as 0x80000000|ordinal
+    // and zero terminated in the original XBE before relocation.
+    memory.Write32(0x13000,0x80000011u);
+    memory.Write32(0x13004,0x80000025u);
+    memory.Write32(0x13008,0x80000011u);
+    memory.Write32(0x1300C,0);
+    auto imports = ScanXbeKernelImports(loaded,memory);
+    if(!imports.complete || imports.entries!=3 ||
+       imports.ordinals!=std::vector<std::uint32_t>({17,37}) ||
+       !imports.error.empty()) return 20;
+    if(ScanXbeKernelImports(loaded,memory,2).complete) return 21;
+    memory.Write32(0x13004,0xFE000044u);
+    if(ScanXbeKernelImports(loaded,memory).complete) return 22;
+    memory.Write32(0x13004,0x800003FFu);
+    if(ScanXbeKernelImports(loaded,memory).complete) return 23;
+    memory.Write32(0x13004,0x80000025u);
+
     {
         auto bad=image;
         Store(bad,0x240+12,0xFFFF);
