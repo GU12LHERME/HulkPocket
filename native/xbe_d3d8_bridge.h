@@ -398,6 +398,25 @@ public:
     // resource, matrices, viewport and blend/alpha/depth parameters.
     // This is an offscreen diagnostic replay, not general NV2A draw
     // translation: culling, multisampling and raw clip state are pending.
+    // Preserve all observed raster and sampler words when extending the
+    // reduced replay. Resource addresses and dimensions may vary; each
+    // resource is independently validated by SyncFixedDiffuseShader.
+    static bool SameDiagnosticTextureProfile(const gpu::State& a,const gpu::State& b){
+        if(a.rs!=b.rs||a.tss!=b.tss||a.vs_handle!=b.vs_handle||a.vs||b.vs||a.ps||b.ps||
+           !a.textures[0]||!b.textures[0]||a.palettes!=b.palettes||
+           a.rt.header!=b.rt.header||a.zs.header!=b.zs.header||
+           a.base_vertex!=b.base_vertex||a.scissor_count!=b.scissor_count||
+           a.scissors!=b.scissors||a.viewport.x!=b.viewport.x||a.viewport.y!=b.viewport.y||
+           a.viewport.w!=b.viewport.w||a.viewport.h!=b.viewport.h||
+           a.viewport.min_z!=b.viewport.min_z||a.viewport.max_z!=b.viewport.max_z||
+           a.ss_offset_x!=b.ss_offset_x||a.ss_offset_y!=b.ss_offset_y)return false;
+        for(unsigned i=1;i<4;++i)if(a.textures[i]||b.textures[i])return false;
+        for(size_t i=0;i<a.simple.size();++i){
+            if(i==(0x1b00>>2)||i==(0x1b04>>2))continue;
+            if(a.simple[i]!=b.simple[i])return false;
+        }
+        return true;
+    }
     void ReplayTexturedQuadDiagnostic(uint32_t start,uint32_t count){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!initialized_||state_.vs_handle!=0x142||state_.vs||state_.ps||

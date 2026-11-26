@@ -101,7 +101,8 @@ private:
         unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0,diagnostic_vblanks=0;
         uint32_t diagnostic_vertices=0;
         unsigned diagnostic_swap_returns=0,draws_at_swap=0;
-        std::unique_ptr<gpu::State> diagnostic_line_profile;
+        std::unique_ptr<gpu::State> diagnostic_line_profile,diagnostic_texture_profile;
+        unsigned diagnostic_texture_returns=0;
         uint64_t last_frame_hash=0;
         unsigned identical_frames=0;
         static constexpr unsigned diagnostic_draw_limit=kDiagnosticDrawsPerFrame;
@@ -929,6 +930,11 @@ private:
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=Arg(cpu,1),count=Arg(cpu,2);
                 if(!indexed&&caller==0x0031c10f&&Arg(cpu,0)==6&&fvf==0x142&&start==0&&count==4){
+                    if(frame_draws>=LiveD3dDevice::diagnostic_draw_limit)
+                        throw std::runtime_error("Textured diagnostic draw budget reached");
+                    if(live.diagnostic_texture_profile&&
+                       !XbeD3d8Bridge::SameDiagnosticTextureProfile(*live.diagnostic_texture_profile,synced))
+                        throw std::runtime_error("Original textured draw raster profile changed");
                     gpu::ScopedGuestMemory scope(mem_);
                     gpu::TextureDesc desc{};
                     if(!gpu::DescribeSurface(synced.rt,desc))
@@ -946,20 +952,32 @@ private:
                     std::fprintf(stderr,"D3D ORIGINAL TEXTURED QUAD REPLAY: vertices=%u changed_pixels=%u (reduced state; not presented)\n",vertices,changed);
                     if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path)
                         WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
-                    // Capture the first actual textured output before allowing
-                    // guest continuation: raw clip/cull/MSAA are still pending.
+                    // b4edddb on RP6 produced recognizable copyright text
+                    // (7335 changed pixels). Permit only this checked reduced
+                    // profile, with opt-in and the existing frame budgets.
+                    if(opted_in&&(!live.diagnostic_texture_returns?changed!=0:true)){
+                        if(!live.diagnostic_texture_profile)
+                            live.diagnostic_texture_profile=std::make_unique<gpu::State>(synced);
+                        ++live.diagnostic_texture_returns;
+                        ++live.diagnostic_draw_returns;
+                        live.diagnostic_vertices+=vertices;
+                        std::fprintf(stderr,"D3D DIAGNOSTIC TEXTURED DRAW RETURN: frame=%u batch=%u/%u total_textured=%u changed_pixels=%u (reduced profile)\n",
+                            live.diagnostic_swap_returns+1,frame_draws+1,LiveD3dDevice::diagnostic_draw_limit,
+                            live.diagnostic_texture_returns,changed);
+                        Ret(cpu,3,0);return;
+                    }
                     throw std::runtime_error("D3D original textured quad replay completed; inspect bitmap");
                 }
                 const bool same_caller=caller==0x0031c10f&&!indexed&&Arg(cpu,0)==2&&
                     start==0&&count>0&&count<=1020&&count%2==0;
-                const bool first=!live.diagnostic_draw_returns;
+                const bool first=!live.diagnostic_line_profile;
                 const bool matching=first?count==1020:
                     live.diagnostic_line_profile&&XbeD3d8Bridge::SameDiagnosticLineProfile(*live.diagnostic_line_profile,synced);
                 // Preserve the original single diagnostic replay by default;
                 // continuing multiple draws requires the explicit opt-in,
                 // same observed raster/transform profile and bounded count.
-                if(!indexed&&Arg(cpu,0)==2&&(first||(opted_in&&!zero_viewport&&
-                    same_caller&&matching&&frame_draws<LiveD3dDevice::diagnostic_draw_limit))){
+                if(!indexed&&Arg(cpu,0)==2&&frame_draws<LiveD3dDevice::diagnostic_draw_limit&&
+                    (first||(opted_in&&!zero_viewport&&same_caller&&matching))){
                         gpu::ScopedGuestMemory scope(mem_);
                         gpu::TextureDesc desc{};
                         if(!gpu::DescribeSurface(synced.rt,desc))

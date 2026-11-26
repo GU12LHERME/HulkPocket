@@ -399,10 +399,35 @@ int main(){
         assert((backend.ReadPixel(8,8)==std::array<uint8_t,4>{255,0,0,255}));
         assert((backend.ReadPixel(56,56)==std::array<uint8_t,4>{255,255,255,255}));
         assert(bridge.Snapshot().tss[0][gpu::kTssColorArg1]==0);
+        const auto first_profile=bridge.Snapshot();
+        auto next_profile=first_profile;
+        next_profile.textures[0]=0x10420;
+        next_profile.simple[0x1b00>>2]=0x107000;
+        next_profile.transforms[256][12]=.25f;
+        assert(XbeD3d8Bridge::SameDiagnosticTextureProfile(first_profile,next_profile));
+        next_profile.tss[0][gpu::kTssMagFilter]=1;
+        assert(!XbeD3d8Bridge::SameDiagnosticTextureProfile(first_profile,next_profile));
+        next_profile=first_profile;
+        next_profile.simple[gpu::kMBlendEnable>>2]^=1;
+        assert(!XbeD3d8Bridge::SameDiagnosticTextureProfile(first_profile,next_profile));
+        next_profile=first_profile;next_profile.textures[1]=0x10420;
+        assert(!XbeD3d8Bridge::SameDiagnosticTextureProfile(first_profile,next_profile));
+        // Actual second draw: replace the texture at a different guest
+        // physical address and verify that the new texels are sampled.
+        mem.Write32(0x10404,0x107000);
+        const uint32_t green[]={0xff00ff00,0xff00ff00,0xff00ff00,0xff00ff00};
+        mem.Write(0x80107000,green,sizeof(green));
+        const uint32_t second_push[]={0x1b00|(2u<<18),0x107000,0x01110621};
+        mem.Write(0x11800,second_push,sizeof(second_push));
+        bridge.ApplyPush(0x11800,0x11800+sizeof(second_push));
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x142);
+        assert(XbeD3d8Bridge::SameDiagnosticTextureProfile(first_profile,bridge.Snapshot()));
+        bridge.ReplayTexturedQuadDiagnostic(0,4);
+        assert((backend.ReadPixel(8,8)==std::array<uint8_t,4>{0,255,0,255}));
         bool guarded=false;
         try{call("D3DDevice_DrawVertices",{6,0,4});}catch(const std::logic_error&){guarded=true;}
         assert(guarded);
-        mem.Write32(0x10404,0x107000);
+        mem.Write32(0x10404,0x106000);
         bool mismatch=false;
         try{bridge.SyncFixedDiffuseShader(dev);}catch(const std::logic_error&){mismatch=true;}
         assert(mismatch);
