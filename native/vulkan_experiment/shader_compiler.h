@@ -14,6 +14,11 @@ namespace hulkpocket::vkexp {
 inline std::string ForGlslang(std::string s){
     for(size_t p;(p=s.find("1.#INF"))!=std::string::npos;)
         s.replace(p,6,"asfloat(0x7F800000)");
+    // Xbox matrices are stored row-major and multiplied as row vectors.
+    for(const std::string name:{"wvp","wv","wvn","tm[4]"}){
+        const std::string old="float4x4 "+name+";";
+        auto at=s.find(old);if(at!=std::string::npos)s.insert(at,"row_major ");
+    }
     static const std::regex attr(R"((float4|int4|uint) v(\d+) : ATTR\d+;)");
     s=std::regex_replace(s,attr,"[[vk::location($2)]] $1 v$2 : ATTR$2;");
     // Separate stage compilation can remove unused varyings. Keep the

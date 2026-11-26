@@ -8,6 +8,7 @@
 #include "guest_resources.h"
 #include "vertex_plan.h"
 #include "runtime_shaders.h"
+#include "draw_constants.h"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -40,7 +41,7 @@ struct Fixture{
     std::array<uint32_t,4> tex_width{},tex_height{};
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
-    VkRenderPass pass{};VkFramebuffer fb{};VkSampler sampler{};
+    VkRenderPass pass{},load_pass{};bool frame_valid=false;VkFramebuffer fb{};VkSampler sampler{};
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
     VkDescriptorPool descriptors{};VkDescriptorSet set{};
     VkShaderModule vs{},fs{};VkPipeline pipeline{};
@@ -56,6 +57,7 @@ struct Fixture{
             if(set_layout)vkDestroyDescriptorSetLayout(dev,set_layout,nullptr);
             if(sampler)vkDestroySampler(dev,sampler,nullptr);
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
+            if(load_pass)vkDestroyRenderPass(dev,load_pass,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
             Destroy(target);for(auto& t:textures)Destroy(t);Destroy(depth);
             Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);Destroy(staging);
@@ -199,13 +201,17 @@ struct Fixture{
         VkSubpassDescription sp{};sp.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;sp.colorAttachmentCount=1;sp.pColorAttachments=&ar;sp.pDepthStencilAttachment=&zr;
         VkSubpassDependency deps[2]{};
         deps[0].srcSubpass=VK_SUBPASS_EXTERNAL;deps[0].dstSubpass=0;
-        deps[0].srcStageMask=VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;deps[0].dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        deps[0].srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;deps[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        deps[0].srcStageMask=VK_PIPELINE_STAGE_TRANSFER_BIT|VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;deps[0].dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT|VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        deps[0].srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;deps[0].dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         deps[1].srcSubpass=0;deps[1].dstSubpass=VK_SUBPASS_EXTERNAL;
         deps[1].srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;deps[1].dstStageMask=VK_PIPELINE_STAGE_TRANSFER_BIT;
         deps[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;deps[1].dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
         VkRenderPassCreateInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};rp.attachmentCount=2;rp.pAttachments=attachments;rp.subpassCount=1;rp.pSubpasses=&sp;rp.dependencyCount=2;rp.pDependencies=deps;
         Check(vkCreateRenderPass(dev,&rp,nullptr,&pass),"render pass");
+        attachments[0].loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;attachments[0].initialLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        attachments[1].loadOp=attachments[1].stencilLoadOp=VK_ATTACHMENT_LOAD_OP_LOAD;
+        attachments[1].initialLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        Check(vkCreateRenderPass(dev,&rp,nullptr,&load_pass),"preserving render pass");
         VkImageView views[]={target.view,depth.view};
         VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fi.renderPass=pass;fi.attachmentCount=2;fi.pAttachments=views;fi.width=W;fi.height=H;fi.layers=1;
         Check(vkCreateFramebuffer(dev,&fi,nullptr,&fb),"framebuffer");
@@ -318,7 +324,8 @@ struct Fixture{
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
     }
-    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false){
+    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false,bool preserve=false){
+        if(preserve&&!frame_valid)throw std::logic_error("Cannot preserve an uninitialized framebuffer");
         hulkpocket::vkexp::VertexPlan plan;
         if(guest){
             // Current precompiled shaders require exactly these register sets.
@@ -356,6 +363,7 @@ struct Fixture{
         dc.mat[4][0]=8;dc.lt[0][0][2]=1;dc.lt[0][4][2]=-1; // directional -Z
         if(dynamic){
             if(!state||state->rs[gpu::kRsLighting])throw std::invalid_argument("Dynamic lighting constants not integrated");
+            hulkpocket::vkexp::FixedTransforms(*state,dc);
             if(state->simple[gpu::kMAlphaTestEnable/4]){
                 auto fn=state->simple[gpu::kMAlphaFunc/4];
                 if(fn<0x200||fn>0x207)throw std::invalid_argument("Invalid Xbox alpha function");
@@ -369,7 +377,7 @@ struct Fixture{
         std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
         Begin();
         VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};
-        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=2;ri.pClearValues=clear;
+        VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=preserve?load_pass:pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=preserve?0:2;ri.pClearValues=preserve?nullptr:clear;
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
@@ -393,7 +401,7 @@ struct Fixture{
         VkBufferMemoryBarrier b{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
         b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.buffer=readback.b;b.size=VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&b,0,nullptr);
-        Submit();
+        Submit();frame_valid=true;
     }
 };
 void Expect(const char* label,std::array<uint8_t,4> got,std::array<int,4> want){
@@ -481,6 +489,7 @@ int main(int argc,char** argv){
         const Compact compact[]={{-.75f,-.75f,.5f,0x80ff00ff},{.75f,-.75f,.5f,0x80ff00ff},{0,.75f,.5f,0x80ff00ff}};
         memory.Write(0x80100100,compact,sizeof(compact));
         guest_state.vs_handle=0x42;guest_state.streams[0].stride=sizeof(Compact);
+        for(unsigned slot:{2u,3u,256u,16u,17u,18u,19u})for(unsigned i=0;i<4;++i)guest_state.transforms[slot][i*5]=1;
         guest_state.tss[0][kTssColorOp]=guest_state.tss[0][kTssAlphaOp]=1;
         if(!hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0,assembled))
             throw std::runtime_error("Compact guest declaration failed");
@@ -500,6 +509,24 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("runtime alpha threshold update",f.Pixel(32,32),{255,0,255,128});
         if(f.shaders.Compiled()!=before+3)throw std::runtime_error("Uniform change recompiled shader");
+        // Separate submissions, changed guest matrix and geometry, same color
+        // and depth attachments. Verify preservation and explicit reset.
+        guest_state.simple[kMAlphaTestEnable/4]=0;
+        guest_state.rs[kRsZEnable]=1;guest_state.simple[kMZFunc/4]=0x201;
+        guest_state.simple[kMZWriteEnable/4]=1;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Compact next[3];std::memcpy(next,compact,sizeof(next));
+        for(auto& v:next){v.z=.75f;v.rgba=0xff00ff00;}
+        memory.Write(0x80100100,next,sizeof(next));
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true,true);
+        Expect("depth retained across submissions",f.Pixel(32,32),{255,0,255,128});
+        guest_state.transforms[256][12]=.9f;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true,true);
+        Expect("color retained across submissions",f.Pixel(32,32),{255,0,255,128});
+        Expect("guest world translation",f.Pixel(52,32),{0,255,0,255});
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("explicit new frame clears old color",f.Pixel(32,32),{0,0,0,255});
+        Expect("translated geometry on new frame",f.Pixel(52,32),{0,255,0,255});
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");
