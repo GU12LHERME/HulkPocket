@@ -1,0 +1,5 @@
+# Title image: logical XBE section residency
+
+RP6 df0b7fd: TitleMeta.xbx reopened, TitleImage.xbx created successfully. Both reports stop at ordinal 327, caller 0020C9AE, before D3D initialization. No new bitmap, no DSP validation in this run. The ordinal is XeLoadSection (one section-header argument); XeUnloadSection 328 is its counterpart (pinned XboxXBERecomp 767a818 runtime/kernel/xboxkrnl.cpp and boot.cpp).
+
+Existing loader already eagerly copies and zero-fills all original sections. Add a registry constructed from the validated original XBE file and compare each requested header against immutable original geometry. Initialize preload reference counts from flag 2, increment/decrement actual guest header +0x18, reject unregistered headers, changed descriptors, overflow/underflow and uncommitted data. Keep bytes resident even on unload to preserve current eager-loading model: no physical eviction, shared-page accounting or reload/reset semantics are implemented. No arbitrary allocation or memory mapping. Synthetic loader test checks counts, unchanged payload and malformed requests. Real RP6 verification and CI pending.

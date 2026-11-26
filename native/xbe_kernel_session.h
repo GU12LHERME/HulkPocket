@@ -13,6 +13,7 @@
 #include "xbe_fault_diagnostic.h"
 #include "xbe_graphics_boundary.h"
 #include "hulk_sound.h"
+#include "xbe_resident_sections.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
 #include "xbe_d3d8_default_trace.h"
@@ -53,6 +54,7 @@ private:
     XbeTlsTemplate tls_;
     const HulkKernelClock* clock_;
     const HulkKernelDataRegistry* registry_;
+    XbeResidentSections* sections_;
     std::mutex lock_;
     std::condition_variable cv_;
     std::array<Worker,16> workers_{};
@@ -1466,6 +1468,11 @@ private:
                 if(!size)size=pool_.AllocationSize(addr);
                 Ret(cpu,1,size?size:virtual_.AllocationSize(addr));return;
             }
+            case 327: case 328: {
+                Check(cpu,1);
+                if(!sections_)throw std::runtime_error("Xe section registry unavailable");
+                Ret(cpu,1,sections_->Change(Arg(cpu,0),ordinal==327));return;
+            }
             case 335: Check(cpu,1); XbeKernelCrypto(mem_).Init(Arg(cpu,0)); Ret(cpu,1,0);return;
             case 336: Check(cpu,3); XbeKernelCrypto(mem_).Update(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)); Ret(cpu,3,0);return;
             case 337: Check(cpu,2); XbeKernelCrypto(mem_).Final(Arg(cpu,0),Arg(cpu,1)); Ret(cpu,2,0);return;
@@ -1776,8 +1783,8 @@ private:
     }
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
-                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0,const std::string& partition1={})
-        :mem_(mem),pool_(mem,base,size),sound_(mem,pool_),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root,partition1),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
+                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0,const std::string& partition1={},XbeResidentSections* sections=nullptr)
+        :mem_(mem),pool_(mem,base,size),sound_(mem,pool_),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root,partition1),tls_(tls),clock_(clock),registry_(registry),sections_(sections),image_pages_(image_pages) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

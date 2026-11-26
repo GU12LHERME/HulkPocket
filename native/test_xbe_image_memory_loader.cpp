@@ -1,4 +1,5 @@
 #include "xbe_image_memory_loader.h"
+#include "xbe_resident_sections.h"
 #include "xbe_kernel_imports.h"
 #include <cstdint>
 #include <cstdio>
@@ -30,6 +31,7 @@ std::vector<std::uint8_t> MakeXbe() {
     Store(image,0x124,0x12345678u);
     Store(image,0x188,0x56550039);
     // 56-byte section table entry #0.
+    Store(image,0x240,6); // executable + preloaded
     Store(image,0x240+4,0x12000);
     Store(image,0x240+8,0x1000);
     Store(image,0x240+12,0x600);
@@ -70,6 +72,22 @@ int main() {
     if(memory.IsCommitted(0x11000,4) ||
        !memory.IsCommitted(0x12000,0x1000))
         return 3;
+    XbeResidentSections sections(memory,loaded,image);
+    if(memory.Read32(0x10258)!=1||memory.Read32(0x10290)!=0)return 30;
+    if(sections.Change(0x10278,true)||memory.Read32(0x10290)!=1||
+       memory.Read32(0x13000)!=0xA3A2A1A0)return 31;
+    if(sections.Change(0x10278,true)||memory.Read32(0x10290)!=2)return 32;
+    if(sections.Change(0x10278,false)||sections.Change(0x10278,false)||
+       memory.Read32(0x10290)!=0||!memory.IsCommitted(0x13000,0x1000))return 33;
+    if(sections.Change(0x10278,false)!=0xc000000du||
+       sections.Change(0x1027c,true)!=0xc000000du)return 34;
+    memory.Write32(0x1027c,0x14000);
+    if(sections.Change(0x10278,true)!=0xc000000du)return 35;
+    memory.Write32(0x1027c,0x13000);
+    memory.Write32(0x10290,0xffffffffu);
+    if(sections.Change(0x10278,true)!=0xc000000du)return 36;
+    memory.Write32(0x10290,0);
+    if(sections.Change(0x10240,true)||memory.Read32(0x10258)!=2)return 37;
     // Imported Xbox kernel APIs are encoded as 0x80000000|ordinal
     // and zero terminated in the original XBE before relocation.
     memory.Write32(0x13000,0x80000011u);
