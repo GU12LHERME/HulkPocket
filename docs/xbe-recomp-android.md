@@ -674,3 +674,39 @@ still **only small synthetic exercises**. The actual Hulk image,
 kernel imports, exception continuations, Direct3D, XAudio and
 fully correct Xbox kernel thread initialization are not yet
 executed or validated. Do not label this a playable port.
+
+## Green CI checkpoint — actual ARM64 CPU, memory and function-call test set
+
+[GitHub Actions run 45727406612](https://github.com/GU12LHERME/HulkPocket/actions/runs/45727406612)
+**passed all jobs** after addressing two test harness issues:
+host SDK `__declspec` definitions (replaced by the portable host ABI),
+and GCC/Clang `X86_LOAD_FLAGS` unused variables from legal generated
+C++. The x86 CALL/RET test was corrected to expect the guest stack
+pointer to advance four bytes after the final top-level RET.
+
+The verified test coverage now includes:
+
+- Portable CPUID / virtual TSC / kernel ordinal dispatch, fail-closed
+  tracing and exception continuation under QEMU ARM64
+- Official XBE-to-C++ static recompilation of synthetic IA-32
+  `mov eax, immediate; ret`, executed on AArch64 QEMU
+- Original x86 guest memory `mov` / arithmetic / `mov` / `ret`
+  translated and executed natively against reserved 4 GiB Xbox
+  virtual memory; register AND write-back value verified
+- Original x86 CALL into a second function, RET to the caller,
+  and top-level RET, confirming EAX output and guest ESP semantics
+- Android NDK cross-compiled CLI binaries for each original
+  instruction profile; **none of these extra two profiles have
+  been run on physical Retroid Pocket 6 hardware yet**
+
+The CI published the following asset-free artifacts:
+[register smoke](https://github.com/GU12LHERME/HulkPocket/actions/runs/45727406612/artifacts/15074708698),
+[memory smoke](https://github.com/GU12LHERME/HulkPocket/actions/runs/45727406612/artifacts/15074778273),
+[CALL/RET smoke](https://github.com/GU12LHERME/HulkPocket/actions/runs/45727406612/artifacts/15074952849),
+[portable runtime](https://github.com/GU12LHERME/HulkPocket/actions/runs/45727406612/artifacts/15074808281).
+Artifacts expire per GitHub's configured retention.
+
+**This checkpoint does NOT execute any commercial Hulk code.**
+The original game still needs private EU/USA XBE verification,
+actual game-function recompilation, full kernel/thread APIs, game
+hooks, graphics/audio/controller ports and RP6 gameplay profiling.
