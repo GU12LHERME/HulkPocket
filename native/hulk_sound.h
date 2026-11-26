@@ -34,13 +34,17 @@ private:
         uint32_t Frames(uint32_t n)const{return tag==0x69?n/align*64:n/align;}
         uint32_t Bytes(uint32_t n)const{return tag==0x69?n/64*align:n*align;}
     };
-    // Xbox speaker mix bins 0/1 (front), 2 (centre), 4/5 (rear).
-    // Stereo diagnostics fold centre/rear at -3 dB. Subwoofer,
-    // crosstalk and DSP sends are not implemented and remain explicit errors.
+    // Xbox XDK 5849: up to eight routing slots for a hardware voice,
+    // 32 mix bins. Preserve slot order (stereo source alternates channels).
     struct Routing {
-        uint32_t mask=0;
-        std::array<float,6> gains{{1,1,1,1,1,1}};
+        uint32_t mask=0,count=0;
+        std::array<uint8_t,8> slots{};
+        std::array<float,32> gains{};
+        Routing(){gains.fill(1.0f);}
     };
+    std::array<uint8_t,32> bin_headroom_{};
+    std::array<float,32> send_peak_{};
+    uint32_t routing_logs_=0,routing_rejections_=0;
     struct Voice {
         Format fmt{};
         uint32_t data=0,bytes=0,owned=0,frequency=0;
@@ -143,35 +147,71 @@ private:
         if(f.tag!=0x69||f.bits!=4||f.align!=36*f.channels||u16(16)<2||!Range(p,20))return false;
         mem_.Read(p+18,x.data()+18,2);return u16(18)==64;
     }
-    bool SetRouting(Routing& routing,uint32_t p,uint32_t channels,bool volumes_only)const{
+    bool SetRouting(Routing& routing,uint32_t p,uint32_t channels,bool volumes_only){
+        auto reject=[&](const char* reason){
+            ++routing_rejections_;
+            if(routing_rejections_<=32)std::fprintf(stderr,"HULK MIXBINS REJECT ptr=%08X channels=%u volumes=%u reason=%s\n",p,channels,unsigned(volumes_only),reason);
+            return false;
+        };
         if(!p){
-            if(volumes_only)return false;
+            if(volumes_only)return reject("null volumes");
             routing=Routing{};return true;
         }
-        if(!Range(p,8))return false;
+        if(!Range(p,8))return reject("header range");
         auto n=mem_.Read32(p),pairs=mem_.Read32(p+4);
-        if(!n||n>6||!Range(pairs,n*8))return false;
+        if(n>(volumes_only?32u:8u)||(n&&!Range(pairs,n*8)))return reject("pair count or range");
         Routing next=volumes_only?routing:Routing{};
         uint32_t seen=0;
         for(unsigned i=0;i<n;++i){
             auto bin=mem_.Read32(pairs+8*i);
             auto mb=static_cast<int32_t>(mem_.Read32(pairs+8*i+4));
-            if(bin>5||bin==3||mb< -10000||mb>0)return false;
+            if(bin>=32||mb< -10000||mb>0){
+                if(routing_rejections_<32)std::fprintf(stderr,"HULK MIXBINS INVALID pair=%u bin=%u mb=%d\n",i,bin,mb);
+                return reject("bin or volume");
+            }
             auto bit=1u<<bin;
-            if(seen&bit||(channels==2&&bin>1)||(volumes_only&&!(next.mask&bit)))return false;
+            if(volumes_only&&(seen&bit))return reject("duplicate volume");
             seen|=bit;next.gains[bin]=mb==-10000?0.0f:std::pow(10.0f,float(mb)/2000.0f);
+            if(!volumes_only)next.slots[i]=uint8_t(bin);
         }
-        if(!volumes_only)next.mask=seen;
-        routing=next;return true;
+        if(!volumes_only){next.mask=seen;next.count=n;}
+        routing=next;
+        if(routing_logs_++<32){
+            std::fprintf(stderr,"HULK MIXBINS PASS channels=%u volumes=%u count=%u mask=%08X",channels,unsigned(volumes_only),n,next.mask);
+            for(unsigned i=0;i<n;++i)std::fprintf(stderr," %u:%d",mem_.Read32(pairs+8*i),int32_t(mem_.Read32(pairs+8*i+4)));
+            std::fprintf(stderr," (DSP sends monitored, not executed)\n");
+        }
+        return true;
     }
-    static void Route(const Routing& r,uint32_t channels,const std::array<float,2>& value,float* out){
-        if(!r.mask){out[0]+=value[0];out[1]+=value[1];return;}
-        const float fold=0.70710678f;
-        if(r.mask&1)out[0]+=value[0]*r.gains[0];
-        if(r.mask&2)out[1]+=value[channels==1?0:1]*r.gains[1];
-        if(r.mask&4){out[0]+=value[0]*r.gains[2]*fold;out[1]+=value[0]*r.gains[2]*fold;}
-        if(r.mask&16)out[0]+=value[0]*r.gains[4]*fold;
-        if(r.mask&32)out[1]+=value[0]*r.gains[5]*fold;
+    void Route(const Routing& r,uint32_t channels,const std::array<float,2>& value,float* out){
+        if(!r.count){out[0]+=value[0];out[1]+=value[1];return;}
+        constexpr float fold=0.70710678f;
+        // No DSP image: upstream fallback uses the strongest non-speaker
+        // send per source channel. Loaded image: retain sends as telemetry;
+        // never pretend an unknown DSP effect has actually been processed.
+        const bool speakers=(r.mask&0x3f7u)!=0;
+        std::array<float,2> fallback{};
+        for(unsigned i=0;i<r.count;++i){
+            unsigned b=r.slots[i],ch=i%channels;
+            float v=value[ch]*r.gains[b]*std::ldexp(1.0f,-int(bin_headroom_[b]));
+            if(b>=10){send_peak_[b]=std::max(send_peak_[b],std::abs(v));}
+            if(!speakers&&effect_states_.empty()){
+                fallback[ch]=std::max(fallback[ch],r.gains[b]*std::ldexp(1.0f,-int(bin_headroom_[b])));
+                continue;
+            }
+            switch(b){
+            case 0:case 6:out[0]+=v;break;
+            case 1:case 7:out[1]+=v;break;
+            case 2:out[0]+=v*fold;out[1]+=v*fold;break;
+            case 4:case 8:out[0]+=v*fold;break;
+            case 5:case 9:out[1]+=v*fold;break;
+            default:break; // LFE and DSP sends require their own processing
+            }
+        }
+        if(!speakers&&effect_states_.empty()){
+            const float v=value[0]*fallback[0]+(channels==2?value[1]*fallback[1]:0);
+            out[0]+=v;out[1]+=v;
+        }
     }
     uint32_t Source3d(spatial::Deferred<spatial::Source>& d,bool enabled,uint32_t op,const std::array<uint32_t,8>& a){
         if(!enabled)return bad;
@@ -250,6 +290,8 @@ public:
     ~HulkSound(){
         StopAndroidOutput();
         if(capture_>=0)close(capture_);
+        for(unsigned b=10;b<32;++b)if(send_peak_[b]>0)std::fprintf(stderr,"HULK DSP SEND UNPROCESSED bin=%u peak=%g\n",b,double(send_peak_[b]));
+        std::fprintf(stderr,"HULK MIXBINS SUMMARY accepted=%u rejected=%u\n",routing_logs_,routing_rejections_);
         if(device_||rendered_)std::fprintf(stderr,"HULK AUDIO SUMMARY frames=%llu nonzero_frames=%llu voices=%zu (software mixer)\n",
             static_cast<unsigned long long>(rendered_),static_cast<unsigned long long>(nonzero_),voices_.size());
     }
@@ -337,6 +379,10 @@ public:
             else return bad;
         }
         return 0;
+    }
+    uint32_t SetMixBinHeadroom(uint32_t id,uint32_t bin,uint32_t steps){
+        if(!Device(id)||bin>=32||steps>7)return bad;
+        bin_headroom_[bin]=uint8_t(steps);return 0;
     }
     uint32_t Speaker(uint32_t id,uint32_t out){
         if(!Device(id)||!Range(out,4))return bad;
@@ -497,7 +543,7 @@ public:
             return SetRouting(v.routing,a[1],v.fmt.channels,op==kSoundBufferMixBinVolumes)?0:bad;
         case kSoundBufferFormat:{
             Format f{};
-            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align||(f.channels==2&&(v.is3d||(v.routing.mask&~3u))))return bad;
+            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align||(f.channels==2&&v.is3d))return bad;
             // Reset regions and phase when the unit of a sample changes.
             v.fmt=f;v.frequency=0;v.phase=0;v.paused=v.sync=false;
             v.play_start=v.loop_start=0;v.play_length=v.loop_length=v.bytes;
@@ -632,7 +678,7 @@ public:
             if(v.is3d&&a[1])return bad;
             return SetRouting(v.routing,a[1],v.fmt.channels,op==kSoundStreamMixBinVolumes)?0:bad;
         case kSoundStreamFormat:{
-            Format f{};if(!Parse(a[1],f)||(f.channels==2&&(v.is3d||(v.routing.mask&~3u))))return bad;
+            Format f{};if(!Parse(a[1],f)||(f.channels==2&&v.is3d))return bad;
             FlushStream(v);v.fmt=f;v.frequency=0;return 0;
         }
         default:throw std::logic_error("Unsupported stream operation");

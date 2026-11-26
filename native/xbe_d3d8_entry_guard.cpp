@@ -511,7 +511,7 @@ SOUND_HOOK(IDirectSound_SetEffectData,kSoundSetEffectData,6)
 SOUND_HOOK(IDirectSound_SetI3DL2Listener,kSoundI3dl2Listener,3)
 #endif
 #if HAS_IDirectSound_SetMixBinHeadroom
-SOUND_STOP(IDirectSound_SetMixBinHeadroom)
+SOUND_HOOK(IDirectSound_SetMixBinHeadroom,kSoundMixBinHeadroom,3)
 #endif
 #if HAS_IDirectSound_SetOrientation
 SOUND_HOOK(IDirectSound_SetOrientation,kSoundListenerOrientation,8)

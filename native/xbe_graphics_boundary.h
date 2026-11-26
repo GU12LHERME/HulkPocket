@@ -68,6 +68,7 @@ constexpr uint32_t kSoundStreamMaxDistance=0x1043c;
 constexpr uint32_t kSoundI3dl2Listener=0x1043d;
 constexpr uint32_t kSoundBufferI3dl2Source=0x1043e,kSoundStreamI3dl2Source=0x1043f,kSoundCommitEffectData=0x10440;
 constexpr uint32_t kSoundBufferAll3d=0x10441,kSoundBufferRolloffCurve=0x10442,kSoundBufferStopEx=0x10443;
+constexpr uint32_t kSoundMixBinHeadroom=0x10444;
 constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture=0x10102,
     kDefaultMakeSpace=0x10103,kDefaultComplexBase=0x10200;
 // Bounded experimental presentation loop; the final swap is presented
