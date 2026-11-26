@@ -641,3 +641,36 @@ executable**; it does *not* verify Hulk's enormous real image,
 kernel services, Direct3D, audio, timing or actual gameplay.
 The synthetic CLI must still be executed on the real RP6 to
 validate the device's kernel and virtual memory behavior.
+
+## Portable CPU helpers and extended recompilation regression (pending CI)
+
+`native/portable_xbe_cpu_services.h/.cpp` adds native Linux/Android
+host-side declarations and implementations matching the real SDK's
+`x86_cpuid`, `x86_rdtsc`, `x86_kernel`, `x86_priv`,
+`x86_trace`, `x86_trap`, and `x86_resume` names and signatures.
+The implementation mirrors the SDK's virtual Pentium III CPUID
+results and 733.33 MHz monotonic TSC; `x86_kernel` forwards through
+the scoped Xbox ordinal dispatcher. Unlike the upstream Windows
+runtime, unavailable guest tracing and exception continuations are
+**explicit failures**, never fake successes or silent no-ops.
+`native/test_portable_xbe_cpu_services.cpp` tests the CPU outputs,
+kernel calls and unsupported code paths under AArch64 QEMU.
+
+Two additional **synthetic, original IA-32 executable** profiles
+extend the earlier 2-instruction example:
+
+- `--profile memory`: an original x86 `mov eax,[guest]`;
+  `add eax,7`; `mov [guest],eax`; `ret` sequence, recompiled
+  with the actual SDK and checked against real 4 GiB guest memory.
+  CI builds the ARM64 test for QEMU and an Android ARM64 CLI for
+  subsequent real RP6 validation.
+- `--profile calls`: an original x86 caller/callee using a
+  relative CALL, arithmetic in the called function and RET.
+  The AArch64 test checks function-map coverage, the expected
+  register result and restoration of the x86 guest stack pointer.
+
+These tests cover representative CPU and memory semantics but are
+still **only small synthetic exercises**. The actual Hulk image,
+kernel imports, exception continuations, Direct3D, XAudio and
+fully correct Xbox kernel thread initialization are not yet
+executed or validated. Do not label this a playable port.
