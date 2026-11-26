@@ -4,7 +4,7 @@ import tempfile
 import tomllib
 import unittest
 
-from create_synthetic_xbe_recompile import BASE, ENTRY, THUNK, create, create_memory_case, create_call_case
+from create_synthetic_xbe_recompile import BASE, ENTRY, THUNK, create, create_memory_case, create_call_case, create_kernel_case
 
 class SyntheticXbeRecompileTests(unittest.TestCase):
     def test_real_original_xbox_header_layout_and_code_bytes(self):
@@ -47,6 +47,23 @@ class SyntheticXbeRecompileTests(unittest.TestCase):
                 data[0x600:0x60f],
                 bytes.fromhex("B8 05 00 00 00 E8 01 00 00 00 C3 83 C0 07 C3"),
             )
+            with config.open("rb") as stream:
+                self.assertEqual(tomllib.load(stream)["xbe"]["entry"],ENTRY)
+
+    def test_original_kernel_thunk_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            xbe, config = create_kernel_case(pathlib.Path(directory))
+            data = xbe.read_bytes()
+            self.assertEqual(
+                data[0x600:0x608],
+                bytes.fromhex("B8 44 00 00 FE FF D0 C3"),
+            )
+            self.assertEqual(
+                struct.unpack_from("<I",data,0x158)[0] ^ 0x5B6D40B6,
+                0x200080,
+            )
+            self.assertEqual(struct.unpack_from("<I",data,0x680)[0],0x80000011)
+            self.assertEqual(struct.unpack_from("<I",data,0x684)[0],0)
             with config.open("rb") as stream:
                 self.assertEqual(tomllib.load(stream)["xbe"]["entry"],ENTRY)
 
