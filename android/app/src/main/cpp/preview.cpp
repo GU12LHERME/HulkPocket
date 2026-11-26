@@ -34,14 +34,16 @@ public:
         }
         close(p[1]);
         drain_=std::thread([fd=p[0],path]{
-            std::deque<std::string> tail,events;
+            std::deque<std::string> tail,events,input_events;
             std::string last_swap,last_checksum;
             std::string line;char buffer[8192];uint64_t n=0;
             auto last=std::chrono::steady_clock::now();
             auto flush=[&]{
                 std::ofstream out(path+".tmp",std::ios::trunc);if(!out)return;
                 out<<"HulkPocket preview report lines="<<n<<"\n";
-                out<<"Retained input and error events:\n";
+                out<<"Retained input events:\n";
+                for(const auto& l:input_events)out<<l<<'\n';
+                out<<"Retained graphics and error events:\n";
                 for(const auto& l:events)out<<l<<'\n';
                 out<<last_swap<<'\n'<<last_checksum<<"\nFinal raw context:\n";
                 for(const auto& l:tail)out<<l<<'\n';
@@ -53,9 +55,14 @@ public:
                 for(ssize_t i=0;i<count;++i){
                     if(buffer[i]=='\n'){
                         ++n;
-                        if(line.starts_with("HULK INPUT ")||line.starts_with("Guest stopped:")||
+                        if(line.starts_with("HULK INPUT ")){
+                            input_events.push_back(line);if(input_events.size()>256)input_events.pop_front();
+                        }
+                        if(line.starts_with("Guest stopped:")||
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||
-                           line.starts_with("D3D LIGHT ")||line.starts_with("D3D PACKED NORMAL GEOMETRY PASS")||line.starts_with("Guest entry status:")){
+                           (line.starts_with("D3D LIGHT ")&&(!line.starts_with("D3D LIGHT OBSERVE")||line.ends_with("accepted=0")))||
+                           line.starts_with("D3D PACKED NORMAL ")||line.starts_with("D3D INVALID POSITION")||
+                           line.starts_with("D3D XYZ ISOLATION")||line.starts_with("Guest entry status:")){
                             events.push_back(line);if(events.size()>256)events.pop_front();
                         }
                         if(line.starts_with("D3D ORIGINAL SWAP OFFSCREEN PASS:"))last_swap=line;
@@ -99,6 +106,7 @@ extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_na
         if(f.size()!=8||f.find_first_not_of("0123456789abcdefABCDEF")!=std::string::npos)
             throw std::runtime_error("Invalid FVF in local preview package");
         setenv("HULK_FVF_SHADER",f.c_str(),1);
+        setenv("HULK_ISOLATE_INVALID_XYZ","1",1);
         setenv("HULK_CONTINUE_CREATE","1",1);setenv("HULK_CONTINUE_DRAW","1",1);setenv("HULK_CONTINUE_SWAP","1",1);
         setenv("HULK_FRAME_LIMIT","10800",1);setenv("HULK_WATCHDOG_SECONDS","600",1);setenv("HULK_DRAW_LIMIT","128",1);
         setenv("HULK_COMPACT_AUDIO_TRACE","1",1);setenv("HULK_COMPACT_REPORT","1",1);setenv("HULK_AUDIO_OUTPUT","1",1);

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 using namespace hulkpocket;
 int main(){
     {
@@ -503,6 +504,27 @@ int main(){
         assert(bridge.VerifyGuestGeometry(6,0,4,0x11880)==4);
         bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
         assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,0,255,255}));
+        // A malformed nonindexed XYZ triangle must not be forwarded to
+        // the GPU; strict mode stops, preview isolation retains good triangles.
+        std::array<QuadVertex,6> mixed{minified[0],minified[1],minified[2],minified[1],minified[3],minified[2]};
+        mixed[0].x=std::bit_cast<float>(0x7fc00000u);
+        mem.Write(0x80105000,mixed.data(),sizeof(mixed));
+        unsetenv("HULK_ISOLATE_INVALID_XYZ");
+        bool invalid_xyz=false;
+        try{bridge.ReplayTexturedDiffuseDiagnostic(5,0,6);}catch(const std::invalid_argument&){invalid_xyz=true;}
+        assert(invalid_xyz);
+        setenv("HULK_ISOLATE_INVALID_XYZ","1",1);
+        backend.Clear(bridge.Snapshot(),0,nullptr,0xf0,0xff000000,1,0);
+        bridge.ReplayTexturedDiffuseDiagnostic(5,0,6);
+        assert((backend.ReadPixel(8,8)==std::array<uint8_t,4>{0,0,0,255}));
+        assert((backend.ReadPixel(56,56)==std::array<uint8_t,4>{0,0,255,255}));
+        mixed[3].z=std::bit_cast<float>(0x7f800000u);
+        mem.Write(0x80105000,mixed.data(),sizeof(mixed));
+        bool widespread=false;
+        try{bridge.ReplayTexturedDiffuseDiagnostic(5,0,6);}catch(const std::invalid_argument&){widespread=true;}
+        assert(widespread);
+        unsetenv("HULK_ISOLATE_INVALID_XYZ");
+        mem.Write(0x80105000,minified,sizeof(minified));
         // Reproduce the next APK declaration; packed normals must not be
         // interpreted as vertex colors. Verify geometry but do not draw it
         // through an unlit shader.

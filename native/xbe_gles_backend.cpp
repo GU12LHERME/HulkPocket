@@ -6,6 +6,8 @@
 #include "gpu/vertex.h"
 #include <algorithm>
 #include <cmath>
+#include <bit>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -429,6 +431,15 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     std::unique_ptr<PackedNormalLighting> lighting;
     if(packed)lighting=std::make_unique<PackedNormalLighting>(s);
     std::vector<Vertex> vertices(n);
+    // A malformed position has no portable clip-space meaning. Only the
+    // opt-in preview's observed nonindexed XYZ diffuse triangle list may
+    // isolate a small number of affected primitives. Never synthesize
+    // coordinates, drop individual vertices, or change guest memory.
+    const char* recover=std::getenv("HULK_ISOLATE_INVALID_XYZ");
+    const bool isolate=recover&&std::strcmp(recover,"1")==0&&prim==5&&!indices&&
+        textured&&!packed&&!transformed&&s.vs_handle==0x142&&mode==GL_TRIANGLES;
+    std::vector<uint8_t> invalid(isolate?n/3:0,0);
+    unsigned bad_triangles=0,bad_vertices=0;
     for(uint32_t i=0;i<n;++i){
         int64_t id=i;
         if(a.index_count){
@@ -452,8 +463,21 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
             // Xbox linear/rectangle textures use texel coordinates; GLES normalized.
             if(sampled.linear){v.uv[0]/=float(sampled.width);v.uv[1]/=float(sampled.height);}
         }
-        if(!std::all_of(v.p,v.p+4,[](float x){return std::isfinite(x);})||v.p[3]<=0)
-            throw std::invalid_argument("Invalid XYZRHW position");
+        if(!std::all_of(v.p,v.p+4,[](float x){return std::isfinite(x);})||(transformed&&v.p[3]<=0)){
+            if(bad_vertices<8){
+                const auto& e=a.elements[0];const auto& b=a.buffers[e.buffer];
+                std::fprintf(stderr,"D3D INVALID POSITION fvf=%08X primitive=%u start=%u count=%u vertex=%u assembled=%lld stride=%u vb=%08X physical=%08X xyzrhw=%08X,%08X,%08X,%08X\n",
+                    s.vs_handle,prim,start,count,i,static_cast<long long>(id),b.stride,s.streams[0].vb,
+                    s.streams[0].vb?gpu::ReadGuest32(uint64_t(s.streams[0].vb)+4):0,
+                    std::bit_cast<uint32_t>(v.p[0]),std::bit_cast<uint32_t>(v.p[1]),std::bit_cast<uint32_t>(v.p[2]),std::bit_cast<uint32_t>(v.p[3]));
+            }
+            ++bad_vertices;
+            if(!isolate)throw std::invalid_argument(transformed?"Invalid XYZRHW position":"Nonfinite XYZ position");
+            if(!invalid[i/3]){invalid[i/3]=1;++bad_triangles;}
+            if(bad_triangles>std::min(8u,std::max(1u,n/48u)))
+                throw std::invalid_argument("Nonfinite XYZ triangle isolation budget exceeded");
+            continue;
+        }
         if(packed){
             auto lit=lighting->Evaluate({v.p[0],v.p[1],v.p[2]},normal);
             std::copy(lit.diffuse.begin(),lit.diffuse.end(),v.c);
@@ -461,6 +485,18 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
         }else{
             v.c[0]=bgra[2]/255.0f;v.c[1]=bgra[1]/255.0f;v.c[2]=bgra[0]/255.0f;v.c[3]=bgra[3]/255.0f;
         }
+    }
+    if(bad_triangles){
+        if(bad_triangles==n/3)throw std::invalid_argument("No valid XYZ triangles remain");
+        size_t kept=0;
+        for(size_t tri=0;tri<invalid.size();++tri){
+            if(invalid[tri])continue;
+            for(unsigned k=0;k<3;++k)vertices[kept++]=vertices[tri*3+k];
+        }
+        vertices.resize(kept);
+        std::fprintf(stderr,"D3D XYZ ISOLATION dropped_triangles=%u invalid_vertices=%u kept_triangles=%zu original_vertices=%u\n",
+            bad_triangles,bad_vertices,kept/3,n);
+        n=uint32_t(kept);
     }
     auto alpha_enable=s.simple[gpu::kMAlphaTestEnable>>2];
     auto alpha_cmp=s.simple[gpu::kMAlphaFunc>>2],alpha_reference=s.simple[gpu::kMAlphaRef>>2];
