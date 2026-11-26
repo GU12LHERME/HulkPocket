@@ -1,4 +1,5 @@
 #include "xbe_bootstrap.h"
+#include "xbe_tls_index.h"
 #include <cassert>
 using namespace hulkpocket;
 int main() {
@@ -17,6 +18,15 @@ int main() {
     assert(m.Read32(s.tls_data+4)==0);
     assert(!m.IsCommitted(s.memory.guard,1));
     assert(!m.IsCommitted(s.memory.heap_base+s.memory.heap_committed,1));
+    m.Write32(s.tls.index,0xffffffff);
+    InitializeDiagnosticTlsIndex(s,m);
+    assert(m.Read32(s.tls.index)==0);
+    auto bad=s;
+    bad.tls.callbacks=0x13000;
+    bool callback_rejected=false;
+    try { InitializeDiagnosticTlsIndex(bad,m); }
+    catch(const std::runtime_error&) { callback_rejected=true; }
+    assert(callback_rejected);
     bool rejected=false;
     try { PrepareXbeBootstrap(i,m,0x1000000,0x1200000); }
     catch(const std::invalid_argument&) { rejected=true; }
