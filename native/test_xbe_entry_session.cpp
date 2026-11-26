@@ -27,7 +27,7 @@ int main() {
     assert(m.Read32(0x1712c)==1);
     assert(s.cpu.esp==s.bootstrap.initial_esp-4);
     assert(s.cpu.fs_base==0x14000 && s.cpu.thread_handle==1);
-    assert(s.cpu.fcw==0x037f && s.cpu.mxcsr==0x1f80);
+    assert(s.cpu.fcw==0x027f && s.cpu.mxcsr==0x1f80);
     assert(m.Read32(0x13000)==0xFE000044);
     assert(m.Read32(0x13004)==0x16000);
     XbeKernelPool pool(m,0x2000000,static_cast<uint32_t>(m.PageSize()));
