@@ -16,7 +16,7 @@ static void callback(X86Context& c,uint8_t*,uint32_t id){
     if(id==kXapiLaunchImage){c.eax=2;c.esp+=12;return;}
     if(id==kXapiInitDevices){assert(c.ecx==0x3ea774&&c.edx==0x3ea820);c.eax=0;c.esp+=12;return;}
     if(id==kXapiInputOpen){c.eax=0;c.esp+=20;return;}
-    assert(id==kGraphicsCreate&&c.ecx==0x39dfb0&&c.edx==0x39dfa8);entered=true;
+    assert(id==kGraphicsCreate&&c.ecx==0x39dfb0&&c.edx==0x39dfa8&&c.eax==0x3882e0);entered=true;
 }
 int main(){
     ScopedGraphicsCallback scoped(callback);X86Context c{};c.esp=0x1000;

@@ -1,6 +1,7 @@
 #include "xbe_d3d8_bridge.h"
 #include "xbe_d3d8_device_memory.h"
 #include "xbe_nv2a_push.h"
+#include "xbe_d3d8_default_trace.h"
 #include <cassert>
 using namespace hulkpocket;
 class RecordingBackend final:public gpu::Backend {
@@ -46,6 +47,14 @@ int main(){
         invalid_packet=false;
         try{DecodeNv2aMethods(guest,0x24000,0x24004);}catch(const std::invalid_argument&){invalid_packet=true;}
         assert(invalid_packet);
+        XbeD3dDefaultTrace trace(guest);
+        guest.Write32(0x25000,gpu::kMBlendEnable);
+        trace.Render(0x25000,0x25400,0,1);
+        trace.Render(0,0x25400,gpu::kRsZEnable,1);
+        trace.Texture(0x25800,2,gpu::kTssColorOp,4);
+        assert(trace.State().simple[gpu::kMBlendEnable>>2]==1);
+        assert(guest.Read32(0x25400+4*gpu::kRsZEnable)==1);
+        assert(guest.Read32(0x25800+4*(64+gpu::kTssColorOp))==4);
         XbeKernelPool pool(guest,0x09000000,0x10000);
         XbePhysicalMemory physical(guest);
         constexpr uint32_t dev=0x20000,slot=0x23000,pp=0x23100;

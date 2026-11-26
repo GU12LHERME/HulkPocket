@@ -14,6 +14,7 @@
 #include "xbe_graphics_boundary.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
+#include "xbe_d3d8_default_trace.h"
 #endif
 #include "xbe_kernel_calendar.h"
 #include <map>
@@ -86,6 +87,31 @@ private:
     bool stopping_=false;
     int worker_failure_=0;
     Entry entry_=nullptr;
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+    XbeD3dDefaultTrace* default_trace_=nullptr;
+    uint32_t default_thread_=0;
+    void DefaultProbe(X86Context& cpu,uint32_t routine,uint32_t device,uint32_t slot,uint32_t pp,
+                      std::unique_lock<std::mutex>& lock){
+        if(default_trace_||!entry_||!routine||cpu.esp<4||!mem_.IsCommitted(cpu.esp-4,4))
+            throw std::runtime_error("Invalid D3D default initializer entry");
+        XbeD3d8DeviceMemory buffers(mem_,pool_,physical_);
+        buffers.Initialize(device,slot,pp);
+        XbeD3dDefaultTrace trace(mem_);
+        X86Context nested=cpu;nested.esp-=4;mem_.Write32(nested.esp,0);
+        default_trace_=&trace;default_thread_=cpu.thread_handle;
+        auto old_ordinal=fault_ordinal,old_return=fault_return,old_stack=fault_stack;
+        std::fprintf(stderr,"D3D DEFAULT INIT: entry=%08X scratch=%08X\n",routine,buffers.Scratch());
+        lock.unlock();
+        int status=1;
+        try{status=entry_(&nested,mem_.Base(),routine,Dispatch);}
+        catch(...){lock.lock();default_trace_=nullptr;default_thread_=0;throw;}
+        lock.lock();default_trace_=nullptr;default_thread_=0;
+        fault_ordinal=old_ordinal;fault_return=old_return;fault_stack=old_stack;
+        trace.Dump(buffers);
+        if(status||nested.esp!=cpu.esp)throw std::runtime_error("D3D original default initializer stopped or violated stack ABI");
+        std::fprintf(stderr,"D3D ORIGINAL DEFAULT INIT RETURNED\n");
+    }
+#endif
     inline static thread_local XbeKernelSession* active_=nullptr;
     Worker* Find(uint32_t handle) {
         for(size_t i=0;i<count_;++i)
@@ -395,7 +421,20 @@ private:
     }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+        if(ordinal==kDefaultSimple||ordinal==kDefaultRender||ordinal==kDefaultTexture||
+            (ordinal>=kDefaultComplexBase&&ordinal<kDefaultComplexBase+gpu::kRsMax)){
+            if(!default_trace_||default_thread_!=cpu.thread_handle)
+                throw std::runtime_error("D3D state setter outside original defaults diagnostic");
+            if(ordinal==kDefaultSimple){Check(cpu,0);default_trace_->Simple(cpu.ecx,cpu.edx);Ret(cpu,0,0);}
+            else if(ordinal==kDefaultRender){Check(cpu,2);default_trace_->Render(cpu.ecx,cpu.edx,Arg(cpu,0),Arg(cpu,1));Ret(cpu,2,0);}
+            else if(ordinal==kDefaultTexture){Check(cpu,3);default_trace_->Texture(cpu.ecx,Arg(cpu,0),Arg(cpu,1),Arg(cpu,2));Ret(cpu,3,0);}
+            else{Check(cpu,1);default_trace_->Render(0,cpu.edx,ordinal-kDefaultComplexBase,Arg(cpu,0));Ret(cpu,1,0);}
+            return;
+        }
+#endif
         switch(ordinal) {
+            case kDefaultMakeSpace:throw std::runtime_error("D3D scratch-space refill checkpoint");
             case kXapiInitDevices: {
                 Check(cpu,2);
                 auto pad=cpu.ecx,mu=cpu.edx;
@@ -653,10 +692,10 @@ private:
                 if(!cpu.ecx||!cpu.edx)throw std::runtime_error("Missing generated D3D device symbols");
                 auto out=Arg(cpu,5);
                 if(out&&!mem_.IsCommitted(out,4))throw std::runtime_error("Invalid D3D device output");
-                RunD3dCreateProbe(mem_,pool_,physical_,cpu.ecx,cpu.edx,pp);
-                // Do not return a device that lacks guest default-state and
-                // push-buffer execution. All probe allocations were released.
-                throw std::runtime_error("D3D8 live device probe passed; guest defaults/push execution pending");
+                auto routine=cpu.eax,device=cpu.ecx,slot=cpu.edx;
+                RunD3dCreateProbe(mem_,pool_,physical_,device,slot,pp);
+                DefaultProbe(cpu,routine,device,slot,pp,lock);
+                throw std::runtime_error("D3D8 original defaults captured; applying full state and persistent device pending");
 #else
                 throw std::runtime_error("D3D8 CreateDevice reached; guest device initialization pending");
 #endif
