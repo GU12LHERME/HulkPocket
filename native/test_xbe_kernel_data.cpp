@@ -14,7 +14,7 @@ int main() {
     RegisterKernelProfile(m,r,0x10100,{1,0,5838,0,3,4,5,2,1});
     assert(m.Read32(0x10100)==3 && m.Read32(0x10104)==0x504);
     assert(m.Read32(0x1010c)==5838);
-    assert(r.Resolve(324).address==0x10108);
+    assert(r.Resolve(324).guest_data==0x10108);
     RegisterLaunchData(m,r,0x10200,0,"D:\\default.xbe");
     assert(m.Read32(0x10200)==0);
     assert(m.Read32(0x10208)==0x1020c);
