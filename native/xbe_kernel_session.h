@@ -13,6 +13,7 @@
 #include "xbe_fault_diagnostic.h"
 #include "xbe_graphics_boundary.h"
 #include "hulk_sound.h"
+#include "hulk_pad_script.h"
 #include "xbe_resident_sections.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
@@ -63,7 +64,10 @@ private:
     std::map<uint32_t,ThreadSettings> thread_settings_;
     std::map<uint32_t,uint32_t> object_references_;
     uint32_t gamepad_type_=0,memory_unit_type_=0;
-    std::map<uint32_t,uint32_t> input_handles_;
+    struct InputHandle {uint32_t port=0,packet=0;HulkPadScript::State last{};bool polled=false;};
+    std::map<uint32_t,InputHandle> input_handles_;
+    HulkPadScript pad_script_;
+    unsigned input_frame_=0;
     // Objects remain owned by the session until shutdown, including bodies
     // held by in-flight waits. References are tracked independently of handles.
     struct Event { uint32_t body; bool manual; };
@@ -738,10 +742,13 @@ private:
                 if(gamepad_type_&&(gamepad_type_!=pad||memory_unit_type_!=mu))
                     throw std::runtime_error("XPP device records changed");
                 gamepad_type_=pad;memory_unit_type_=mu;
+                pad_script_.Configure(std::getenv("HULK_INPUT_SCRIPT"),DiagnosticFrameLimit());
                 const uint32_t zero[3]={};
-                mem_.Write(pad,zero,sizeof(zero));
+                const uint32_t ports[3]={uint32_t(pad_script_.Enabled()),uint32_t(pad_script_.Enabled()),0};
+                mem_.Write(pad,ports,sizeof(ports));
                 if(mu)mem_.Write(mu,zero,sizeof(zero));
-                std::fprintf(stderr,"XAPI device initialization: pad=%08X memory_unit=%08X connected=0 (headless diagnostic)\n",pad,mu);
+                std::fprintf(stderr,"HULK INPUT initialization: pad=%08X memory_unit=%08X connected=%u provider=%s\n",
+                    pad,mu,ports[0],pad_script_.Enabled()?"scripted diagnostic":"none");
                 Ret(cpu,2,0);return;
             }
             case kXapiInputOpen: {
@@ -752,7 +759,7 @@ private:
                 if(input_handles_.size()>=64){Ret(cpu,4,0);return;}
                 // Match upstream's per-port handle even if no device is connected.
                 auto h=pool_.Allocate(16);
-                if(h)input_handles_.emplace(h,Arg(cpu,1));
+                if(h)input_handles_.emplace(h,InputHandle{Arg(cpu,1)});
                 Ret(cpu,4,h);return;
             }
             case kXapiInputClose: {
@@ -762,9 +769,30 @@ private:
             }
             case kXapiInputGetState: case kXapiInputSetState: case kXapiInputGetCapabilities: {
                 Check(cpu,2);
-                // No Android input provider is connected to this CLI yet.
-                // Neither write fictional input state nor report successful rumble.
-                Ret(cpu,2,input_handles_.count(Arg(cpu,0))?1167u:6u);return;
+                auto it=input_handles_.find(Arg(cpu,0));
+                if(it==input_handles_.end()){Ret(cpu,2,6);return;}
+                auto& h=it->second;
+                if(!pad_script_.Enabled()||h.port!=0){Ret(cpu,2,1167);return;}
+                const auto out=Arg(cpu,1);
+                if(ordinal==kXapiInputGetState){
+                    if(!out||!mem_.IsCommitted(out,22)){Ret(cpu,2,87);return;}
+                    auto state=pad_script_.At(input_frame_);
+                    if(!h.polled||h.last!=state){
+                        ++h.packet;h.last=state;h.polled=true;
+                        std::fprintf(stderr,"HULK INPUT state frame=%u packet=%u buttons=%02X analogA=%u analogB=%u lx=%02X%02X ly=%02X%02X\n",
+                            input_frame_,h.packet,unsigned(state[0]),unsigned(state[2]),unsigned(state[3]),
+                            unsigned(state[11]),unsigned(state[10]),unsigned(state[13]),unsigned(state[12]));
+                    }
+                    auto packet=HulkPadScript::Packet(h.packet,state);
+                    mem_.Write(out,packet.data(),packet.size());Ret(cpu,2,0);return;
+                }
+                if(ordinal==kXapiInputGetCapabilities){
+                    auto caps=HulkPadScript::Capabilities();
+                    if(!out||!mem_.IsCommitted(out,caps.size())){Ret(cpu,2,87);return;}
+                    mem_.Write(out,caps.data(),caps.size());Ret(cpu,2,0);return;
+                }
+                // Script is not a real vibration device; do not fake completion.
+                Ret(cpu,2,50);return;
             }
             case kMissingGuestEntry: {
                 Check(cpu,0);
@@ -1333,6 +1361,7 @@ private:
                 live.draws_at_swap=live.diagnostic_draw_returns;
                 ++live.diagnostic_swap_returns;
                 std::fprintf(stderr,"D3D ORIGINAL SWAP RETURN: count=%u front=%08X back=%08X (next frame requires full clear)\n",n,mem_.Read32(front+4),mem_.Read32(back+4));
+                input_frame_=n;
                 Ret(cpu,1,n);return;
 #else
                 throw std::runtime_error("D3D swap requires GLES backend");

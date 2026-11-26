@@ -18,6 +18,7 @@ IMPORTANT = (b"failed", b"unsupported", b"error", b"fault", b"missing guest",
 def compact(source, out):
     tail = collections.deque(maxlen=TAIL)
     events = collections.deque(maxlen=EVENTS)
+    input_events = collections.deque(maxlen=256)
     counters = collections.Counter()
     n = 0
     last_swap = last_frame = None
@@ -43,6 +44,7 @@ def compact(source, out):
             if b"status=00000000" in line: counters["disc_reads_ok"] += 1
         if line.startswith(b"D3D LIVE SETTER "): counters["setters"] += 1
         if n <= START: continue
+        if line.startswith(b"HULK INPUT "): input_events.append((n,line))
         if f or s:
             if int((f or s).group(1)) % 120 == 0: events.append((n, line))
         elif any(key in line.lower() for key in IMPORTANT) or not line.startswith(ROUTINE):
@@ -50,6 +52,7 @@ def compact(source, out):
     out.write(("\nHULK COMPACT REPORT original_lines=%d counters=%s\n" % (n, dict(counters))).encode())
     out.write(b"Selected events and final raw context:\n")
     retained = dict(events)
+    retained.update(input_events)
     retained.update(tail)
     for item in (last_swap, last_frame):
         if item and item[0] > START: retained[item[0]] = item[1]

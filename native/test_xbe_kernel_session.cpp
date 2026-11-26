@@ -82,6 +82,30 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,kXapiInputSetState,{pad_handle,0x12b40});assert(c->eax==1167);
     call(*c,base,cb,kXapiInputClose,{pad_handle});assert(!c->eax);
     call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});assert(c->eax==6);
+    // Explicit scripted provider: neutral/disconnected is still the default.
+    assert(setenv("HULK_INPUT_SCRIPT","0:START,30:A,60:LY+",1)==0);
+    c->ecx=0x12b00;c->edx=0x12b20;
+    call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
+    assert(memory->Read32(0x12b00)==1&&memory->Read32(0x12b04)==1);
+    call(*c,base,cb,kXapiInputOpen,{0x12b00,0,0,0});pad_handle=c->eax;assert(pad_handle);
+    memory->Write32(0x12b58,0xabcdef12);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==0&&memory->Read32(0x12b40)==1&&memory->Read32(0x12b44)==16);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==0&&memory->Read32(0x12b40)==1&&memory->Read32(0x12b58)==0xabcdef12);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0});assert(c->eax==87);
+    call(*c,base,cb,kXapiInputGetCapabilities,{pad_handle,0x12b40});
+    assert(c->eax==0&&(memory->Read32(0x12b40)&255)==1);
+    call(*c,base,cb,kXapiInputSetState,{pad_handle,0x12b40});assert(c->eax==50);
+    call(*c,base,cb,kXapiInputClose,{pad_handle});
+    unsetenv("HULK_INPUT_SCRIPT");
+    c->ecx=0x12b00;c->edx=0x12b20;
+    call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
+    HulkPadScript script;script.Configure("0:START,30:A,60:LY+",120);
+    assert(script.At(0)[0]==16&&script.At(11)[0]==16&&script.At(12)[0]==0);
+    assert(script.At(30)[2]==255&&script.At(42)[2]==0&&script.At(60)[12]==255&&script.At(60)[13]==127);
+    bool bad_script=false;try{script.Configure("0:A,1:B",120);}catch(const std::invalid_argument&){bad_script=true;}
+    assert(bad_script&&script.At(30)[2]==255);
     // Guest stack top, inaccessible guard, zeroed reuse and checked deletion.
     call(*c,base,cb,169,{0x10000,0});
     auto stack_top=c->eax;assert(stack_top&&stack_top%0x10000==0);

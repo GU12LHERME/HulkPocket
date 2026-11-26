@@ -75,8 +75,8 @@ constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture
 // Bounded experimental presentation loop; the final swap is presented
 // but deliberately does not return to guest code.
 constexpr unsigned kDiagnosticFrameLimit=60;
-constexpr unsigned kDiagnosticMaxFrames=5400;
-constexpr unsigned kDiagnosticMaxSeconds=240;
+constexpr unsigned kDiagnosticMaxFrames=10800;
+constexpr unsigned kDiagnosticMaxSeconds=600;
 constexpr unsigned kDiagnosticDrawsPerFrame=8;
 // Explicitly bounded longer diagnostic sessions. Reject malformed values
 // by falling back to the previous conservative defaults.
