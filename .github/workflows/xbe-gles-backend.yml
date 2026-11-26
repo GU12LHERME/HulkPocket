@@ -11,6 +11,9 @@ on:
       - 'native/xbe_nv2a_push.h'
       - 'native/xbe_d3d8_default_trace.h'
       - 'native/xbe_kernel_session.h'
+      - 'native/hulk_sound.h'
+      - 'native/test_hulk_sound.cpp'
+      - 'third_party/xboxxberecomp/audio/**'
       - 'native/xbe_kernel_files.h'
       - 'native/hulk_live_fibers.h'
       - 'native/hulk_xdk_fiber_hook.h'
@@ -36,6 +39,10 @@ jobs:
           mkdir -p /tmp/hulk-sdk/cpu
           curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
+      - name: Validate software DirectSound mixing and guest memory
+        run: |
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_hulk_sound.cpp native/xbox_guest_address_space.cpp -o /tmp/hulk-sound
+          /tmp/hulk-sound
       - name: Compile and render with real GLES
         run: |
           g++ -std=c++20 -O2 -pthread -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv2 -o /tmp/hulk-gles

@@ -12,6 +12,7 @@
 #include "xbe_kernel_files.h"
 #include "xbe_fault_diagnostic.h"
 #include "xbe_graphics_boundary.h"
+#include "hulk_sound.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
 #include "xbe_d3d8_default_trace.h"
@@ -44,6 +45,7 @@ private:
     };
     XboxGuestAddressSpace& mem_;
     XbeKernelPool pool_;
+    HulkSound sound_;
     XbeVirtualMemory virtual_;
     XbePhysicalMemory physical_;
     XbeKernelStacks stacks_;
@@ -558,6 +560,30 @@ private:
         }
 #endif
         switch(ordinal) {
+            case kSoundCreate:Check(cpu,3);Ret(cpu,3,sound_.Create(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)));return;
+            case kSoundReleaseDevice:Check(cpu,1);Ret(cpu,1,sound_.ReleaseDevice(Arg(cpu,0)));return;
+            case kSoundSpeaker:Check(cpu,2);Ret(cpu,2,sound_.Speaker(Arg(cpu,0),Arg(cpu,1)));return;
+            case kSoundPump:Check(cpu,0);sound_.Pump();Ret(cpu,0,0);return;
+            case kSoundNewBuffer:Check(cpu,2);Ret(cpu,2,sound_.NewBuffer(Arg(cpu,0),Arg(cpu,1)));return;
+            case kSoundNewDeviceBuffer:Check(cpu,4);Ret(cpu,4,sound_.Device(Arg(cpu,0))&&!Arg(cpu,3)?sound_.NewBuffer(Arg(cpu,1),Arg(cpu,2)):0x88780032u);return;
+            case kSoundBufferRelease:
+            case kSoundBufferData:
+            case kSoundBufferPlay:
+            case kSoundBufferStop:
+            case kSoundBufferStatus:
+            case kSoundBufferVolume:
+            case kSoundBufferFrequency:
+            case kSoundBufferSetPosition:
+            case kSoundBufferGetPosition: {
+                unsigned n=ordinal==kSoundBufferPlay?4:
+                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition)?3:
+                    (ordinal==kSoundBufferRelease||ordinal==kSoundBufferStop)?1:2;
+                Check(cpu,n);
+                sound_.Pump();
+                std::array<uint32_t,8> a{};
+                for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
+                Ret(cpu,n,sound_.Buffer(a[0],ordinal,a));return;
+            }
             case kDefaultMakeSpace:throw std::runtime_error("D3D scratch-space refill checkpoint");
             case kXapiInitDevices: {
                 Check(cpu,2);
@@ -1749,7 +1775,7 @@ private:
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
                      XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={},const HulkKernelDataRegistry* registry=nullptr,uint32_t image_pages=0,const std::string& partition1={})
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root,partition1),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
+        :mem_(mem),pool_(mem,base,size),sound_(mem,pool_),virtual_(mem),physical_(mem),stacks_(mem),files_(mem,disc_root,partition1),tls_(tls),clock_(clock),registry_(registry),image_pages_(image_pages) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

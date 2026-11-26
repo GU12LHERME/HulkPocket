@@ -62,6 +62,7 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     trap 'rm -f "$execution_log"' EXIT
     # Local opt-in output; never upload original assets or replay pixels.
     export HULK_REPLAY_BITMAP="${HULK_REPLAY_BITMAP:-$(dirname "$log")/HulkPocket-replay-$(date +%Y%m%d-%H%M%S).bmp}"
+    export HULK_AUDIO_PCM="${HULK_AUDIO_PCM:-$(dirname "$log")/HulkPocket-audio-$(date +%Y%m%d-%H%M%S).pcm}"
     status=0
     "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
     cat "$execution_log"

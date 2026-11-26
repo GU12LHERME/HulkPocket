@@ -1,0 +1,217 @@
+#pragma once
+#include "xbe_kernel_pool.h"
+#include "xbe_graphics_boundary.h"
+#include "../third_party/xboxxberecomp/audio/adpcm.h"
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+#include <limits>
+#include <vector>
+namespace hulkpocket {
+// Diagnostic software DirectSound subset. All calls execute under the
+// session lock. No APU MMIO, no synthetic completion for unimplemented APIs.
+// PCM capture is intentionally headless, not Android speaker playback.
+class HulkSound {
+    XboxGuestAddressSpace& mem_;
+    XbeKernelPool& pool_;
+    struct Format {
+        uint32_t tag=0,channels=0,rate=0,align=0,bits=0;
+        uint32_t Frames(uint32_t n)const{return tag==0x69?n/align*64:n/align;}
+        uint32_t Bytes(uint32_t n)const{return tag==0x69?n/64*align:n*align;}
+    };
+    struct Voice {
+        Format fmt{};
+        uint32_t data=0,bytes=0,owned=0,frequency=0;
+        bool playing=false,loop=false;
+        float gain=1;
+        uint64_t phase=0;
+    };
+    std::map<uint32_t,Voice> voices_;
+    uint32_t device_=0,refs_=0;
+    uint64_t rendered_=0,nonzero_=0;
+    std::chrono::steady_clock::time_point last_{};
+    int capture_=-1;
+    bool capture_attempted_=false;
+    static constexpr uint32_t bad=0x88780032u,oom=0x8007000eu;
+    static constexpr uint32_t kRate=48000,kMaxBytes=4*1024*1024;
+    bool Range(uint32_t a,uint32_t n)const{
+        return a&&uint64_t(a)+n<=XboxGuestAddressSpace::kSize&&mem_.IsCommitted(a,n);
+    }
+    bool Parse(uint32_t p,Format& f)const{
+        if(!Range(p,18))return false;
+        std::array<uint8_t,20> x{};mem_.Read(p,x.data(),18);
+        auto u16=[&](unsigned i){return uint32_t(x[i])|(uint32_t(x[i+1])<<8);};
+        f={u16(0),u16(2),uint32_t(x[4])|(uint32_t(x[5])<<8)|(uint32_t(x[6])<<16)|(uint32_t(x[7])<<24),u16(12),u16(14)};
+        if(f.channels<1||f.channels>2||f.rate<8000||f.rate>48000)return false;
+        if(f.tag==1)return (f.bits==8||f.bits==16)&&f.align==f.channels*f.bits/8;
+        if(f.tag!=0x69||f.bits!=4||f.align!=36*f.channels||u16(16)<2||!Range(p,20))return false;
+        mem_.Read(p+18,x.data()+18,2);return u16(18)==64;
+    }
+    void Capture(const std::vector<int16_t>& samples){
+        if(!capture_attempted_){
+            capture_attempted_=true;
+            if(const char* p=std::getenv("HULK_AUDIO_PCM");p&&*p){
+                capture_=open(p,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);
+                if(capture_<0)std::fprintf(stderr,"HULK AUDIO capture open failed\n");
+                else std::fprintf(stderr,"HULK AUDIO capture: stereo signed 16-bit LE 48000 Hz\n");
+            }
+        }
+        if(capture_<0)return;
+        const auto* data=reinterpret_cast<const uint8_t*>(samples.data());
+        size_t remain=samples.size()*sizeof(int16_t);
+        while(remain){
+            auto n=write(capture_,data,remain);
+            if(n<0&&errno==EINTR)continue;
+            if(n<=0){close(capture_);capture_=-1;std::fprintf(stderr,"HULK AUDIO capture write failed\n");return;}
+            data+=n;remain-=size_t(n);
+        }
+    }
+public:
+    HulkSound(XboxGuestAddressSpace& mem,XbeKernelPool& pool):mem_(mem),pool_(pool){}
+    ~HulkSound(){
+        if(capture_>=0)close(capture_);
+        if(device_||rendered_)std::fprintf(stderr,"HULK AUDIO SUMMARY frames=%llu nonzero_frames=%llu voices=%zu (headless)\n",
+            static_cast<unsigned long long>(rendered_),static_cast<unsigned long long>(nonzero_),voices_.size());
+    }
+    uint32_t Create(uint32_t guid,uint32_t out,uint32_t outer){
+        if(guid||outer||!Range(out,4))return bad;
+        if(!device_){
+            device_=pool_.Allocate(0x40);
+            if(!device_)return oom;
+            last_=std::chrono::steady_clock::now();
+            std::fprintf(stderr,"HULK DSOUND DEVICE PASS obj=%08X (software stereo; headless)\n",device_);
+        }
+        if(refs_==UINT32_MAX)return bad;
+        ++refs_;mem_.Write32(out,device_);return 0;
+    }
+    uint32_t ReleaseDevice(uint32_t id){
+        if(!id||id!=device_||!refs_)return bad;
+        if(--refs_)return refs_;
+        if(!voices_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
+        pool_.Free(device_);device_=0;return 0;
+    }
+    bool Device(uint32_t id)const{return id&&id==device_;}
+    uint32_t Speaker(uint32_t id,uint32_t out){
+        if(!Device(id)||!Range(out,4))return bad;
+        mem_.Write32(out,0);return 0; // Xbox DSSPEAKER_STEREO
+    }
+    uint32_t NewBuffer(uint32_t desc,uint32_t out){
+        if(!device_||!Range(desc,20)||!Range(out,4)||voices_.size()>=192)return bad;
+        auto bytes=mem_.Read32(desc+8),flags=mem_.Read32(desc+4);
+        Format f{};
+        // Accept only plain 2D voices; no unimplemented 3D or custom bins.
+        if(mem_.Read32(desc)<20||flags&0x10u||mem_.Read32(desc+16)||
+           !Parse(mem_.Read32(desc+12),f)||bytes>kMaxBytes||bytes%f.align)return bad;
+        auto obj=pool_.Allocate(0x40);if(!obj)return oom;
+        auto data=bytes?pool_.Allocate(bytes):0;
+        if(bytes&&!data){pool_.Free(obj);return oom;}
+        Voice v{};v.fmt=f;v.data=v.owned=data;v.bytes=bytes;
+        voices_.emplace(obj,v);mem_.Write32(out,obj);
+        std::fprintf(stderr,"HULK DSOUND BUFFER PASS obj=%08X tag=%04X channels=%u rate=%u bytes=%u flags=%08X\n",
+            obj,f.tag,f.channels,f.rate,bytes,flags);return 0;
+    }
+    uint32_t Buffer(uint32_t id,uint32_t op,const std::array<uint32_t,8>& a){
+        auto it=voices_.find(id);if(it==voices_.end())return bad;
+        auto& v=it->second;
+        switch(op){
+        case kSoundBufferRelease:
+            if(v.owned)pool_.Free(v.owned);
+            voices_.erase(it);pool_.Free(id);return 0;
+        case kSoundBufferData:{
+            auto p=a[1],n=a[2];
+            if(n>kMaxBytes||n%v.fmt.align||(p&&(!n||!Range(p,n))))return bad;
+            if(p==v.data&&n==v.bytes)return 0;
+            if(v.owned&&p>=v.owned&&uint64_t(p)<uint64_t(v.owned)+v.bytes)return bad;
+            auto allocated=!p&&n?pool_.Allocate(n):0;
+            if(!p&&n&&!allocated)return oom;
+            if(v.owned)pool_.Free(v.owned);
+            v.owned=allocated;v.data=p?p:allocated;v.bytes=n;v.phase=0;v.playing=false;return 0;
+        }
+        case kSoundBufferPlay:
+            if(!v.bytes||!Range(v.data,v.bytes)||a[1]||a[2]||(a[3]&~3u))return bad;
+            v.loop=(a[3]&1)!=0;
+            if(a[3]&2||v.phase>=uint64_t(v.fmt.Frames(v.bytes))*kRate)v.phase=0;
+            v.playing=true;return 0;
+        case kSoundBufferStop:v.playing=false;return 0;
+        case kSoundBufferStatus:
+            if(!Range(a[1],4))return bad;
+            mem_.Write32(a[1],v.playing?(v.loop?5:1):0);return 0;
+        case kSoundBufferVolume:{
+            auto mb=static_cast<int32_t>(a[1]);if(mb< -10000||mb>0)return bad;
+            v.gain=mb==-10000?0.0f:std::pow(10.0f,float(mb)/2000.0f);return 0;
+        }
+        case kSoundBufferFrequency:
+            if(a[1]&&(a[1]<100||a[1]>200000))return bad;
+            v.frequency=a[1];return 0;
+        case kSoundBufferSetPosition:
+            if(a[1]>=v.bytes||a[1]%v.fmt.align)return bad;
+            v.phase=uint64_t(v.fmt.Frames(a[1]))*kRate;return 0;
+        case kSoundBufferGetPosition:
+            if((a[1]&&!Range(a[1],4))||(a[2]&&!Range(a[2],4)))return bad;
+            if(a[1])mem_.Write32(a[1],v.fmt.Bytes(uint32_t(v.phase/kRate)));
+            // No output queue in headless mode, so no fabricated lead cursor.
+            if(a[2])mem_.Write32(a[2],v.fmt.Bytes(uint32_t(v.phase/kRate)));
+            return 0;
+        default:throw std::logic_error("Unsupported software buffer operation");
+        }
+    }
+    // Render exactly n frames. A single checked snapshot per voice per
+    // block is decoded without reading any inaccessible guest page.
+    std::vector<int16_t> Render(uint32_t frames){
+        if(frames>4800)throw std::out_of_range("Audio render quantum exceeds 100ms");
+        std::vector<float> mix(size_t(frames)*2);
+        for(auto& [id,v]:voices_){
+            (void)id;
+            if(!v.playing)continue;
+            if(!Range(v.data,v.bytes))throw std::runtime_error("Playing sound buffer outside committed memory");
+            const auto total=v.fmt.Frames(v.bytes);
+            if(!total){v.playing=false;continue;}
+            std::array<int16_t,128> decoded{};
+            uint32_t cached=UINT32_MAX;
+            for(unsigned i=0;i<frames;++i){
+                if(v.phase>=uint64_t(total)*kRate){
+                    if(v.loop)v.phase%=uint64_t(total)*kRate;
+                    else{v.phase=uint64_t(total)*kRate;v.playing=false;break;}
+                }
+                uint32_t frame=uint32_t(v.phase/kRate);
+                const uint8_t* data=mem_.Base()+v.data;
+                if(v.fmt.tag==0x69&&cached!=frame/64){
+                    cached=frame/64;
+                    audio::DecodeXboxAdpcm({data+cached*v.fmt.align,v.fmt.align},v.fmt.channels,
+                        {decoded.data(),size_t(64)*v.fmt.channels});
+                }
+                for(unsigned ch=0;ch<2;++ch){
+                    unsigned c=std::min(ch,v.fmt.channels-1);int16_t value=0;
+                    if(v.fmt.tag==0x69)value=decoded[(frame%64)*v.fmt.channels+c];
+                    else if(v.fmt.bits==8)value=int16_t((int(data[frame*v.fmt.align+c])-128)*256);
+                    else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
+                    mix[2*i+ch]+=float(value)*v.gain;
+                }
+                v.phase+=v.frequency?v.frequency:v.fmt.rate;
+            }
+            if(!v.loop&&v.phase>=uint64_t(total)*kRate){v.phase=uint64_t(total)*kRate;v.playing=false;}
+        }
+        std::vector<int16_t> pcm(mix.size());
+        for(size_t i=0;i<mix.size();++i)pcm[i]=int16_t(std::clamp(mix[i],-32768.0f,32767.0f));
+        for(unsigned i=0;i<frames;++i)if(pcm[2*i]||pcm[2*i+1])++nonzero_;
+        rendered_+=frames;return pcm;
+    }
+    void Pump(){
+        if(!device_)return;
+        auto now=std::chrono::steady_clock::now();
+        auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(now-last_).count();
+        if(elapsed<1000)return;
+        // Limit catchup and total capture duration; no invented progress
+        // after a long pause. Diagnostic stops rather than consuming RAM.
+        uint32_t frames=uint32_t(std::min<int64_t>(elapsed,100000)*kRate/1000000);
+        last_=now;
+        if(rendered_+frames>uint64_t(kRate)*120)throw std::runtime_error("Audio diagnostic capture budget reached");
+        if(!voices_.empty())Capture(Render(frames));
+    }
+};
+}

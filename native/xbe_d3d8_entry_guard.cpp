@@ -337,3 +337,241 @@ void sub_0029B330(X86Context& ctx,uint8_t* base){
 }
 #endif
 #endif
+
+// Verified named XDK audio exports. Unsupported APIs stop explicitly rather
+// than execute console hardware code against host-owned audio objects.
+namespace {
+[[maybe_unused]] void SoundBoundary(X86Context& ctx,uint8_t* base,uint32_t id,unsigned n,const char* name){
+    if(!Stdcall(name)||!hulkpocket::graphics_callback)throw std::runtime_error("Audio requires checked stdcall adapter");
+    const auto esp=ctx.esp;
+    std::fprintf(stderr,"HULK DSOUND CALL %s ESP=%08X thread=%08X\n",name,esp,ctx.thread_handle);
+    hulkpocket::graphics_callback(ctx,base,id);
+    if(uint64_t(esp)+4+4*n!=ctx.esp)throw std::runtime_error("Audio adapter did not consume guest frame");
+}
+}
+#define SOUND_HOOK(name,id,n) extern "C" __attribute__((visibility("default"))) \
+void GUEST(name)(X86Context& ctx,uint8_t* base){SoundBoundary(ctx,base,hulkpocket::id,n,#name);}
+#define SOUND_STOP(name) extern "C" __attribute__((visibility("default"))) \
+void GUEST(name)(X86Context&,uint8_t*){throw std::runtime_error("Unsupported DirectSound boundary: " #name);}
+#if HAS_DirectSoundCreate
+SOUND_HOOK(DirectSoundCreate,kSoundCreate,3)
+#endif
+#if HAS_IDirectSound_Release
+SOUND_HOOK(IDirectSound_Release,kSoundReleaseDevice,1)
+#endif
+#if HAS_IDirectSound_GetSpeakerConfig
+SOUND_HOOK(IDirectSound_GetSpeakerConfig,kSoundSpeaker,2)
+#endif
+#if HAS_DirectSoundDoWork
+SOUND_HOOK(DirectSoundDoWork,kSoundPump,0)
+#endif
+#if HAS_DirectSoundCreateBuffer
+SOUND_HOOK(DirectSoundCreateBuffer,kSoundNewBuffer,2)
+#endif
+#if HAS_IDirectSound_CreateSoundBuffer
+SOUND_HOOK(IDirectSound_CreateSoundBuffer,kSoundNewDeviceBuffer,4)
+#endif
+#if HAS_IDirectSoundBuffer_Release
+SOUND_HOOK(IDirectSoundBuffer_Release,kSoundBufferRelease,1)
+#endif
+#if HAS_IDirectSoundBuffer_SetBufferData
+SOUND_HOOK(IDirectSoundBuffer_SetBufferData,kSoundBufferData,3)
+#endif
+#if HAS_IDirectSoundBuffer_Play
+SOUND_HOOK(IDirectSoundBuffer_Play,kSoundBufferPlay,4)
+#endif
+#if HAS_IDirectSoundBuffer_Stop
+SOUND_HOOK(IDirectSoundBuffer_Stop,kSoundBufferStop,1)
+#endif
+#if HAS_IDirectSoundBuffer_GetStatus
+SOUND_HOOK(IDirectSoundBuffer_GetStatus,kSoundBufferStatus,2)
+#endif
+#if HAS_IDirectSoundBuffer_SetVolume
+SOUND_HOOK(IDirectSoundBuffer_SetVolume,kSoundBufferVolume,2)
+#endif
+#if HAS_IDirectSoundBuffer_SetFrequency
+SOUND_HOOK(IDirectSoundBuffer_SetFrequency,kSoundBufferFrequency,2)
+#endif
+#if HAS_IDirectSoundBuffer_SetCurrentPosition
+SOUND_HOOK(IDirectSoundBuffer_SetCurrentPosition,kSoundBufferSetPosition,2)
+#endif
+#if HAS_IDirectSoundBuffer_GetCurrentPosition
+SOUND_HOOK(IDirectSoundBuffer_GetCurrentPosition,kSoundBufferGetPosition,3)
+#endif
+#if HAS_CDirectSoundStream_Discontinuity
+SOUND_STOP(CDirectSoundStream_Discontinuity)
+#endif
+#if HAS_CDirectSoundStream_Flush
+SOUND_STOP(CDirectSoundStream_Flush)
+#endif
+#if HAS_CDirectSoundStream_FlushEx
+SOUND_STOP(CDirectSoundStream_FlushEx)
+#endif
+#if HAS_CDirectSoundStream_GetInfo
+SOUND_STOP(CDirectSoundStream_GetInfo)
+#endif
+#if HAS_CDirectSoundStream_GetStatus
+SOUND_STOP(CDirectSoundStream_GetStatus)
+#endif
+#if HAS_CDirectSoundStream_Pause
+SOUND_STOP(CDirectSoundStream_Pause)
+#endif
+#if HAS_CDirectSoundStream_Process
+SOUND_STOP(CDirectSoundStream_Process)
+#endif
+#if HAS_CDirectSoundStream_SetFilter
+SOUND_STOP(CDirectSoundStream_SetFilter)
+#endif
+#if HAS_CDirectSoundStream_SetFormat
+SOUND_STOP(CDirectSoundStream_SetFormat)
+#endif
+#if HAS_CDirectSoundStream_SetFrequency
+SOUND_STOP(CDirectSoundStream_SetFrequency)
+#endif
+#if HAS_CDirectSoundStream_SetHeadroom
+SOUND_STOP(CDirectSoundStream_SetHeadroom)
+#endif
+#if HAS_CDirectSoundStream_SetI3DL2Source
+SOUND_STOP(CDirectSoundStream_SetI3DL2Source)
+#endif
+#if HAS_CDirectSoundStream_SetMaxDistance
+SOUND_STOP(CDirectSoundStream_SetMaxDistance)
+#endif
+#if HAS_CDirectSoundStream_SetMinDistance
+SOUND_STOP(CDirectSoundStream_SetMinDistance)
+#endif
+#if HAS_CDirectSoundStream_SetMixBins
+SOUND_STOP(CDirectSoundStream_SetMixBins)
+#endif
+#if HAS_CDirectSoundStream_SetMixBinVolumes
+SOUND_STOP(CDirectSoundStream_SetMixBinVolumes)
+#endif
+#if HAS_CDirectSoundStream_SetPosition
+SOUND_STOP(CDirectSoundStream_SetPosition)
+#endif
+#if HAS_CDirectSoundStream_SetVelocity
+SOUND_STOP(CDirectSoundStream_SetVelocity)
+#endif
+#if HAS_CDirectSoundStream_SetVolume
+SOUND_STOP(CDirectSoundStream_SetVolume)
+#endif
+#if HAS_DirectSoundCreateStream
+SOUND_STOP(DirectSoundCreateStream)
+#endif
+#if HAS_DirectSoundUseFullHRTF
+SOUND_STOP(DirectSoundUseFullHRTF)
+#endif
+#if HAS_IDirectSound_CommitDeferredSettings
+SOUND_STOP(IDirectSound_CommitDeferredSettings)
+#endif
+#if HAS_IDirectSound_CommitEffectData
+SOUND_STOP(IDirectSound_CommitEffectData)
+#endif
+#if HAS_IDirectSound_DownloadEffectsImage
+SOUND_STOP(IDirectSound_DownloadEffectsImage)
+#endif
+#if HAS_IDirectSound_EnableHeadphones
+SOUND_STOP(IDirectSound_EnableHeadphones)
+#endif
+#if HAS_IDirectSound_GetEffectData
+SOUND_STOP(IDirectSound_GetEffectData)
+#endif
+#if HAS_IDirectSound_GetOutputLevels
+SOUND_STOP(IDirectSound_GetOutputLevels)
+#endif
+#if HAS_IDirectSound_SetDistanceFactor
+SOUND_STOP(IDirectSound_SetDistanceFactor)
+#endif
+#if HAS_IDirectSound_SetDopplerFactor
+SOUND_STOP(IDirectSound_SetDopplerFactor)
+#endif
+#if HAS_IDirectSound_SetEffectData
+SOUND_STOP(IDirectSound_SetEffectData)
+#endif
+#if HAS_IDirectSound_SetI3DL2Listener
+SOUND_STOP(IDirectSound_SetI3DL2Listener)
+#endif
+#if HAS_IDirectSound_SetMixBinHeadroom
+SOUND_STOP(IDirectSound_SetMixBinHeadroom)
+#endif
+#if HAS_IDirectSound_SetOrientation
+SOUND_STOP(IDirectSound_SetOrientation)
+#endif
+#if HAS_IDirectSound_SetPosition
+SOUND_STOP(IDirectSound_SetPosition)
+#endif
+#if HAS_IDirectSound_SetRolloffFactor
+SOUND_STOP(IDirectSound_SetRolloffFactor)
+#endif
+#if HAS_IDirectSound_SetVelocity
+SOUND_STOP(IDirectSound_SetVelocity)
+#endif
+#if HAS_IDirectSound_SynchPlayback
+SOUND_STOP(IDirectSound_SynchPlayback)
+#endif
+#if HAS_IDirectSoundBuffer_Lock
+SOUND_STOP(IDirectSoundBuffer_Lock)
+#endif
+#if HAS_IDirectSoundBuffer_Pause
+SOUND_STOP(IDirectSoundBuffer_Pause)
+#endif
+#if HAS_IDirectSoundBuffer_SetAllParameters
+SOUND_STOP(IDirectSoundBuffer_SetAllParameters)
+#endif
+#if HAS_IDirectSoundBuffer_SetEG
+SOUND_STOP(IDirectSoundBuffer_SetEG)
+#endif
+#if HAS_IDirectSoundBuffer_SetFilter
+SOUND_STOP(IDirectSoundBuffer_SetFilter)
+#endif
+#if HAS_IDirectSoundBuffer_SetFormat
+SOUND_STOP(IDirectSoundBuffer_SetFormat)
+#endif
+#if HAS_IDirectSoundBuffer_SetHeadroom
+SOUND_STOP(IDirectSoundBuffer_SetHeadroom)
+#endif
+#if HAS_IDirectSoundBuffer_SetI3DL2Source
+SOUND_STOP(IDirectSoundBuffer_SetI3DL2Source)
+#endif
+#if HAS_IDirectSoundBuffer_SetLoopRegion
+SOUND_STOP(IDirectSoundBuffer_SetLoopRegion)
+#endif
+#if HAS_IDirectSoundBuffer_SetMaxDistance
+SOUND_STOP(IDirectSoundBuffer_SetMaxDistance)
+#endif
+#if HAS_IDirectSoundBuffer_SetMinDistance
+SOUND_STOP(IDirectSoundBuffer_SetMinDistance)
+#endif
+#if HAS_IDirectSoundBuffer_SetMixBins
+SOUND_STOP(IDirectSoundBuffer_SetMixBins)
+#endif
+#if HAS_IDirectSoundBuffer_SetMixBinVolumes
+SOUND_STOP(IDirectSoundBuffer_SetMixBinVolumes)
+#endif
+#if HAS_IDirectSoundBuffer_SetOutputBuffer
+SOUND_STOP(IDirectSoundBuffer_SetOutputBuffer)
+#endif
+#if HAS_IDirectSoundBuffer_SetPlayRegion
+SOUND_STOP(IDirectSoundBuffer_SetPlayRegion)
+#endif
+#if HAS_IDirectSoundBuffer_SetPosition
+SOUND_STOP(IDirectSoundBuffer_SetPosition)
+#endif
+#if HAS_IDirectSoundBuffer_SetRolloffCurve
+SOUND_STOP(IDirectSoundBuffer_SetRolloffCurve)
+#endif
+#if HAS_IDirectSoundBuffer_SetVelocity
+SOUND_STOP(IDirectSoundBuffer_SetVelocity)
+#endif
+#if HAS_IDirectSoundBuffer_StopEx
+SOUND_STOP(IDirectSoundBuffer_StopEx)
+#endif
+#if HAS_IDirectSoundBuffer_Unlock
+SOUND_STOP(IDirectSoundBuffer_Unlock)
+#endif
+#if HAS_IDirectSoundStream_SetEG
+SOUND_STOP(IDirectSoundStream_SetEG)
+#endif
+#if HAS_XAudioDownloadEffectsImage
+SOUND_STOP(XAudioDownloadEffectsImage)
+#endif
