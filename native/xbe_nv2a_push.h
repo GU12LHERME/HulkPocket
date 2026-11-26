@@ -48,6 +48,9 @@ inline bool IsPendingRawConfiguration(uint32_t m){
         case 0x02b4:case 0x02c0:case 0x02e0: // window clip type and first rectangle
         case 0x0394:case 0x0398: // depth clip min/max
         case 0x0a20:case 0x0a24:case 0x0a28:case 0x0a2c: // viewport offset
+        // Packed current vertex attributes (NV097_SET_VERTEX_DATA4UB).
+        // Retain values; their use by missing shader inputs is not translated.
+        case 0x1950:case 0x195c:case 0x1960:
         case 0x1e78: // shader other-stage input
             return true;
         default:return false;
@@ -75,6 +78,12 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
                 throw std::invalid_argument("NV2A constant data without valid register");
             constants[next.reg][next.component++]=std::bit_cast<float>(v);
             if(next.component==4){next.component=0;++next.reg;}
+            continue;
+        }
+        // NV097_BREAK_VERTEX_BUFFER_CACHE. The synchronous host assembler
+        // rereads guest vertex memory for each draw and has no vertex cache.
+        if(m==0x1710){
+            if(v)throw std::logic_error("Unsupported vertex cache break argument");
             continue;
         }
         if(IsPendingRawConfiguration(m)){

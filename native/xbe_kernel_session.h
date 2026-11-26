@@ -836,8 +836,8 @@ private:
                     std::fprintf(stderr,"D3D DEVICE +%04X=%08X\n",off,mem_.Read32(dev+off));
                 for(auto off:{0x784u,0x794u}){
                     auto p=mem_.Read32(dev+off);
-                    if(p&&mem_.IsCommitted(p,64))
-                        for(unsigned i=0;i<16;++i)std::fprintf(stderr,"D3D SHADER %04X +%02X=%08X\n",off,4*i,mem_.Read32(p+4*i));
+                    if(p&&mem_.IsCommitted(p,off==0x794?0x114:64))
+                        for(unsigned i=0;i<(off==0x794?69u:16u);++i)std::fprintf(stderr,"D3D SHADER %04X +%02X=%08X\n",off,4*i,mem_.Read32(p+4*i));
                 }
                 for(unsigned st=0;st<4;++st){
                     auto p=mem_.Read32(dev+0xf88+4*st);
@@ -857,9 +857,20 @@ private:
                 for(unsigned st=0;st<4;++st)for(unsigned i=0;i<gpu::kTssCount;++i)
                     std::fprintf(stderr,"D3D DRAW TSS %u %u=%08X\n",st,i,state.tss[st][i]);
                 DrainLivePush(live);
-                // Do not execute with an invented FVF or shader. Device
-                // texture/viewport/shader semantics still need translation.
-                throw std::runtime_error("D3D first draw tables synchronized; shader and raw configuration translation pending");
+                auto fvf=live.bridge.SyncFixedDiffuseShader(dev);
+                bool indexed=ordinal==(kGraphicsDrawIndexed|0x1000u);
+                auto vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
+                    indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0);
+                std::fprintf(stderr,"D3D ORIGINAL GEOMETRY ASSEMBLED: fvf=%08X vertices=%u (not rendered)\n",fvf,vertices);
+                auto synced=live.bridge.Snapshot();
+                for(auto slot:{2,3,256}){
+                    std::fprintf(stderr,"D3D DRAW MATRIX %u",slot);
+                    for(auto v:synced.transforms[slot])std::fprintf(stderr," %08X",std::bit_cast<uint32_t>(v));
+                    std::fprintf(stderr,"\n");
+                }
+                if(!synced.viewport.w||!synced.viewport.h)
+                    throw std::runtime_error("D3D original viewport has zero extent; investigate device initialization");
+                throw std::runtime_error("D3D original geometry assembled; raw raster translation pending");
 #else
                 throw std::runtime_error("D3D draw requires GLES backend");
 #endif

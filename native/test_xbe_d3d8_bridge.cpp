@@ -76,6 +76,11 @@ int main(){
         assert(pushed.simple[0x1bf0>>2]==0x3f800000&&pushed.simple[0x0398>>2]==0x4b7fffff);
         ApplyNv2aState(pushed,cursor,{{0x1ea4,8}});
         assert(cursor.pending_raw_configuration);
+        ApplyNv2aState(pushed,cursor,{{0x1710,0},{0x1950,0},{0x195c,0xffffffff},{0x1960,0}});
+        assert(pushed.simple[0x195c>>2]==0xffffffff&&cursor.pending_raw_configuration);
+        bool invalid_cache=false;
+        try{ApplyNv2aState(pushed,cursor,{{0x1710,1}});}catch(const std::logic_error&){invalid_cache=true;}
+        assert(invalid_cache);
         bool state_rejected=false;
         try{ApplyNv2aState(pushed,cursor,{{gpu::kMBlendEnable,0},{0x17fc,5}});}
         catch(const std::logic_error&){state_rejected=true;}
@@ -193,6 +198,25 @@ int main(){
     uint16_t indices[]={0,1,2};mem.Write(0x10300,indices,sizeof(indices));
     call("D3DDevice_DrawIndexedVertices",{5,3,0x10300});
     assert(bridge.Present(0x10100)==1 && backend.draws==2&&backend.clears==1&&backend.presents==1);
+    // Reproduce the observed XDK object layout and real line-list count.
+    constexpr uint32_t dev2=0x16000,shader=0x19000;
+    mem.Write32(dev2+0x794,shader);mem.Write32(shader,1);mem.Write32(shader+4,0x400);
+    for(unsigned i=0;i<16;++i)mem.Write32(shader+0x14+16*i+8,2);
+    mem.Write32(shader+0x14+8,0x32);
+    mem.Write32(shader+0x14+3*16+4,12);mem.Write32(shader+0x14+3*16+8,0x40);
+    call("D3DDevice_SetStreamSource",{0,0x10200,16});
+    struct LineVertex {float x,y,z;uint32_t color;};
+    std::vector<LineVertex> lines(1020,{0,0,0,0xffffffff});
+    mem.Write(0x80100100,lines.data(),lines.size()*sizeof(LineVertex));
+    assert(bridge.SyncFixedDiffuseShader(dev2)==0x42);
+    assert(bridge.VerifyGuestGeometry(2,0,1020,0)==1020);
+    assert(bridge.Snapshot().viewport.w==0&&backend.draws==2);
+    mem.Write32(shader+0x14+3*16+4,8);
+    bool invalid_layout=false;
+    try{bridge.SyncFixedDiffuseShader(dev2);}catch(const std::logic_error&){invalid_layout=true;}
+    assert(invalid_layout&&bridge.Snapshot().vs_handle==0x42);
+    call("D3DDevice_SetStreamSource",{0,0x10200,12});
+    call("D3DDevice_SetVertexShader",{2});
     mem.Write32(0x10400,0x0200|(1u<<18));mem.Write32(0x10404,0);
     bridge.ApplyPush(0x10400,0x10408);
     bool raw_draw_blocked=false;

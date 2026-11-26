@@ -257,6 +257,73 @@ public:
         }
         state_=std::move(next);
     }
+    // XDK 5849 shader object layout corroborated by Cxbx-Reloaded
+    // X_D3DVertexShader / X_VERTEXSHADERINPUT. Accept only a declaration
+    // exactly equivalent to an already-supported untextured FVF. The
+    // actual flags, stream, offset and format of all 16 slots are checked.
+    uint32_t SyncFixedDiffuseShader(uint32_t device){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        gpu::CheckedGuestRange(device,0x24a0);
+        auto ptr=Read(uint64_t(device)+0x794);
+        if(!ptr||ptr%4)throw std::invalid_argument("Missing guest vertex shader object");
+        gpu::CheckedGuestRange(ptr,0x14+16*16);
+        if(Read(uint64_t(ptr)+4)!=0x400||Read(uint64_t(ptr)+8)||Read(uint64_t(ptr)+12)||
+           Read(uint64_t(device)+0x784))
+            throw std::logic_error("Unsupported guest shader program or flags");
+        for(unsigned st=0;st<4;++st)
+            if(Read(uint64_t(device)+0xf88+4*st)||Read(uint64_t(device)+0xf98+4*st))
+                throw std::logic_error("Fixed diffuse shader requires unbound textures and palettes");
+        uint32_t fvf=0;
+        for(uint32_t candidate:{0x42u,0x44u}){
+            gpu::VertexShader layout;
+            gpu::FvfInputs(candidate,layout);
+            bool match=true;
+            for(unsigned i=0;i<16;++i){
+                auto slot=uint64_t(ptr)+0x14+16*i;
+                auto type=Read(slot+8);
+                const auto& want=layout.inputs[i];
+                if(want.stream<0){
+                    if(type!=0&&type!=2)match=false;
+                }else if(type!=want.type||Read(slot)!=uint32_t(want.stream)||
+                    Read(slot+4)!=want.offset||Read(slot+12)&0xffffu)match=false;
+            }
+            if(match&&state_.streams[0].vb&&state_.streams[0].stride==layout.stream_stride[0]){
+                fvf=candidate;break;
+            }
+        }
+        if(!fvf)throw std::logic_error("Guest fixed vertex declaration not equivalent to supported diffuse FVF");
+        auto next=state_;
+        next.vs_handle=fvf;next.vs.reset();next.ps.reset();
+        next.textures.fill(0);next.palettes.fill(0);
+        next.base_vertex=Read(uint64_t(device)+0x1c);
+        // Copy the actual matrices instead of using the standalone identity.
+        for(unsigned tr:{0u,1u,6u}){
+            auto pc=tr<2?tr+2:tr+250;
+            std::memcpy(next.transforms[pc].data(),gpu::CheckedGuestRange(uint64_t(device)+0xc60+64*tr,64),64);
+            for(float v:next.transforms[pc])if(!std::isfinite(v))
+                throw std::invalid_argument("Nonfinite guest transform");
+        }
+        auto vp=uint64_t(device)+0xee0;
+        next.viewport={Read(vp),Read(vp+4),Read(vp+8),Read(vp+12),Float(Read(vp+16)),Float(Read(vp+20))};
+        next.ss_offset_x=Float(Read(vp+24))-0.53125f;
+        next.ss_offset_y=Float(Read(vp+28))-0.53125f;
+        if(!std::isfinite(next.viewport.min_z)||!std::isfinite(next.viewport.max_z)||
+           !std::isfinite(next.ss_offset_x)||!std::isfinite(next.ss_offset_y))
+            throw std::invalid_argument("Nonfinite guest viewport");
+        state_=std::move(next);ViewportConstants();return fvf;
+    }
+    // Prove that the real stream can be assembled, even if later raster
+    // translation must stop. No backend draw or guest return is implied.
+    uint32_t VerifyGuestGeometry(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!count||count>262144||prim<1||prim>10)
+            throw std::invalid_argument("Invalid guest geometry request");
+        auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
+        gpu::Assembled a;
+        if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=9)
+            throw std::runtime_error("Guest diffuse geometry assembly failed");
+        return a.vertex_count;
+    }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");
