@@ -510,7 +510,7 @@ int main(){
         mem.Write32(shader+4,0);
         mem.Write32(shader+0x14+3*16+4,0);mem.Write32(shader+0x14+3*16+8,2);
         mem.Write32(shader+0x14+2*16+4,12);mem.Write32(shader+0x14+2*16+8,0x16);
-        const uint32_t attributes[]={0x194c|(4u<<18),0xffffffff,0,0,0};
+        const uint32_t attributes[]={0x194c|(2u<<18),0xffffffff,0,0x195c|(2u<<18),0xffffffff,0};
         mem.Write(0x11800,attributes,sizeof(attributes));bridge.ApplyPush(0x11800,0x11800+sizeof(attributes));
         auto lit=bridge.Snapshot();lit.rs[gpu::kRsLighting]=1;lit.rs[gpu::kRsSpecularEnable]=1;
         bridge.AdoptLiveSetters(lit);
