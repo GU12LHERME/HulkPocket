@@ -83,6 +83,7 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,kXapiInputClose,{pad_handle});assert(!c->eax);
     call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});assert(c->eax==6);
     // Explicit scripted provider: neutral/disconnected is still the default.
+    assert(setenv("HULK_FRAME_LIMIT","120",1)==0);
     assert(setenv("HULK_INPUT_SCRIPT","0:START,30:A,60:LY+",1)==0);
     c->ecx=0x12b00;c->edx=0x12b20;
     call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
@@ -98,7 +99,7 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0&&(memory->Read32(0x12b40)&255)==1);
     call(*c,base,cb,kXapiInputSetState,{pad_handle,0x12b40});assert(c->eax==50);
     call(*c,base,cb,kXapiInputClose,{pad_handle});
-    unsetenv("HULK_INPUT_SCRIPT");
+    unsetenv("HULK_INPUT_SCRIPT");unsetenv("HULK_FRAME_LIMIT");
     c->ecx=0x12b00;c->edx=0x12b20;
     call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
     HulkPadScript script;script.Configure("0:START,30:A,60:LY+",120);
