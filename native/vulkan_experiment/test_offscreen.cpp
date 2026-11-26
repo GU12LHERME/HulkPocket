@@ -212,6 +212,21 @@ int main(int argc,char** argv){
         guest_state.simple[kMPsFinalConstant0/4]=0xff20ff40;
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("updated pixel constant",f.Pixel(32,32),{32,255,64,128});
+        // Reconstruct the very same shader from NV2A writes, including
+        // explicit zero stage mode; an incomplete register set must fail.
+        hulkpocket::Nv2aConstantCursor cursor{};
+        std::vector<hulkpocket::Nv2aMethod> words={{kMPsCombinerCount,0},{kMPsFinalAbcd,1},
+            {kMPsFinalEfgh,0x1200},{kMPsFinalConstant0,0xff20ff40},{kMPsFinalConstant1,0x80000000},{0x1e70,0}};
+        auto partial=words;partial.pop_back();
+        hulkpocket::ApplyNv2aState(guest_state,cursor,partial,true);
+        bool rejected_partial=false;
+        try{(void)hulkpocket::CaptureNv2aCombiner(guest_state,cursor,0x10000);}catch(const std::logic_error&){rejected_partial=true;}
+        if(!rejected_partial)throw std::runtime_error("Incomplete NV2A shader accepted");
+        hulkpocket::ApplyNv2aState(guest_state,cursor,{{0x1e70,0}},true);
+        guest_state.ps=hulkpocket::CaptureNv2aCombiner(guest_state,cursor,0x10000);
+        guest_state.rs[kRsPsTextureModes]=guest_state.ps->def[54];
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("captured NV2A pixel combiner",f.Pixel(32,32),{32,255,64,128});
         guest_state.ps.reset();
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}

@@ -168,12 +168,19 @@ private:
         }
         live.last_viewport_call=ordinal;live.last_viewport_caller=caller;
     }
+    static bool VulkanPreviewSelected(){
+#ifdef HULK_ENABLE_VULKAN_PREVIEW
+        const char* v=std::getenv("HULK_RENDERER");return v&&std::strcmp(v,"vulkan")==0;
+#else
+        return false;
+#endif
+    }
     void DrainLivePush(LiveD3dDevice& live){
         auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
         if(end==begin)return;
         for(auto m:DecodeNv2aMethods(mem_,begin,end))
             std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
-        live.bridge.ApplyPush(begin,end);
+        live.bridge.ApplyPush(begin,end,VulkanPreviewSelected());
         live.buffers.RewindScratch();
     }
     void ReleaseD3dOwner(uint32_t thread){
@@ -1127,7 +1134,7 @@ private:
                 if(full_capture)for(unsigned st=0;st<4;++st)for(unsigned i=0;i<gpu::kTssCount;++i)
                     std::fprintf(stderr,"D3D DRAW TSS %u %u=%08X\n",st,i,state.tss[st][i]);
                 DrainLivePush(live);
-                auto fvf=live.bridge.SyncFixedDiffuseShader(dev);
+                auto fvf=live.bridge.SyncFixedDiffuseShader(dev,VulkanPreviewSelected());
                 bool indexed=ordinal==(kGraphicsDrawIndexed|0x1000u);
                 auto vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
                     indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0);
@@ -1162,6 +1169,14 @@ private:
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=indexed?0u:Arg(cpu,1),count=indexed?Arg(cpu,1):Arg(cpu,2);
                 const auto indices=indexed?Arg(cpu,2):0u;
+                if(synced.ps&&VulkanPreviewSelected()&&opted_in){
+                    if(frame_draws>=live.diagnostic_draw_limit)
+                        throw std::runtime_error("Captured pixel draw budget reached");
+                    live.bridge.ReplayCapturedPixelDiagnostic(Arg(cpu,0),start,count,indices);
+                    ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
+                    std::fprintf(stderr,"D3D CAPTURED PIXEL DRAW RETURN: handle=%08X combiners=%u vertices=%u\n",synced.ps->handle,synced.ps->def[53]&255,vertices);
+                    Ret(cpu,3,0);return;
+                }
                 if(((!indexed&&caller==0x0031c10f)||(indexed&&caller==0x00327371&&indices))&&(fvf==0x142||synced.vs)&&
                    ((Arg(cpu,0)==5&&count&&count%3==0)||(Arg(cpu,0)==6&&count>=3))){
                     if(frame_draws>=live.diagnostic_draw_limit)

@@ -2,6 +2,7 @@
 #include "xbox_guest_address_space.h"
 #include "gpu/state.h"
 #include <bit>
+#include <bitset>
 #include <vector>
 #include <stdexcept>
 #include <cstdio>
@@ -63,6 +64,7 @@ struct Nv2aConstantCursor {
     // presence independently of their values (physical offset zero is legal).
     std::array<uint8_t,4> texture_words{}, texture_dirty{};
     std::array<bool,4> texture_control{};
+    std::bitset<0x800> combiner_seen{};
     bool TextureReady(unsigned stage)const{
         return texture_words.at(stage)==3&&texture_dirty.at(stage)&&
             (texture_dirty.at(stage)==3||texture_control.at(stage));
@@ -71,11 +73,51 @@ struct Nv2aConstantCursor {
         texture_dirty.at(stage)=0;texture_control.at(stage)=false;
     }
 };
+// NV097 combiner registers, matching XDK D3DPIXELSHADERDEF and nxdk nv_regs.h.
+// Stage-program is 0x1e70. Do not confuse it with transform microcode.
+inline bool IsCombinerMethod(uint32_t m){
+    using namespace gpu;
+    auto range=[&](uint32_t b){return m>=b&&m<b+32&&m%4==0;};
+    return range(kMPsAlphaInputs)||range(kMPsConstant0)||range(kMPsConstant1)||
+           range(kMPsAlphaOutputs)||range(kMPsRgbInputs)||range(kMPsRgbOutputs)||
+           m==kMPsFinalAbcd||m==kMPsFinalEfgh||m==kMPsCompareMode||
+           m==kMPsFinalConstant0||m==kMPsFinalConstant1||m==kMPsCombinerCount||
+           m==0x1e70||m==kMPsDotMapping||m==kMPsInputTexture;
+}
+inline std::shared_ptr<gpu::PixelShader> CaptureNv2aCombiner(const gpu::State& s,const Nv2aConstantCursor& cursor,uint32_t handle){
+    using namespace gpu;
+    if(!handle)throw std::invalid_argument("No active guest pixel shader");
+    auto get=[&](uint32_t m){
+        if(!cursor.combiner_seen.test(m/4))throw std::logic_error("Incomplete NV2A pixel shader state");
+        return s.simple[m/4];
+    };
+    auto shader=std::make_shared<PixelShader>();shader->handle=handle;
+    auto* d=shader->def;
+    d[53]=get(kMPsCombinerCount);unsigned n=d[53]&255;
+    if(n>8)throw std::invalid_argument("Invalid guest combiner count");
+    d[8]=get(kMPsFinalAbcd);d[9]=get(kMPsFinalEfgh);
+    d[43]=get(kMPsFinalConstant0);d[44]=get(kMPsFinalConstant1);
+    d[54]=get(0x1e70);
+    // Only modes supported by the current Vulkan shader implementation.
+    // Compare/dot/other-stage inputs do not affect 2D projection or pass-through.
+    for(unsigned i=0;i<4;++i){
+        auto mode=(d[54]>>(5*i))&31;
+        if(mode!=0&&mode!=1&&mode!=4)throw std::logic_error("Unintegrated captured pixel texture mode");
+    }
+    for(unsigned i=0;i<n;++i){
+        d[i]=get(kMPsAlphaInputs+4*i);d[26+i]=get(kMPsAlphaOutputs+4*i);
+        d[34+i]=get(kMPsRgbInputs+4*i);d[45+i]=get(kMPsRgbOutputs+4*i);
+        d[10+i]=get(kMPsConstant0+4*i);d[18+i]=get(kMPsConstant1+4*i);
+    }
+    // Shared factors must come from stage zero, even when later stages use them.
+    if(n){d[10]=get(kMPsConstant0);d[18]=get(kMPsConstant1);}
+    return shader;
+}
 // State-only method subset, based on XboxXBERecomp ApplyConstant/SetSimple.
 // Entire batch validated before committing; do not silently drop a method.
 // Immediate draws, texture commands, reports, and GPU control flow are pending.
 inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
-    const std::vector<Nv2aMethod>& methods){
+    const std::vector<Nv2aMethod>& methods,bool capture_combiner=false){
     auto simple=state.simple;
     auto constants=state.vsc;
     auto next=cursor;
@@ -96,6 +138,9 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         if(m==0x1710){
             if(v)throw std::logic_error("Unsupported vertex cache break argument");
             continue;
+        }
+        if(capture_combiner&&IsCombinerMethod(m)){
+            simple[m/4]=v;next.combiner_seen.set(m/4);next.pending_raw_configuration=true;continue;
         }
         if(IsPendingRawConfiguration(m)){
             simple[m>>2]=v;next.pending_raw_configuration=true;continue;

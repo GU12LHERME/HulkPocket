@@ -295,15 +295,16 @@ public:
     // X_D3DVertexShader / X_VERTEXSHADERINPUT. Accept only a declaration
     // exactly equivalent to an already-supported untextured FVF. The
     // actual flags, stream, offset and format of all 16 slots are checked.
-    uint32_t SyncFixedDiffuseShader(uint32_t device){
+    uint32_t SyncFixedDiffuseShader(uint32_t device,bool capture_pixel=false){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         gpu::CheckedGuestRange(device,0x24a0);
         auto ptr=Read(uint64_t(device)+0x794);
         if(!ptr||ptr%4)throw std::invalid_argument("Missing guest vertex shader object");
         gpu::CheckedGuestRange(ptr,0x14+16*16);
         const auto flags=Read(uint64_t(ptr)+4);
+        auto pixel=Read(uint64_t(device)+0x784);
         if((flags!=0x400&&flags!=0)||Read(uint64_t(ptr)+8)||Read(uint64_t(ptr)+12)||
-           Read(uint64_t(device)+0x784))
+           (pixel&&!capture_pixel))
             throw std::logic_error("Unsupported guest shader program or flags");
         std::array<uint32_t,4> textures{};
         for(unsigned st=0;st<4;++st){
@@ -380,6 +381,11 @@ public:
         if(!fvf)throw std::logic_error("Guest fixed vertex declaration not equivalent to supported diffuse or packed-normal layout");
         auto next=state_;
         next.vs_handle=fvf;next.vs=std::move(packed);next.ps.reset();
+        if(pixel){
+            gpu::CheckedGuestRange(pixel,4);
+            next.ps=CaptureNv2aCombiner(next,push_constants_,pixel);
+            next.rs[gpu::kRsPsTextureModes]=next.ps->def[54];
+        }
         next.textures=textures;next.palettes.fill(0);
         next.base_vertex=Read(uint64_t(device)+0x1c);
         // Copy the actual matrices instead of using the standalone identity.
@@ -577,7 +583,31 @@ public:
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         backend_.Draw(replay,prim,start,count,ip);backend_.Flush();
     }
-    void ApplyPush(uint32_t begin,uint32_t end){
+    // Narrow live programmable-pixel path: preserve only the existing
+    // verified fixed diffuse vertex profile and captured combiner words.
+    // All other raw configuration remains guarded; this is not general D3D replay.
+    void ReplayCapturedPixelDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!initialized_||!state_.ps||state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42)||
+           !count||count>262144||!((prim==5&&count%3==0)||(prim==6&&count>=3))||
+           state_.scissor_count||state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||state_.viewport.max_z!=1||
+           state_.ss_offset_x||state_.ss_offset_y||state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
+           state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsStencilEnable]||state_.rs[gpu::kRsTwoSidedLighting])
+            throw std::logic_error("Unsupported captured pixel replay profile");
+        gpu::TextureDesc desc{};
+        if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height)
+            throw std::logic_error("Captured pixel replay requires full viewport");
+        auto replay=state_;replay.rs.fill(0);replay.simple.fill(0);
+        for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable})replay.rs[r]=state_.rs[r];
+        for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
+                    gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
+                    gpu::kMShadeMode})
+            replay.simple[m/4]=state_.simple[m/4];
+        for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
+        auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
+        backend_.Draw(replay,prim,start,count,ip);backend_.Flush();
+    }
+    void ApplyPush(uint32_t begin,uint32_t end,bool capture_pixel=false){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");
         // Validate and decode newly complete raw texture bindings before
@@ -585,7 +615,7 @@ public:
         // the image data decodes; sampler, shader and raster state still matter.
         auto methods=DecodeNv2aMethods(mem_,begin,end);
         auto next=state_;auto cursor=push_constants_;
-        ApplyNv2aState(next,cursor,methods);
+        ApplyNv2aState(next,cursor,methods,capture_pixel);
         gpu::ScopedGuestMemory scope(mem_);
         for(unsigned stage=0;stage<4;++stage){
             if(!cursor.TextureReady(stage))continue;
