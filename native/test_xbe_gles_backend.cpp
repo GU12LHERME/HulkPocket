@@ -2,10 +2,27 @@
 #include "xbe_d3d8_bridge.h"
 #include "xbe_d3d8_create_probe.h"
 #include "xbe_bc_decode.h"
+#include "xbe_diagnostic_bitmap.h"
+#include <fstream>
 #include <cassert>
 #include <cstdio>
 using namespace hulkpocket;
 int main(){
+    {
+        // Two top-down BGRA rows with padding: BMP must store bottom-up BGR.
+        const uint8_t pixels[]={0,0,255,255,0,255,0,255,99,99,99,99,
+                                255,0,0,255,255,255,255,255,88,88,88,88};
+        const char* path="/tmp/hulk-replay-bitmap-test.bmp";
+#ifndef __ANDROID__
+        WriteDiagnosticBitmap(path,pixels,2,2,12);
+        std::ifstream f(path,std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),{});
+        assert(bytes.size()==70&&bytes[0]=='B'&&bytes[1]=='M'&&bytes[10]==54);
+        assert(bytes[54]==255&&bytes[55]==0&&bytes[56]==0&&bytes[60]==0&&bytes[61]==0);
+        assert(bytes[62]==0&&bytes[63]==0&&bytes[64]==255&&bytes[65]==0&&bytes[66]==255&&bytes[67]==0);
+        f.close();std::remove(path);
+#endif
+    }
     {
         XboxGuestAddressSpace guest;guest.Commit(0x20000,0x10000);
         XbeKernelPool pool(guest,0x09000000,0x10000);

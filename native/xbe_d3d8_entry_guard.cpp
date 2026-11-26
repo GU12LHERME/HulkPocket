@@ -278,3 +278,25 @@ HOOK(D3DDevice_MakeSpace,hulkpocket::kDefaultMakeSpace)
 #if HAS_D3D_MakeRequestedSpace
 HOOK(D3D_MakeRequestedSpace,hulkpocket::kDefaultMakeSpace)
 #endif
+
+// Local-only verified original viewport writer. No guessed ABI or return:
+// invoke its generated implementation unchanged, observing a copied context.
+#if __has_include("hulk_verified_viewport_writer.h")
+#include "hulk_verified_viewport_writer.h"
+#if HULK_VERIFIED_VIEWPORT_WRITER
+extern "C" void __imp__sub_0037F720(X86Context&,uint8_t*);
+extern "C" __attribute__((visibility("default")))
+void sub_0037F720(X86Context& ctx,uint8_t* base){
+    auto saved=ctx;
+    if(hulkpocket::graphics_callback){
+        auto observation=saved;
+        hulkpocket::graphics_callback(observation,base,hulkpocket::kViewportTraceEnter);
+    }
+    __imp__sub_0037F720(ctx,base);
+    if(hulkpocket::graphics_callback){
+        auto observation=saved;
+        hulkpocket::graphics_callback(observation,base,hulkpocket::kViewportTraceLeave);
+    }
+}
+#endif
+#endif

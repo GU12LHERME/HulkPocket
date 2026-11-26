@@ -8,6 +8,7 @@ import hashlib
 from prepare_xbe_elf import prepare
 from build_xbe_android import generated_sources
 from supplemental_guest_mapping import generate
+from discover_hulk_viewport_writer import generate_writer
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -40,6 +41,8 @@ def main():
         # and every cached game object remain unchanged.
         count = generate(prepared, work / "hulk_extra_mapping.h")
         print(f"Supplemental verified guest function entries: {count}", flush=True)
+        viewport_writer=generate_writer(prepared,work/"hulk_verified_viewport_writer.h")
+        print(f"Verified local viewport writer instrumentation: {viewport_writer}",flush=True)
         for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe", "xbe_d3d8_entry_guard"):
             obj = work / (name + ".o")
             subprocess.run([str(compiler), "-std=c++20", "-O2", "-fPIC",
@@ -61,6 +64,8 @@ def main():
             for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint", "hulk_entry_probe", "hulk_entry_execute", "hulk_entry_execute_with_kernel"):
                 if name not in names:
                     raise RuntimeError("Missing export: " + name)
+            if viewport_writer and not any(len(fields:=line.split())>=3 and fields[-2:]==["T","sub_0037F720"] for line in symbols.splitlines()):
+                raise RuntimeError("Verified viewport writer override not linked")
             # Verify strong override, not just a symbol name that could be weak.
             import re
             header_text = (prepared / "image_symbols.h").read_text()

@@ -61,4 +61,17 @@ def main():
         hist.append((va,ins))
         previous=fn
     print(f"D3D VIEWPORT CANDIDATES REPORTED: {count}")
+    # The actual six stores in the latest report identify this function.
+    # Include its complete bounded local instruction context and callers.
+    print("D3D VIEWPORT WRITER LOCAL BODY (0037F720)")
+    seen=set()
+    for fn,va,ins in records(folder):
+        if fn=="__imp__sub_0037F720" and va not in seen and len(seen)<260:
+            print(f"  {va:08X} {ins}");seen.add(va)
+    print(f"D3D VIEWPORT WRITER BODY INSTRUCTIONS: {len(seen)}")
+    print("D3D VIEWPORT WRITER DIRECT CALL REFERENCES (bounded)")
+    count=0
+    for fn,va,ins in records(folder):
+        if re.search(r"\bcall\s+0x0*37f720\b",ins,re.I) and count<24:
+            print(f"{fn} {va:08X} {ins}");count+=1
 if __name__=="__main__":main()

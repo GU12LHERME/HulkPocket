@@ -15,6 +15,7 @@
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
 #include "xbe_d3d8_default_trace.h"
+#include "xbe_diagnostic_bitmap.h"
 #endif
 #include "xbe_kernel_calendar.h"
 #include <map>
@@ -907,6 +908,12 @@ private:
                             if(std::memcmp(before.data()+at,pixels+at,4))++changed;
                         }
                         std::fprintf(stderr,"D3D ORIGINAL LINE REPLAY (diagnostic target viewport %ux%u): changed_pixels=%u; not faithful guest draw or presented frame\n",desc.width,desc.height,changed);
+                        if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
+                            try{
+                                WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
+                                std::fprintf(stderr,"D3D DIAGNOSTIC BITMAP: %s (reduced replay, not a presented frame)\n",path);
+                            }catch(const std::exception& ex){std::fprintf(stderr,"D3D DIAGNOSTIC BITMAP FAILED: %s\n",ex.what());}
+                        }
                     }
                     throw std::runtime_error("D3D original viewport has zero extent; investigate device initialization");
                 }
@@ -1496,6 +1503,37 @@ public:
         std::unique_lock<std::mutex> lock(active_->lock_);
         if(active_->mem_.IsCommitted(cpu.esp,4)) fault_return=static_cast<sig_atomic_t>(active_->mem_.Read32(cpu.esp));
         auto& session=*active_;
+        // Pure observation: do not pause, service DPCs, consume stack args
+        // or touch the original CPU context while a guest routine is active.
+        if(ordinal==kViewportTraceEnter||ordinal==kViewportTraceLeave){
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+            auto* live=session.live_d3d_.get();
+            if(live&&live->owner==cpu.thread_handle){
+                auto& mem=session.mem_;
+                auto dev=live->buffers.DeviceAddress();
+                bool before=ordinal==kViewportTraceEnter;
+                std::fprintf(stderr,"D3D VIEWPORT WRITER %s caller=%08X esp=%08X eax=%08X ecx=%08X edx=%08X fields=",
+                    before?"ENTER":"LEAVE",mem.IsCommitted(cpu.esp,4)?mem.Read32(cpu.esp):0,
+                    cpu.esp,cpu.eax,cpu.ecx,cpu.edx);
+                for(unsigned i=0;i<6;++i)std::fprintf(stderr," %08X",mem.Read32(dev+0xee0+4*i));
+                std::fprintf(stderr,"\n");
+                if(before&&mem.IsCommitted(cpu.esp,20)){
+                    for(unsigned i=0;i<4;++i){
+                        auto v=mem.Read32(cpu.esp+4+4*i);
+                        std::fprintf(stderr,"D3D VIEWPORT WRITER stack_candidate %u=%08X\n",i,v);
+                        if(v>=0x10000&&v%4==0&&mem.IsCommitted(v,24)){
+                            std::fprintf(stderr,"D3D VIEWPORT WRITER candidate %u words:",i);
+                            for(unsigned j=0;j<6;++j)std::fprintf(stderr," %08X",mem.Read32(v+4*j));
+                            std::fprintf(stderr,"\n");
+                        }
+                    }
+                    for(auto off:{0x930u,0x934u,0x938u,0x93cu,0x940u,0x944u,0x948u,0x94cu,0x950u,0x954u,0x958u,0x95cu,0x960u,0x964u,0x968u,0x96cu,0x970u,0x974u,0x978u,0x97cu,0x980u,0x1a00u,0x1a04u,0x1a08u,0x1a0cu,0x1a10u,0x1a14u,0x1a18u,0x1a1cu,0x1a20u})
+                        std::fprintf(stderr,"D3D VIEWPORT WRITER DEVICE +%04X=%08X\n",off,mem.Read32(dev+off));
+                }
+            }
+#endif
+            return;
+        }
         const auto seq=session.trace_seq_++;
         auto& trace=session.recent_[seq%session.recent_.size()];
         trace={seq,ordinal,cpu.thread_handle,uint32_t(fault_return),cpu.esp,cpu.eax,false};
