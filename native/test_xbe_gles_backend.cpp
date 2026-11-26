@@ -32,6 +32,40 @@ int main(){
         guest.Write32(pp+12,1);guest.Write32(pp+0x20,1);guest.Write32(pp+0x24,0x2a);
         RunD3dCreateProbe(guest,pool,phys,dev,slot,pp);
         assert(pool.Outstanding()==0&&phys.AllocatedPages()==0&&guest.Read32(slot)==0);
+        // Real two-buffer swap, stable header, distinct physical pixels.
+        {
+            XbeD3d8DeviceMemory buffers(guest,pool,phys);
+            buffers.Initialize(dev,slot,pp);
+            XbeGlesBackend gl;XbeD3d8Bridge bridge(guest,gl);
+            bridge.Initialize(64,64);
+            auto front=buffers.BackBuffer(-1),back=buffers.BackBuffer(0);
+            auto a=guest.Read32(front+4),b=guest.Read32(back+4);
+            bridge.BindInitialTargets(back,buffers.Depth());
+            gpu::ScopedGuestMemory scope(guest);
+            auto state=bridge.Snapshot();
+            gl.Clear(state,0,nullptr,0xf3,0xffff0000,1,0);
+            gl.ReadbackColor(state.rt);
+            assert(guest.Read32(0x80000000u+b)==0xffff0000);
+            assert(bridge.Present(back)==1&&buffers.Rotate()==1);
+            assert(guest.Read32(front+4)==b&&guest.Read32(back+4)==a);
+            bridge.BindInitialTargets(back,buffers.Depth());
+            state=bridge.Snapshot();gl.BeginRotatedFrame(state.rt);
+            bool refused=false;
+            try{gl.ReadbackColor(state.rt);}catch(const std::logic_error&){refused=true;}
+            assert(refused);
+            refused=false;
+            try{gl.Present(state.rt);}catch(const std::logic_error&){refused=true;}
+            assert(refused);
+            refused=false;
+            try{gl.Clear(state,0,nullptr,0x10,0xff0000ff,1,0);}catch(const std::logic_error&){refused=true;}
+            assert(refused);
+            gl.Clear(state,0,nullptr,0xf3,0xff0000ff,1,0);
+            gl.ReadbackColor(state.rt);
+            assert(guest.Read32(0x80000000u+a)==0xff0000ff);
+            assert(guest.Read32(0x80000000u+b)==0xffff0000);
+            assert(bridge.Present(back)==2);
+        }
+        assert(pool.Outstanding()==0&&phys.AllocatedPages()==0&&guest.Read32(slot)==0);
     }
     XboxGuestAddressSpace mem;mem.Commit(0x10000,0x10000);mem.Commit(0x80100000,0x10000);
     XbeGlesBackend backend;XbeD3d8Bridge bridge(mem,backend);bridge.Initialize(64,64);

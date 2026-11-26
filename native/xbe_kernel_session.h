@@ -99,6 +99,7 @@ private:
         uint32_t owner;
         unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0,diagnostic_vblanks=0;
         uint32_t diagnostic_vertices=0;
+        unsigned diagnostic_swap_returns=0,draws_at_swap=0;
         std::unique_ptr<gpu::State> diagnostic_line_profile;
         static constexpr unsigned diagnostic_draw_limit=8;
         std::array<uint32_t,6> last_viewport{};
@@ -1039,7 +1040,8 @@ private:
                     throw std::runtime_error("D3D swap without owned live device");
                 auto& live=*live_d3d_;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||Arg(cpu,0)!=0)
+                if(!allow||std::strcmp(allow,"1")||
+                    live.diagnostic_draw_returns<=live.draws_at_swap||Arg(cpu,0)!=0)
                     throw std::runtime_error("Unsupported diagnostic swap request");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1055,9 +1057,30 @@ private:
                     catch(const std::exception& ex){std::fprintf(stderr,"D3D SWAP BITMAP FAILED: %s\n",ex.what());}
                 }
                 const auto presented=live.bridge.Present(state.rt.header);
-                std::fprintf(stderr,"D3D ORIGINAL SWAP OFFSCREEN PASS: presents=%u draws=%u vertices=%u waits=%u (reduced diagnostic, no guest return)\n",
+                std::fprintf(stderr,"D3D ORIGINAL SWAP OFFSCREEN PASS: presents=%u draws=%u vertices=%u waits=%u (reduced diagnostic)\n",
                     presented,live.diagnostic_draw_returns,live.diagnostic_vertices,live.diagnostic_gpu_waits);
-                throw std::runtime_error("D3D original swap reached; guest buffer rotation and display integration pending");
+                const char* swap_opt=std::getenv("HULK_CONTINUE_SWAP");
+                if(!swap_opt||std::strcmp(swap_opt,"1")||live.diagnostic_swap_returns||
+                    presented!=1||mem_.Read32(cpu.esp)!=0x0031b1d4||live.buffers.BufferCount()!=2)
+                    throw std::runtime_error("D3D original swap reached; guest continuation not enabled or outside verified first swap");
+                // Pinned XDK bridge semantics: stable surface headers,
+                // physical data and lock words rotate, return swap count.
+                const auto dev=live.buffers.DeviceAddress(),front=live.buffers.BackBuffer(-1),back=live.buffers.BackBuffer(0);
+                const auto old_front=mem_.Read32(front+4),old_back=mem_.Read32(back+4);
+                if(old_front==old_back||mem_.Read32(dev+0x2478)!=0||
+                    mem_.Read32(front+8)||mem_.Read32(back+8)||
+                    !physical_.Contains(0x80000000u+old_front,uint64_t(desc.pitch)*desc.height)||
+                    !physical_.Contains(0x80000000u+old_back,uint64_t(desc.pitch)*desc.height))
+                    throw std::runtime_error("Unsupported original first swap backing state");
+                const auto n=live.buffers.Rotate();
+                if(n!=presented||mem_.Read32(front+4)!=old_back||mem_.Read32(back+4)!=old_front)
+                    throw std::runtime_error("D3D swap rotation verification failed");
+                live.bridge.BindInitialTargets(back,live.buffers.Depth());
+                live.backend.BeginRotatedFrame(live.bridge.Snapshot().rt);
+                live.draws_at_swap=live.diagnostic_draw_returns;
+                ++live.diagnostic_swap_returns;
+                std::fprintf(stderr,"D3D ORIGINAL SWAP RETURN: count=%u front=%08X back=%08X (next frame requires full clear)\n",n,mem_.Read32(front+4),mem_.Read32(back+4));
+                Ret(cpu,1,n);return;
 #else
                 throw std::runtime_error("D3D swap requires GLES backend");
 #endif

@@ -16,7 +16,7 @@ class XbeGlesBackend final:public gpu::Backend {
     GLuint program_=0,vao_=0,vbo_=0,texture_=0;
     GLint extent_=-1, textured_=-1, sampler_=-1, color_op_=-1, alpha_op_=-1, transformed_=-1, world_=-1, view_=-1, projection_=-1, alpha_func_=-1, alpha_ref_=-1;
     uint32_t width_=0,height_=0,target_=0, depth_target_=0;
-    bool depth_cleared_=false,stencil_cleared_=false;
+    bool depth_cleared_=false,stencil_cleared_=false,color_requires_clear_=false;
     uint32_t fence_=0;
     std::thread::id owner_{};
     void Check() const;
@@ -49,5 +49,8 @@ public:
     void WaitGpuFrame(uint64_t) override;
     std::array<uint8_t,4> ReadPixel(uint32_t x,uint32_t y);
     void ReadbackColor(const gpu::Surface& surface);
+    // New physical backing behind the same Xbox resource header. This
+    // reduced backend cannot restore prior contents of the rotated buffer.
+    void BeginRotatedFrame(const gpu::Surface& surface);
 };
 }

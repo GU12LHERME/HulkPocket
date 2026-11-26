@@ -97,7 +97,7 @@ void XbeGlesBackend::Destroy() noexcept {
     if(surface_!=EGL_NO_SURFACE)eglDestroySurface(display_,surface_);
     eglTerminate(display_);
     display_=EGL_NO_DISPLAY;context_=EGL_NO_CONTEXT;surface_=EGL_NO_SURFACE;
-    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=stencil_cleared_=false;
+    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=stencil_cleared_=color_requires_clear_=false;
 }
 void XbeGlesBackend::Check() const {
     if(context_==EGL_NO_CONTEXT || owner_!=std::this_thread::get_id() ||
@@ -259,6 +259,9 @@ void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rec
             throw std::invalid_argument("Clear rectangle outside framebuffer");
     }
     if(flags&~(gpu::kClearTarget|gpu::kClearZ|gpu::kClearStencil))Unsupported("Unsupported clear flags");
+    const bool full_color=!count&&(flags&gpu::kClearTarget)==gpu::kClearTarget;
+    if(color_requires_clear_&&(flags&gpu::kClearTarget)&&!full_color)
+        Unsupported("Rotated backbuffer requires full color clear before partial clear");
     if(flags&(gpu::kClearZ|gpu::kClearStencil))DepthTarget(s.zs);
     if(!std::isfinite(z))throw std::invalid_argument("Nonfinite clear depth");
     glDisable(GL_SCISSOR_TEST);
@@ -285,6 +288,7 @@ void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rec
     if((flags&gpu::kClearZ)&&!count)depth_cleared_=true;
     if((flags&gpu::kClearStencil)&&!count)stencil_cleared_=true;
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);GlCheck("GLES clear");
+    if(full_color)color_requires_clear_=false;
 }
 void XbeGlesBackend::UploadTexture(const gpu::State& s){
     gpu::TextureDesc d{};
@@ -324,6 +328,7 @@ void XbeGlesBackend::UploadTexture(const gpu::State& s){
 }
 void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint32_t count,const uint8_t* indices){
     Check();Target(s.rt);
+    if(color_requires_clear_)Unsupported("Rotated backbuffer requires full color clear before draw");
     const bool textured=s.textures[0]!=0;
     const bool transformed=(s.vs_handle&0xe)==4;
     const uint32_t expected=(textured?0x140u:0x40u)|(transformed?4u:2u);
@@ -421,16 +426,27 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     glUniform1i(alpha_ref_,GLint(alpha_reference&255));
     glDrawArrays(mode,0,GLsizei(n));GlCheck("GLES draw");
 }
-void XbeGlesBackend::Present(const gpu::Surface& s){Check();Target(s);glFinish();GlCheck("GLES present");if(!eglSwapBuffers(display_,surface_))throw std::runtime_error("EGL present failed");}
+void XbeGlesBackend::Present(const gpu::Surface& s){Check();Target(s);if(color_requires_clear_)Unsupported("Rotated backbuffer requires full color clear before present");glFinish();GlCheck("GLES present");if(!eglSwapBuffers(display_,surface_))throw std::runtime_error("EGL present failed");}
+void XbeGlesBackend::BeginRotatedFrame(const gpu::Surface& s){
+    Check();
+    if(!target_||target_!=s.header)Unsupported("Rotated frame must retain color resource header");
+    Target(s);
+    // Pbuffer pixels are not a cache of the newly rotated Xbox allocation.
+    // Refuse to read or draw until the game establishes full new contents.
+    color_requires_clear_=true;
+    depth_cleared_=stencil_cleared_=false;
+}
 void XbeGlesBackend::Flush(){Check();glFinish();GlCheck("GLES finish");}
 std::array<uint8_t,4> XbeGlesBackend::ReadPixel(uint32_t x,uint32_t y){
-    Check();if(x>=width_||y>=height_)throw std::out_of_range("Pixel outside framebuffer");
+    Check();if(color_requires_clear_)Unsupported("Rotated backbuffer requires full color clear before pixel readback");
+    if(x>=width_||y>=height_)throw std::out_of_range("Pixel outside framebuffer");
     std::array<uint8_t,4> pixel{};glReadPixels(x,height_-1-y,1,1,GL_RGBA,GL_UNSIGNED_BYTE,pixel.data());GlCheck("GLES readback");return pixel;
 }
 // Copy the single current color target into its actual Xbox linear BGRA
 // backing storage. No depth readback, other targets or asynchronous sync.
 void XbeGlesBackend::ReadbackColor(const gpu::Surface& s){
     Check();
+    if(color_requires_clear_)Unsupported("Rotated backbuffer requires full color clear before readback");
     if(!target_||target_!=s.header)Unsupported("GLES readback requires current color target");
     Target(s);
     gpu::TextureDesc d{};
