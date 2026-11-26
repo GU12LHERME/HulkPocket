@@ -510,7 +510,7 @@ SOUND_STOP(IDirectSound_SetVelocity)
 SOUND_HOOK(IDirectSound_SynchPlayback,kSoundSynchPlayback,1)
 #endif
 #if HAS_IDirectSoundBuffer_Lock
-SOUND_STOP(IDirectSoundBuffer_Lock)
+SOUND_HOOK(IDirectSoundBuffer_Lock,kSoundBufferLock,8)
 #endif
 #if HAS_IDirectSoundBuffer_Pause
 SOUND_HOOK(IDirectSoundBuffer_Pause,kSoundBufferPause,2)
@@ -528,7 +528,7 @@ SOUND_STOP(IDirectSoundBuffer_SetFilter)
 SOUND_STOP(IDirectSoundBuffer_SetFormat)
 #endif
 #if HAS_IDirectSoundBuffer_SetHeadroom
-SOUND_STOP(IDirectSoundBuffer_SetHeadroom)
+SOUND_HOOK(IDirectSoundBuffer_SetHeadroom,kSoundBufferHeadroom,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetI3DL2Source
 SOUND_STOP(IDirectSoundBuffer_SetI3DL2Source)
@@ -567,7 +567,7 @@ SOUND_STOP(IDirectSoundBuffer_SetVelocity)
 SOUND_STOP(IDirectSoundBuffer_StopEx)
 #endif
 #if HAS_IDirectSoundBuffer_Unlock
-SOUND_STOP(IDirectSoundBuffer_Unlock)
+SOUND_HOOK(IDirectSoundBuffer_Unlock,kSoundBufferUnlock,5)
 #endif
 #if HAS_IDirectSoundStream_SetEG
 SOUND_STOP(IDirectSoundStream_SetEG)

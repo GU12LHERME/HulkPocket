@@ -581,11 +581,14 @@ private:
             case kSoundBufferVolume:
             case kSoundBufferFrequency:
             case kSoundBufferSetPosition:
+            case kSoundBufferLock:
+            case kSoundBufferUnlock:
+            case kSoundBufferHeadroom:
             case kSoundBufferPause:
             case kSoundBufferPlayRegion:
             case kSoundBufferLoopRegion:
             case kSoundBufferGetPosition: {
-                unsigned n=ordinal==kSoundBufferPlay?4:
+                unsigned n=ordinal==kSoundBufferLock?8:ordinal==kSoundBufferUnlock?5:ordinal==kSoundBufferPlay?4:
                     (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition||ordinal==kSoundBufferPlayRegion||ordinal==kSoundBufferLoopRegion)?3:
                     (ordinal==kSoundBufferRelease||ordinal==kSoundBufferStop)?1:2;
                 Check(cpu,n);

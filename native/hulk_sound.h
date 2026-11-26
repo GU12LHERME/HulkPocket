@@ -30,7 +30,9 @@ class HulkSound {
         uint32_t data=0,bytes=0,owned=0,frequency=0;
         bool playing=false,loop=false,paused=false,sync=false;
         uint32_t play_start=0,play_length=0,loop_start=0,loop_length=0;
-        float gain=1;
+        float gain=1,headroom=1;
+        bool locked=false;
+        uint32_t lock_ptr=0,lock_bytes=0,lock_ptr2=0,lock_bytes2=0;
         uint64_t phase=0;
     };
     std::map<uint32_t,Voice> voices_;
@@ -202,9 +204,11 @@ public:
         auto& v=it->second;
         switch(op){
         case kSoundBufferRelease:
+            if(v.locked)return bad;
             if(v.owned)pool_.Free(v.owned);
             voices_.erase(it);pool_.Free(id);return 0;
         case kSoundBufferData:{
+            if(v.locked)return bad;
             auto p=a[1],n=a[2];
             if(n>kMaxBytes||n%v.fmt.align||(p&&(!n||!Range(p,n))))return bad;
             if(p==v.data&&n==v.bytes)return 0;
@@ -215,6 +219,33 @@ public:
             v.owned=allocated;v.data=p?p:allocated;v.bytes=n;v.phase=0;v.playing=false;v.paused=v.sync=false;
             v.play_start=v.loop_start=0;v.play_length=v.loop_length=n;return 0;
         }
+        case kSoundBufferLock:{
+            // XboxXBERecomp 767a818: Lock has 8 arguments including
+            // this, and Xbox DSBLOCK_ENTIREBUFFER is bit 0.
+            // Unsupported flags are rejected rather than guessed.
+            if(v.locked||!v.bytes||!Range(v.data,v.bytes)||(a[7]&~1u))return bad;
+            uint32_t off=a[1], n=(a[7]&1)?v.bytes:a[2];
+            if(off>=v.bytes||!n||n>v.bytes||!Range(a[3],4)||!Range(a[4],4))return bad;
+            if(bool(a[5])!=bool(a[6])||(a[5]&&(!Range(a[5],4)||!Range(a[6],4))))return bad;
+            // Output words must be independent, including unaligned aliases.
+            for(unsigned i=3;i<=6;++i)if(a[i])
+                for(unsigned j=i+1;j<=6;++j)if(a[j]&&
+                    uint64_t(a[i])<uint64_t(a[j])+4&&uint64_t(a[j])<uint64_t(a[i])+4)return bad;
+            uint32_t first=std::min(n,v.bytes-off), second=n-first;
+            if(second&&!a[5])return bad;
+            v.lock_ptr=v.data+off;v.lock_bytes=first;
+            v.lock_ptr2=second?v.data:0;v.lock_bytes2=second;v.locked=true;
+            mem_.Write32(a[3],v.lock_ptr);mem_.Write32(a[4],first);
+            if(a[5]){mem_.Write32(a[5],v.lock_ptr2);mem_.Write32(a[6],second);}
+            return 0;
+        }
+        case kSoundBufferUnlock:
+            if(!v.locked||a[1]!=v.lock_ptr||a[2]!=v.lock_bytes||
+               a[3]!=v.lock_ptr2||a[4]!=v.lock_bytes2)return bad;
+            v.locked=false;return 0;
+        case kSoundBufferHeadroom:
+            if(a[1]>10000)return bad;
+            v.headroom=std::pow(10.0f,-float(a[1])/2000.0f);return 0;
         case kSoundBufferPlay:
             if(!v.play_length||!Range(v.data,v.bytes)||a[1]||a[2]||(a[3]&~7u))return bad;
             v.loop=(a[3]&1)!=0;v.sync=(a[3]&4)!=0;v.paused=false;
@@ -270,7 +301,7 @@ public:
         std::vector<float> mix(size_t(frames)*2);
         for(auto& [id,v]:voices_){
             (void)id;
-            if(!v.playing||v.paused||v.sync)continue;
+            if(!v.playing||v.paused||v.sync||v.locked)continue;
             if(!Range(v.data,v.bytes))throw std::runtime_error("Playing sound buffer outside committed memory");
             const auto total=v.fmt.Frames(v.play_length);
             const uint64_t loop_begin=uint64_t(v.fmt.Frames(v.loop_start))*kRate;
@@ -296,7 +327,7 @@ public:
                     if(v.fmt.tag==0x69)value=decoded[(frame%64)*v.fmt.channels+c];
                     else if(v.fmt.bits==8)value=int16_t((int(data[frame*v.fmt.align+c])-128)*256);
                     else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
-                    mix[2*i+ch]+=float(value)*v.gain;
+                    mix[2*i+ch]+=float(value)*v.gain*v.headroom;
                 }
                 v.phase+=v.frequency?v.frequency:v.fmt.rate;
             }
