@@ -37,21 +37,30 @@ def audit(nm: Path, objects: list[Path]) -> dict:
     if not nm.is_file() or not objects:
         raise ValueError("missing llvm-nm or compiled object files")
     counts: collections.Counter[str] = collections.Counter()
+    defined: set[str] = set()
     for obj in objects:
         if not obj.is_file() or obj.suffix != ".o":
             raise ValueError("audit accepts only existing .o files")
         text = subprocess.check_output(
-            [str(nm), "-u", "--demangle", str(obj)], text=True
+            [str(nm), "-u", str(obj)], text=True
         )
         counts.update(parse_undefined(text))
+        definitions = subprocess.check_output([str(nm), "--defined-only", "--extern-only", "--format=posix", str(obj)], text=True)
+        defined.update(line.split()[0] for line in definitions.splitlines() if len(line.split()) >= 2)
+    remaining = {name: count for name, count in counts.items() if name not in defined}
+    demangled = subprocess.run([str(nm.parent / "llvm-cxxfilt")], input="\n".join(remaining)+"\n", text=True, capture_output=True, check=True).stdout.splitlines() if remaining else []
+    if len(demangled) != len(remaining):
+        raise RuntimeError("unexpected demangler output")
     return {
         "object_count": len(objects),
-        "unique_undefined": len(counts),
+        "unique_undefined": len(remaining),
+        "unique_undefined_before_resolution": len(counts),
+        "resolved_between_objects": len(counts) - len(remaining),
         "symbols": [
-            {"name": name, "category": classify(name), "references": count}
-            for name, count in sorted(counts.items())
+            {"name": display, "mangled": name, "category": classify(display), "references": remaining[name]}
+            for name, display in zip(remaining, demangled)
         ],
-        "note": "Undefined per object; cross-object resolution may satisfy some imports at final link."
+        "note": "External definitions subtracted by exact mangled name; final strict link remains authoritative."
     }
 
 def main() -> None:
