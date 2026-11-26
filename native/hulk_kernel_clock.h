@@ -15,10 +15,12 @@ public:
         if(!interval || address>0xfffffff8u || address%4 ||
            !mem.IsCommitted(address,8))
             throw std::invalid_argument("Invalid kernel clock storage");
-        registry.Register(156,tick_,4,mem);
-        registry.Register(157,increment_,4,mem);
+        auto staged=registry;
+        staged.Register(156,tick_,4,mem);
+        staged.Register(157,increment_,4,mem);
         mem.Write32(tick_,0);
         mem.Write32(increment_,interval_);
+        registry=staged;
     }
     void Update(XboxGuestAddressSpace& mem) const {
         auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-start_).count();
