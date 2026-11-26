@@ -38,8 +38,11 @@ jobs:
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Compile Android ARM64 GLES diagnostic
         run: |
-          NDK="$ANDROID_HOME/ndk/28.2.13676358"
-          if [ ! -d "$NDK" ]; then sdkmanager "ndk;28.2.13676358"; fi
+          set -eu
+          NDK="$RUNNER_TEMP/android-ndk-r28c"
+          curl --fail --location --retry 3 https://dl.google.com/android/repository/android-ndk-r28c-linux.zip -o "$RUNNER_TEMP/ndk.zip"
+          unzip -q "$RUNNER_TEMP/ndk.zip" -d "$RUNNER_TEMP"
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang++"
           TOOL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p build/gles
           "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv3 -o build/gles/hulk-gles-smoke
