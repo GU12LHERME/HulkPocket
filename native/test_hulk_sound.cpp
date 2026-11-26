@@ -180,6 +180,26 @@ int main(){
     assert(s.SetEffectData(ds,0,1,0x10018,4,0)==0x88780032u);
     assert(s.SetEffectData(ds,0,0,0x10018,4,0)==0);
     assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x11223344);
+    // Real I3DL2 impulse response; both direct and deferred listener updates.
+    const uint32_t env[]={uint32_t(-1000),uint32_t(-100),bits(0),bits(1.49f),bits(0.83f),
+        uint32_t(-2602),bits(0.007f),200,bits(0.011f),bits(100),bits(100),bits(5000)};
+    mem.Write(0x10900,env,sizeof(env));
+    assert(s.I3dl2Listener(ds,0x400000,0)==0x88780032u);
+    assert(s.I3dl2Listener(ds,0x10900,2)==0x88780032u);
+    mem.Write32(0x1090c,bits(-1));
+    assert(s.I3dl2Listener(ds,0x10900,0)==0x88780032u);
+    mem.Write(0x10900,env,sizeof(env));
+    assert(s.I3dl2Listener(ds,0x10900,1)==0);
+    assert(s.Listener3d(ds,kSoundCommit3d,{ds})==0);
+    assert(s.I3dl2Listener(ds,0x10900,0)==0);
+    environment::Reverb rv;
+    environment::Parameters p{-1000,-100,0,1.49f,0.83f,-2602,0.007f,200,0.011f,100,100,5000};
+    assert(environment::Valid(p));rv.Set(p.data());
+    std::vector<float> impulse(4800),wet(9600);impulse[0]=16000;
+    environment::Mix(rv,impulse,wet);
+    bool audible=false;
+    for(auto x:wet){assert(std::isfinite(x));if(std::abs(x)>0.1f)audible=true;}
+    assert(audible);
     assert(s.ReleaseDevice(ds)==0&&pool.Outstanding()==0);
     std::puts("Software DirectSound device, PCM/ADPCM, looping, volume and bounds passed");
 }

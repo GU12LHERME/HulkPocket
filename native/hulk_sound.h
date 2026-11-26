@@ -3,6 +3,7 @@
 #include "hulk_audio_queue.h"
 #include "hulk_android_audio.h"
 #include "hulk_sound_spatial.h"
+#include "hulk_sound_reverb.h"
 #include <memory>
 #include <deque>
 #include "xbe_graphics_boundary.h"
@@ -90,10 +91,18 @@ private:
     uint32_t device_=0,refs_=0;
     bool full_hrtf_requested_=false;
     spatial::Deferred<spatial::Listener> listener_{};
+    std::unique_ptr<environment::Reverb> reverb_;
+    environment::Parameters pending_environment_{};
+    bool environment_pending_=false;
     struct EffectSegment {uint32_t address=0,size=0;};
     std::vector<uint32_t> effect_allocations_;
     std::vector<EffectSegment> effect_states_;
+    void ApplyEnvironment(const environment::Parameters& p){
+        if(!reverb_)reverb_=std::make_unique<environment::Reverb>();
+        reverb_->Set(p.data());
+    }
     void FreeEffects(){
+        reverb_.reset();environment_pending_=false;
         for(auto a:effect_allocations_)pool_.Free(a);
         effect_allocations_.clear();effect_states_.clear();
     }
@@ -233,10 +242,28 @@ public:
     bool FullHrtfRequested()const{return full_hrtf_requested_;}
     void AttachOutput(HulkAudioQueue<>* output){output_=output;}
     bool Device(uint32_t id)const{return id&&id==device_;}
+    uint32_t I3dl2Listener(uint32_t id,uint32_t ptr,uint32_t apply){
+        if(!Device(id)||!Range(ptr,48)||apply>1)return bad;
+        environment::Parameters p{};
+        for(unsigned i=0;i<p.size();++i){
+            auto bits=mem_.Read32(ptr+4*i);
+            p[i]=(i<2||i==5||i==7)?float(static_cast<int32_t>(bits)):spatial::Float(bits);
+        }
+        if(!environment::Valid(p)){
+            std::fprintf(stderr,"HULK I3DL2 invalid parameters:");
+            for(auto x:p)std::fprintf(stderr," %g",double(x));
+            std::fprintf(stderr,"\n");return bad;
+        }
+        if(apply){pending_environment_=p;environment_pending_=true;}
+        else{ApplyEnvironment(p);environment_pending_=false;}
+        std::fprintf(stderr,"HULK I3DL2 LISTENER PASS room=%g decay=%g reverb=%g apply=%u (spatial stereo send; not full DSP chain)\n",double(p[0]),double(p[3]),double(p[7]),apply);
+        return 0;
+    }
     uint32_t Listener3d(uint32_t id,uint32_t op,const std::array<uint32_t,8>& a){
         if(!Device(id))return bad;
         if(op==kSoundCommit3d){
             spatial::Commit(listener_);
+            if(environment_pending_){ApplyEnvironment(pending_environment_);environment_pending_=false;}
             for(auto& item:voices_)spatial::Commit(item.second.space);
             for(auto& item:streams_)spatial::Commit(item.second.space);
             return 0;
@@ -554,6 +581,7 @@ public:
     std::vector<int16_t> Render(uint32_t frames){
         if(frames>4800)throw std::out_of_range("Audio render quantum exceeds 100ms");
         std::vector<float> mix(size_t(frames)*2);
+        std::vector<float> environmental_send(reverb_?frames:0);
         for(auto& [id,v]:voices_){
             (void)id;
             if(!v.playing||v.paused||v.sync||v.locked)continue;
@@ -588,7 +616,10 @@ public:
                     sample[ch]=float(value)*v.gain*v.headroom;
                 }
                 sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
-                if(v.is3d){mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];}
+                if(v.is3d){
+                    mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];
+                    if(reverb_)environmental_send[i]+=(sample[0]+sample[1])*0.5f;
+                }
                 else Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
                 v.phase+=step;
             }
@@ -631,12 +662,16 @@ public:
                     sample[ch]=float(value)*v.gain*v.headroom;
                 }
                 sample[0]*=spatial_gains.left;sample[1]*=spatial_gains.right;
-                if(v.is3d){mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];}
+                if(v.is3d){
+                    mix[2*i]+=sample[0];mix[2*i+1]+=sample[1];
+                    if(reverb_)environmental_send[i]+=(sample[0]+sample[1])*0.5f;
+                }
                 else Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
                 v.phase+=step;
             }
             advance();
         }
+        if(reverb_)environment::Mix(*reverb_,environmental_send,mix);
         std::vector<int16_t> pcm(mix.size());
         for(size_t i=0;i<mix.size();++i)pcm[i]=int16_t(std::clamp(mix[i],-32768.0f,32767.0f));
         for(unsigned i=0;i<frames;++i)if(pcm[2*i]||pcm[2*i+1])++nonzero_;
@@ -652,7 +687,7 @@ public:
         uint32_t frames=uint32_t(std::min<int64_t>(elapsed,100000)*kRate/1000000);
         last_=now;
         if(rendered_+frames>uint64_t(kRate)*120)throw std::runtime_error("Audio diagnostic capture budget reached");
-        if(!voices_.empty()||!streams_.empty()||output_){
+        if(!voices_.empty()||!streams_.empty()||output_||reverb_){
             auto pcm=Render(frames);
             Capture(pcm);
             if(output_)output_->Push(pcm.data(),frames);

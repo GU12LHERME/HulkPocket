@@ -508,7 +508,7 @@ SOUND_HOOK(IDirectSound_SetDopplerFactor,kSoundListenerDoppler,3)
 SOUND_HOOK(IDirectSound_SetEffectData,kSoundSetEffectData,6)
 #endif
 #if HAS_IDirectSound_SetI3DL2Listener
-SOUND_STOP(IDirectSound_SetI3DL2Listener)
+SOUND_HOOK(IDirectSound_SetI3DL2Listener,kSoundI3dl2Listener,3)
 #endif
 #if HAS_IDirectSound_SetMixBinHeadroom
 SOUND_STOP(IDirectSound_SetMixBinHeadroom)

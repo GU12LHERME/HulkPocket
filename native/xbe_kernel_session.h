@@ -589,6 +589,7 @@ private:
         }
 #endif
         switch(ordinal) {
+            case kSoundI3dl2Listener:Check(cpu,3);sound_.Pump();Ret(cpu,3,sound_.I3dl2Listener(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)));return;
             case kSoundListenerPosition:case kSoundListenerVelocity:case kSoundListenerOrientation:
             case kSoundListenerDistance:case kSoundListenerRolloff:case kSoundListenerDoppler:case kSoundCommit3d:{
                 unsigned n=ordinal==kSoundCommit3d?1:ordinal==kSoundListenerOrientation?8:
