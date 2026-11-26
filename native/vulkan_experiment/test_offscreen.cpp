@@ -6,6 +6,7 @@
 #include "gpu/shaders.h"
 #include "raster_state.h"
 #include "guest_resources.h"
+#include "vertex_plan.h"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -22,7 +23,7 @@ constexpr VkFormat Format=VK_FORMAT_R8G8B8A8_UNORM;
 void Check(VkResult r,const char* what){
     if(r!=VK_SUCCESS)throw std::runtime_error(std::string(what)+": "+std::to_string(r));
 }
-struct Buffer{VkBuffer b{};VkDeviceMemory m{};void* data{};};
+struct Buffer{VkBuffer b{};VkDeviceMemory m{};void* data{};VkDeviceSize capacity{};};
 struct Image{VkImage image{};VkImageView view{};gpu::ImageMemory::Allocation alloc{};};
 struct Vertex{float x,y,z;uint32_t color_or_normal;float u,v;};
 static_assert(sizeof(Vertex)==24);
@@ -33,7 +34,10 @@ struct Fixture{
     gpu::ImageMemory images;
     std::unique_ptr<gpu::FrameFences<1>> fence;
     Buffer verts,indices,uniform,readback,staging;
-    Image target,texture,depth;
+    Image target,depth;
+    std::array<Image,4> textures{};
+    std::array<uint32_t,4> tex_width{},tex_height{};
+    VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
     VkRenderPass pass{};VkFramebuffer fb{};VkSampler sampler{};
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
@@ -51,7 +55,7 @@ struct Fixture{
             if(sampler)vkDestroySampler(dev,sampler,nullptr);
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
-            Destroy(target);Destroy(texture);Destroy(depth);
+            Destroy(target);for(auto& t:textures)Destroy(t);Destroy(depth);
             Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);Destroy(staging);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
@@ -72,12 +76,17 @@ struct Fixture{
         ai.memoryTypeIndex=Type(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         Check(vkAllocateMemory(dev,&ai,nullptr,&b.m),"buffer memory");
         Check(vkBindBufferMemory(dev,b.b,b.m,0),"bind buffer");
-        Check(vkMapMemory(dev,b.m,0,size,0,&b.data),"map buffer");
+        Check(vkMapMemory(dev,b.m,0,size,0,&b.data),"map buffer");b.capacity=size;
     }
     void Destroy(Buffer& b){
         if(b.data)vkUnmapMemory(dev,b.m);
         if(b.b)vkDestroyBuffer(dev,b.b,nullptr);
         if(b.m)vkFreeMemory(dev,b.m,nullptr);
+        b={};
+    }
+    void EnsureBuffer(Buffer& b,VkDeviceSize size,VkBufferUsageFlags usage){
+        if(!size||size>64ull*1024*1024)throw std::invalid_argument("Invalid Vulkan upload size");
+        if(b.capacity<size){Destroy(b);CreateBuffer(b,size,usage);}
     }
     void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage,VkFormat format=Format,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT){
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};ci.imageType=VK_IMAGE_TYPE_2D;
@@ -99,7 +108,7 @@ struct Fixture{
     void Destroy(Image& x){
         if(x.view)vkDestroyImageView(dev,x.view,nullptr);
         if(x.image)vkDestroyImage(dev,x.image,nullptr);
-        images.Free(dev,x.alloc);
+        images.Free(dev,x.alloc);x={};
     }
     void Begin(){
         if(!fence->Begin(0))throw std::runtime_error("Vulkan frame wait/reset failed");
@@ -136,7 +145,7 @@ struct Fixture{
         }
         if(!physical)throw std::runtime_error("No Vulkan 1.1 graphics queue");
         VkPhysicalDeviceProperties props{};vkGetPhysicalDeviceProperties(physical,&props);
-        std::printf("Vulkan device: %s\n",props.deviceName);
+        std::printf("Vulkan device: %s\n",props.deviceName);limits=props.limits;
         vkGetPhysicalDeviceMemoryProperties(physical,&mem);
         float priority=1;VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         qi.queueFamilyIndex=family;qi.queueCount=1;qi.pQueuePriorities=&priority;
@@ -161,13 +170,15 @@ struct Fixture{
         }
         if(depth_format==VK_FORMAT_UNDEFINED)throw std::runtime_error("No depth/stencil format");
         CreateImage(depth,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,depth_format,VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT);
-        CreateImage(texture,2,2,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        for(unsigned i=0;i<4;++i){CreateImage(textures[i],2,2,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);tex_width[i]=tex_height[i]=2;}
         // Constant-color image is a synthetic sampled texture, not a guest decoder test.
         Begin();
-        Transition(texture.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
-        VkClearColorValue color{{.5f,1,.25f,1}};VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
-        vkCmdClearColorImage(cmd,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&color,1,&range);
-        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        for(auto& texture:textures){
+            Transition(texture.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkClearColorValue color{{.5f,1,.25f,1}};VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+            vkCmdClearColorImage(cmd,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&color,1,&range);
+            Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        }
         Submit();
         VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sci.magFilter=sci.minFilter=VK_FILTER_NEAREST;
         sci.addressModeU=sci.addressModeV=sci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -208,28 +219,45 @@ struct Fixture{
         VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptors;da.descriptorSetCount=1;da.pSetLayouts=&set_layout;
         Check(vkAllocateDescriptorSets(dev,&da,&set),"descriptor set");
         VkDescriptorBufferInfo ub{uniform.b,0,4096};
-        VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        std::array<VkDescriptorImageInfo,4> im{};
+        for(unsigned i=0;i<4;++i)im[i]={VK_NULL_HANDLE,textures[i].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo sm{sampler,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
         std::array<VkWriteDescriptorSet,10> writes{};
         for(uint32_t i=0;i<10;++i){
             auto& x=writes[i];x.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;x.dstSet=set;x.dstBinding=i;
             x.descriptorCount=1;x.descriptorType=bindings[i].descriptorType;
-            if(i<2)x.pBufferInfo=&ub;else x.pImageInfo=i<6?&im:&sm;
+            if(i<2)x.pBufferInfo=&ub;else x.pImageInfo=i<6?&im[i-2]:&sm;
         }
         vkUpdateDescriptorSets(dev,writes.size(),writes.data(),0,nullptr);
     }
-    // Reuse the current texture allocation and descriptor. Upload from checked
-    // guest memory after conversion; do not substitute a constant GPU clear.
-    void UploadGuestTexture(uint32_t header){
-        auto pixels=hulkpocket::vkexp::GuestTexture(header);
-        if(pixels.width!=2||pixels.height!=2||pixels.rgba.size()!=16)throw std::invalid_argument("Probe texture extent mismatch");
-        std::memcpy(staging.data,pixels.rgba.data(),16);
+    // Synchronous resource replacement: previous draws have completed.
+    void UploadGuestTexture(uint32_t header,unsigned stage=0,uint32_t palette=0){
+        if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
+        auto pixels=hulkpocket::vkexp::GuestTexture(header,palette);
+        if(pixels.width>limits.maxImageDimension2D||pixels.height>limits.maxImageDimension2D||
+           pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4)
+            throw std::invalid_argument("Invalid Vulkan texture extent");
+        EnsureBuffer(staging,pixels.rgba.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        std::memcpy(staging.data,pixels.rgba.data(),pixels.rgba.size());
+        auto& texture=textures[stage];
+        bool resize=tex_width[stage]!=pixels.width||tex_height[stage]!=pixels.height;
+        if(resize){
+            Destroy(texture);
+            CreateImage(texture,pixels.width,pixels.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            tex_width[stage]=pixels.width;tex_height[stage]=pixels.height;
+        }
         Begin();
-        Transition(texture.image,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
-        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={2,2,1};
+        Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={pixels.width,pixels.height,1};
         vkCmdCopyBufferToImage(cmd,staging.b,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
         Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
         Submit();
+        VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
+        wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
+        vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
     }
     VkShaderModule Module(const std::filesystem::path& path){
         std::ifstream f(path,std::ios::binary|std::ios::ate);
@@ -241,7 +269,7 @@ struct Fixture{
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=data.size()*4;ci.pCode=data.data();
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
-    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state){
+    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan){
         if(pipeline){vkDestroyPipeline(dev,pipeline,nullptr);pipeline={};}
         if(vs){vkDestroyShaderModule(dev,vs,nullptr);vs={};}
         if(fs){vkDestroyShaderModule(dev,fs,nullptr);fs={};}
@@ -254,7 +282,11 @@ struct Fixture{
         VkVertexInputBindingDescription bind{0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX};
         VkVertexInputAttributeDescription attrs[]={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{packed?2u:3u,0,packed?VK_FORMAT_R32_UINT:VK_FORMAT_B8G8R8A8_UNORM,12},{9,0,VK_FORMAT_R32G32_SFLOAT,16}};
         VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};vi.vertexBindingDescriptionCount=1;vi.pVertexBindingDescriptions=&bind;vi.vertexAttributeDescriptionCount=3;vi.pVertexAttributeDescriptions=attrs;
-        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        if(plan){
+            vi.vertexBindingDescriptionCount=plan->bindings.size();vi.pVertexBindingDescriptions=plan->bindings.data();
+            vi.vertexAttributeDescriptionCount=plan->attributes.size();vi.pVertexAttributeDescriptions=plan->attributes.data();
+        }
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=guest?hulkpocket::vkexp::Topology(*guest):VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         VkViewport vp{0,float(H),float(W),-float(H),0,1};VkRect2D sc{{0,0},{W,H}};
         VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.pViewports=&vp;vps.scissorCount=1;vps.pScissors=&sc;
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;
@@ -274,27 +306,39 @@ struct Fixture{
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
     }
     void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr){
-        Pipeline(root,packed,textured,blend,multi,state);
+        hulkpocket::vkexp::VertexPlan plan;
+        if(guest){
+            // Current precompiled shaders require exactly these register sets.
+            // Other declarations must use a matching generated shader later.
+            if(second||guest->pretransformed||guest->regs!=(packed?0x205:0x209))
+                throw std::invalid_argument("No matching probe shader for Xbox declaration");
+            plan=hulkpocket::vkexp::PlanVertices(*guest,limits);
+            for(const auto& a:plan.attributes){
+                VkFormatProperties fp{};vkGetPhysicalDeviceFormatProperties(physical,a.format,&fp);
+                if(!(fp.bufferFeatures&VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT))throw std::invalid_argument("GPU vertex format unavailable");
+                const auto expected=a.location==0?VK_FORMAT_R32G32B32_SFLOAT:a.location==9?VK_FORMAT_R32G32_SFLOAT:packed?VK_FORMAT_R32_UINT:VK_FORMAT_B8G8R8A8_UNORM;
+                if(a.format!=expected)throw std::invalid_argument("Probe shader input format mismatch");
+            }
+            EnsureBuffer(verts,plan.bytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+            for(unsigned i=0;i<guest->buffer_count;++i)
+                std::memcpy(static_cast<uint8_t*>(verts.data)+plan.offsets[i],guest->buffers[i].src,guest->buffers[i].bytes);
+            if(guest->index_count){
+                if(!guest->index_src)throw std::invalid_argument("Missing assembled indices");
+                auto bytes=uint64_t(guest->index_count)*(guest->index16?2:4);
+                EnsureBuffer(indices,bytes,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);std::memcpy(indices.data,guest->index_src,bytes);
+            }
+        }
+        Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr);
         uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
-        if(guest){
-            if(guest->buffer_count!=1||guest->buffers[0].stride!=sizeof(Vertex)||guest->buffers[0].bytes!=sizeof(v)||
-               guest->vertex_count!=3||guest->index_count!=3||!guest->index16||guest->base_vertex||
-               guest->topology!=gpu::Topology::Triangles||guest->strip||!guest->index_src||
-               guest->elements[0].format!=gpu::kVertexR32G32B32_FLOAT||guest->elements[3].format!=gpu::kVertexB8G8R8A8_UNORM||
-               guest->elements[9].format!=gpu::kVertexR32G32_FLOAT||guest->elements[0].offset!=0||
-               guest->elements[3].offset!=12||guest->elements[9].offset!=16)
-                throw std::invalid_argument("Unsupported guest fixture vertex layout");
-            std::memcpy(verts.data,guest->buffers[0].src,sizeof(v));
-            std::memcpy(indices.data,guest->index_src,6);
-        }else std::memcpy(verts.data,v,sizeof(v));
+        if(!guest){std::memcpy(verts.data,v,sizeof(v));const uint16_t idx[]={2,0,1};std::memcpy(indices.data,idx,sizeof(idx));}
         if(second){for(auto& vert:v){vert.z=.75f;vert.color_or_normal=0xffff0000u;}
             std::memcpy(static_cast<uint8_t*>(verts.data)+sizeof(v),v,sizeof(v));}
         gpu::DrawConstants dc{};
         dc.surf[0]=W;dc.surf[1]=H;dc.surf[2]=1;dc.surf[3]=1;
         for(unsigned i=0;i<4;++i)dc.wvp[i*5]=dc.wv[i*5]=dc.wvn[i*5]=1;
         dc.misc[1]=8; // alpha test: always (shader maps unsupported/always to no discard)
-        dc.texsize[0][0]=dc.texsize[0][1]=dc.texsize[1][0]=dc.texsize[1][1]=2;
+        for(unsigned i=0;i<4;++i){dc.texsize[i][0]=tex_width[i];dc.texsize[i][1]=tex_height[i];}
         dc.mat[0][2]=dc.mat[0][3]=1; // blue diffuse
         dc.mat[4][0]=8;dc.lt[0][0][2]=1;dc.lt[0][4][2]=-1; // directional -Z
         std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
@@ -305,7 +349,14 @@ struct Fixture{
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
         VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&verts.b,&offset);
-        if(packed||multi||guest){
+        if(guest){
+            std::array<VkBuffer,16> buffers{};buffers.fill(verts.b);
+            vkCmdBindVertexBuffers(cmd,0,guest->buffer_count,buffers.data(),plan.offsets.data());
+            if(guest->index_count){
+                vkCmdBindIndexBuffer(cmd,indices.b,0,guest->index16?VK_INDEX_TYPE_UINT16:VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd,guest->index_count,1,0,guest->base_vertex,0);
+            }else vkCmdDraw(cmd,guest->draw_count,1,0,0);
+        }else if(packed||multi){
             vkCmdBindIndexBuffer(cmd,indices.b,0,VK_INDEX_TYPE_UINT16);
             vkCmdDrawIndexed(cmd,3,1,0,0,0);
         }else vkCmdDraw(cmd,3,1,0,0);
@@ -383,6 +434,23 @@ int main(int argc,char** argv){
         hulkpocket::vkexp::StoreColor(surface,static_cast<const uint8_t*>(f.readback.data),W,H);
         if(memory.Read32(0x80102000+(32*W+32)*4)!=0xffff0000u||
            memory.Read32(0x80102000)!=0xff000000u)throw std::runtime_error("Guest BGRA readback mismatch");
+        // Exercise rebuilt 32-bit quad indices and a different texture extent.
+        const Vertex quad[]={{-.75f,-.75f,.5f,0xffffffff,0,1},{.75f,-.75f,.5f,0xffffffff,1,1},
+                             {.75f,.75f,.5f,0xffffffff,1,0},{-.75f,.75f,.5f,0xffffffff,0,0}};
+        memory.Write(0x80100100,quad,sizeof(quad));
+        if(!hulkpocket::vkexp::GuestDraw(guest_state,8,0,4,0,assembled)||assembled.index16||assembled.index_count!=6)
+            throw std::runtime_error("Xbox quad assembly failed");
+        memory.Write32(tex+12,0x02210c20); // 4x4 DXT1, same red block
+        f.UploadGuestTexture(tex);
+        f.Draw(argv[1],false,true,false,false,&guest_state,false,&assembled);
+        Expect("guest quad 32-bit indices and resized texture",f.Pixel(48,16),{255,0,0,255});
+        // Independent texture stage descriptors, no alias to stage zero.
+        memory.Write32(tex+12,0x01110620);
+        const uint32_t second_pixels[]={0xff80ffff,0xff80ffff,0xff80ffff,0xff80ffff};
+        memory.Write(0x80100000,second_pixels,sizeof(second_pixels));
+        f.UploadGuestTexture(tex,1);
+        f.Draw(argv[1],false,true,false,true,&guest_state,false,&assembled);
+        Expect("independent Xbox texture stages",f.Pixel(32,32),{128,0,0,255});
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");

@@ -25,3 +25,7 @@ Next implementation replaces hardcoded blend and color settings with a reusable 
 ## Checked guest resource path
 
 91d6e20 passed all four workflows. This change links the current Xbox resource converters into the Vulkan host and Android probes, stages decoded Xbox BGRA/DXT1 through a real buffer-to-image copy, consumes checked guest vertex/index memory for an indexed draw, and writes RGBA framebuffer results into a checked Xbox linear BGRA surface. Tests reject uncommitted index and texture spans. Synthetic Xbox resources exercise real runtime converters; no commercial game assets are included. The GPU fixture remains limited to a 2x2 texture and one 24-byte vertex layout. Not yet a full gpu::Backend, no APK Vulkan selection or gameplay claim. CI pending.
+
+## Generalized GPU resource submission
+
+dc54590 passed all four workflows. This update replaces the fixed 24-byte/three-vertex submission restriction with checked Vulkan binding and attribute plans, multiple stream offsets, variable-size staging buffers and native 16/32-bit index submission (including assembled quads). Four independently bound textures can be replaced and resized, with the actual dimensions supplied to the shader. New pixel fixtures cover resized DXT1, a rebuilt indexed quad and distinct texture stages. The current precompiled shaders still restrict accepted declarations and the offscreen target remains 64x64; general shader selection, runtime constants, persistent framebuffer and APK integration remain pending. No changes to GLES. CI pending.
