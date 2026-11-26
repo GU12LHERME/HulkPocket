@@ -181,8 +181,11 @@ int main(int argc,char** argv) {
                         for(uint64_t a=uint64_t(loaded.base)&~4095ull;a<uint64_t(loaded.base)+loaded.image_size;a+=4096)
                             if(guest.IsCommitted(uint32_t(a),1))++image_pages;
                         XbeResidentSections sections(guest,loaded,data);
-                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry,image_pages,partition1,&sections);
-                        int status=session.Run(entry,cpu,loaded.entry);
+                        int status=0;
+                        {
+                            XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root,&registry,image_pages,partition1,&sections);
+                            status=session.Run(entry,cpu,loaded.entry);
+                        } // stop audio and release session before _exit
                         std::cerr << "Guest entry status: " << status << std::endl;
                         _exit(status==0?0:5);
                     } catch(const std::exception& ex) {

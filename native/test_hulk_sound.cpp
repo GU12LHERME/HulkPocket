@@ -10,8 +10,8 @@ int main(){
     HulkAudioQueue<4> q;
     const int16_t in[]={1,2,3,4,5,6,7,8,9,10};
     int16_t out[12]{};
-    assert(q.Push(in,5)==4&&q.Overrun()==1);
-    assert(q.Pull(out,3)==3);
+    assert(q.Push(in,5)==4&&q.Overrun()==1&&q.Queued()==4);
+    assert(q.Pull(out,3)==3&&q.Queued()==1);
     for(unsigned i=0;i<6;++i)assert(out[i]==in[i]);
     assert(q.Push(in,3)==3);
     assert(q.Pull(out,5)==4&&q.Underrun()==1);

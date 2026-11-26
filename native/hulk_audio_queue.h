@@ -39,6 +39,12 @@ public:
         underrun_.fetch_add(uint32_t(frames-n),std::memory_order_relaxed);
         return n;
     }
+    // Producer-side snapshot; the consumer may have drained more since load.
+    std::size_t Queued()const{
+        auto w=write_.load(std::memory_order_relaxed);
+        auto r=read_.load(std::memory_order_acquire);
+        return std::size_t(w-r);
+    }
     uint32_t Overrun()const{return overrun_.load(std::memory_order_relaxed);}
     uint32_t Underrun()const{return underrun_.load(std::memory_order_relaxed);}
 };

@@ -13,6 +13,8 @@ on:
       - 'native/xbe_kernel_session.h'
       - 'native/hulk_sound.h'
       - 'native/hulk_audio_queue.h'
+      - 'native/hulk_android_audio.h'
+      - 'native/hulk_xbe_local_diagnostic.cpp'
       - 'native/test_hulk_sound.cpp'
       - 'third_party/xboxxberecomp/audio/**'
       - 'native/xbe_kernel_files.h'

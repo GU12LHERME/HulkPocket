@@ -1,6 +1,8 @@
 #pragma once
 #include "xbe_kernel_pool.h"
 #include "hulk_audio_queue.h"
+#include "hulk_android_audio.h"
+#include <memory>
 #include "xbe_graphics_boundary.h"
 #include "../third_party/xboxxberecomp/audio/adpcm.h"
 #include <array>
@@ -17,7 +19,7 @@
 namespace hulkpocket {
 // Diagnostic software DirectSound subset. All calls execute under the
 // session lock. No APU MMIO, no synthetic completion for unimplemented APIs.
-// PCM capture is intentionally headless, not Android speaker playback.
+// Headless by default; Android diagnostic output is explicitly opt-in.
 class HulkSound {
     XboxGuestAddressSpace& mem_;
     XbeKernelPool& pool_;
@@ -47,6 +49,14 @@ class HulkSound {
         effect_allocations_.clear();effect_states_.clear();
     }
     HulkAudioQueue<>* output_=nullptr; // caller owns queue until mixer is stopped
+#ifdef HULK_HAS_AAUDIO_OUTPUT
+    std::unique_ptr<HulkAndroidAudio> android_audio_;
+#endif
+    void StopAndroidOutput(){
+#ifdef HULK_HAS_AAUDIO_OUTPUT
+        if(android_audio_){if(output_==&android_audio_->queue)output_=nullptr;android_audio_.reset();}
+#endif
+    }
     uint64_t rendered_=0,nonzero_=0;
     std::chrono::steady_clock::time_point last_{};
     int capture_=-1;
@@ -88,8 +98,9 @@ class HulkSound {
 public:
     HulkSound(XboxGuestAddressSpace& mem,XbeKernelPool& pool):mem_(mem),pool_(pool){}
     ~HulkSound(){
+        StopAndroidOutput();
         if(capture_>=0)close(capture_);
-        if(device_||rendered_)std::fprintf(stderr,"HULK AUDIO SUMMARY frames=%llu nonzero_frames=%llu voices=%zu (headless)\n",
+        if(device_||rendered_)std::fprintf(stderr,"HULK AUDIO SUMMARY frames=%llu nonzero_frames=%llu voices=%zu (software mixer)\n",
             static_cast<unsigned long long>(rendered_),static_cast<unsigned long long>(nonzero_),voices_.size());
     }
     uint32_t Create(uint32_t guid,uint32_t out,uint32_t outer){
@@ -98,7 +109,14 @@ public:
             device_=pool_.Allocate(0x40);
             if(!device_)return oom;
             last_=std::chrono::steady_clock::now();
-            std::fprintf(stderr,"HULK DSOUND DEVICE PASS obj=%08X (software stereo; headless)\n",device_);
+#ifdef HULK_HAS_AAUDIO_OUTPUT
+            if(const char* mode=std::getenv("HULK_AUDIO_OUTPUT");mode&&std::strcmp(mode,"1")==0&&!output_){
+                android_audio_=std::make_unique<HulkAndroidAudio>();
+                output_=&android_audio_->queue;
+                std::fprintf(stderr,"HULK AAUDIO enabled; waiting for mixer samples\n");
+            }
+#endif
+            std::fprintf(stderr,"HULK DSOUND DEVICE PASS obj=%08X (software stereo)\n",device_);
         }
         if(refs_==UINT32_MAX)return bad;
         ++refs_;mem_.Write32(out,device_);return 0;
@@ -107,7 +125,7 @@ public:
         if(!id||id!=device_||!refs_)return bad;
         if(--refs_)return refs_;
         if(!voices_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
-        FreeEffects();pool_.Free(device_);device_=0;return 0;
+        StopAndroidOutput();FreeEffects();pool_.Free(device_);device_=0;return 0;
     }
     // Upstream 767a818 dsound.cpp uses a zero-argument HLE for this
     // selector. Record the request; our current 2D-only mixer never
@@ -363,6 +381,11 @@ public:
             auto pcm=Render(frames);
             Capture(pcm);
             if(output_)output_->Push(pcm.data(),frames);
+#ifdef HULK_HAS_AAUDIO_OUTPUT
+            if(android_audio_&&!android_audio_->Attempted()&&android_audio_->queue.Queued()>=1440){
+                if(!android_audio_->Start())output_=nullptr;
+            }
+#endif
         }
     }
 };
