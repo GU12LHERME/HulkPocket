@@ -106,6 +106,12 @@ LoadedXbeImage LoadXbeSections(
         if(s.raw_size)
             memory.Write(s.va,data.data()+s.raw,s.raw_size);
     }
-    return {base,image_size,entry,thunk,title,segments.size()};
+    LoadedXbeImage loaded{base,image_size,entry,thunk,title,segments.size()};
+    loaded.tls_va = Read32(data,0x12C);
+    loaded.stack_commit = Read32(data,0x130);
+    loaded.heap_reserve = Read32(data,0x134);
+    loaded.heap_commit = Read32(data,0x138);
+    loaded.init_flags = Read32(data,0x124);
+    return loaded;
 }
 } // namespace hulkpocket
