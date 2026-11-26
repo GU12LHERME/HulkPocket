@@ -23,6 +23,11 @@ std::vector<std::uint8_t> MakeXbe() {
     Store(image,0x120,base+0x240);
     Store(image,0x128,0x12000u ^ 0xA8FC57ABu);
     Store(image,0x158,0x13000u ^ 0x5B6D40B6u);
+    Store(image,0x12C,0x22000u);
+    Store(image,0x130,0x10000u);
+    Store(image,0x134,0x90000u);
+    Store(image,0x138,0x20000u);
+    Store(image,0x124,0x12345678u);
     Store(image,0x188,0x56550039);
     // 56-byte section table entry #0.
     Store(image,0x240+4,0x12000);
@@ -51,7 +56,10 @@ int main() {
     const auto loaded=LoadXbeSections(image,memory);
     if(loaded.base!=0x10000 || loaded.image_size!=0x6000 ||
        loaded.entry!=0x12000 || loaded.kernel_thunk!=0x13000 ||
-       loaded.title_id!=0x56550039 || loaded.sections!=2)
+       loaded.title_id!=0x56550039 || loaded.sections!=2 ||
+       loaded.tls_va!=0x22000u || loaded.stack_commit!=0x10000u ||
+       loaded.heap_reserve!=0x90000u || loaded.heap_commit!=0x20000u ||
+       loaded.init_flags!=0x12345678u)
         return 1;
     if(memory.Read32(0x12000)!=0x04030201 ||
        memory.Read32(0x13000)!=0xA3A2A1A0 ||
