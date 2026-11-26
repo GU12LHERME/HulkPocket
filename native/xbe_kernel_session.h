@@ -20,6 +20,7 @@
 #include <map>
 #include <deque>
 #include <cstring>
+#include <cstdlib>
 #include <chrono>
 #include <array>
 #include <condition_variable>
@@ -96,6 +97,14 @@ private:
             throw std::runtime_error("Invalid D3D default initializer entry");
         XbeD3d8DeviceMemory buffers(mem_,pool_,physical_);
         buffers.Initialize(device,slot,pp);
+        const char* fvf_text=std::getenv("HULK_FVF_SHADER");
+        if(!fvf_text||std::strlen(fvf_text)!=8)throw std::runtime_error("Original FVF pointer not resolved; inspect local discovery report");
+        for(unsigned i=0;i<8;++i)if(!((fvf_text[i]>='0'&&fvf_text[i]<='9')||
+            (fvf_text[i]>='A'&&fvf_text[i]<='F')||(fvf_text[i]>='a'&&fvf_text[i]<='f')))
+            throw std::runtime_error("Invalid original FVF pointer");
+        auto fvf=uint32_t(std::strtoul(fvf_text,nullptr,16));
+        buffers.BindInitialFvf(fvf);
+        std::fprintf(stderr,"D3D INITIAL FVF: object=%08X flags=%08X\n",fvf,mem_.Read32(fvf+4));
         XbeD3dDefaultTrace trace(mem_);
         X86Context nested=cpu;nested.esp-=4;mem_.Write32(nested.esp,0);
         default_trace_=&trace;default_thread_=cpu.thread_handle;

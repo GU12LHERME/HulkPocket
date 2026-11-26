@@ -79,6 +79,7 @@ jobs:
           python3 tools/supplemental_guest_mapping.py --self-test
           python3 tools/extend_hulk_generated.py --self-test
           python3 tools/discover_hulk_xpp.py --self-test
+          python3 tools/discover_hulk_fvf.py --self-test
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout

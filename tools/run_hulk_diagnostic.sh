@@ -13,6 +13,16 @@ log="$HOME/storage/downloads/hulk-diagnostic-current.txt"
 if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt"; fi
 {
     echo "HulkPocket diagnostic revision: $(git rev-parse --short HEAD)"
+    # Resolve the original FVF record before relinking or running the game.
+    if [[ -z "${HULK_FVF_SHADER:-}" ]]; then
+        HULK_FVF_SHADER=$(python tools/discover_hulk_fvf.py "$xbe" "$generated")
+        export HULK_FVF_SHADER
+    fi
+    if [[ -z "$HULK_FVF_SHADER" ]]; then
+        echo "FVF pointer unresolved. Send this report; no guest execution attempted."
+        exit 2
+    fi
+    echo "Original FVF pointer candidate: $HULK_FVF_SHADER"
     python tools/link_hulk_cached.py --sdk "$sdk" --generated "$generated" \
         --cache "$cache" --ndk-bin "$PREFIX/bin" --output "$module"
     # Prefer the explicitly selected Android-NDK CI artifact when testing

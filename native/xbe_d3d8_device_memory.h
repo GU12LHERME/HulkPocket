@@ -88,6 +88,12 @@ public:
         if(!device_||index< -1||index>=int(count_)-1)throw std::out_of_range("D3D buffer index");
         return resources_[index+1].header;
     }
+    void BindInitialFvf(uint32_t shader){
+        if(!device_||!shader||shader%4||!mem_.IsCommitted(shader,8)||
+            (uint64_t(shader)<uint64_t(device_)+device_size&&uint64_t(shader)+8>device_))
+            throw std::invalid_argument("Invalid initial FVF object");
+        Set(0x794,shader);
+    }
     uint32_t Depth()const{return resources_[3].header;}
     uint32_t Scratch()const{return scratch_;}
     uint32_t ScratchEnd()const{

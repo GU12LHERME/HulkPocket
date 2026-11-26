@@ -65,6 +65,11 @@ int main(){
             device.Initialize(dev,slot,pp);
             assert(device.BufferCount()==2&&guest.Read32(slot)==dev);
             assert(device.Scratch()&&device.ScratchEnd()==device.Scratch());
+            device.BindInitialFvf(0x25c00);
+            assert(guest.Read32(dev+0x794)==0x25c00);
+            bool bad_fvf=false;
+            try{device.BindInitialFvf(0);}catch(const std::invalid_argument&){bad_fvf=true;}
+            assert(bad_fvf&&guest.Read32(dev+0x794)==0x25c00);
             assert(guest.Read32(dev+4)==device.Scratch()+0xf000);
             auto front=device.BackBuffer(-1),back=device.BackBuffer(0),depth=device.Depth();
             assert(front&&back&&depth&&front!=back);
