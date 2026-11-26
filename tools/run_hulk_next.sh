@@ -16,14 +16,26 @@ log="$downloads/HulkPocket-$(date +%Y%m%d-%H%M%S).txt"
     if [[ -n "$seeds" ]]; then
         recompiler="${HULK_RECOMPILER:-}"
         if [[ -z "$recompiler" ]]; then
-            mapfile -t candidates < <(find "$HOME" -maxdepth 6 -type f -name xbe_recomp_host -executable 2>/dev/null | sort)
-            if [[ "${#candidates[@]}" -ne 1 ]]; then
-                printf 'Expected one xbe_recomp_host; candidates:\n%s\n' "${candidates[*]:-none}"
-                echo 'Set HULK_RECOMPILER to the executable path and repeat.'
-                exit 2
+            recompiler="$HOME/hulk-recompiler-native/xbe_recomp_host"
+            if [[ ! -x "$recompiler" ]]; then
+                echo "Building native ARM64 recompiler tool (not the game)"
+                for tool in cmake clang clang++ make git; do
+                    if ! command -v "$tool" >/dev/null; then
+                        echo "Missing $tool. In Termux run: pkg install cmake clang make git"
+                        exit 2
+                    fi
+                done
+                cmake -S tools/xbe-recompiler-host -B "$HOME/hulk-recompiler-native" \
+                    -DXBE_SDK_DIR="$sdk" -DCMAKE_BUILD_TYPE=Release \
+                    -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+                cmake --build "$HOME/hulk-recompiler-native" --target xbe_recomp_host --parallel 2
             fi
-            recompiler="${candidates[0]}"
         fi
+        if [[ ! -x "$recompiler" ]]; then
+            echo "Recompiler not executable: $recompiler"
+            exit 2
+        fi
+        echo "Native recompiler: $recompiler"
         args=()
         while IFS= read -r seed; do args+=(--seed "$seed"); done <<<"$seeds"
         key=$(printf '%s' "$seeds" | sha256sum | cut -c1-12)
