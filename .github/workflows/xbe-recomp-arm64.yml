@@ -302,6 +302,25 @@ jobs:
           info=$("$RUNNER_TEMP/xbe-recompiler-build/xbe_recomp_host" 2>&1 || :)
           printf '%s\n' "$info" | grep -F 'usage: xbe_recomp'
           echo "Built the actual upstream Xbox XBE-to-C++ recompiler on Linux; no game image processed." >> "$GITHUB_STEP_SUMMARY"
+      - name: Build standalone Android ARM64 XBE recompiler
+        run: |
+          set -euo pipefail
+          ndk="$ANDROID_HOME/ndk/28.2.13676358"
+          cmake -S tools/xbe-recompiler-host -B "$RUNNER_TEMP/xbe-recompiler-android" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ndk/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 \
+            -DANDROID_STL=c++_static -DBUILD_SHARED_LIBS=OFF \
+            -DXBE_SDK_DIR="$RUNNER_TEMP/xbe-sdk" -DCMAKE_BUILD_TYPE=Release
+          cmake --build "$RUNNER_TEMP/xbe-recompiler-android" --target xbe_recomp_host --parallel 2
+          "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$RUNNER_TEMP/xbe-recompiler-android/xbe_recomp_host" | grep -q AArch64
+          mkdir -p "$RUNNER_TEMP/android-recompiler-package"
+          cp "$RUNNER_TEMP/xbe-recompiler-android/xbe_recomp_host" "$RUNNER_TEMP/android-recompiler-package/xbe_recomp_android"
+          cp "$RUNNER_TEMP/xbe-sdk-commit.txt" "$RUNNER_TEMP/android-recompiler-package/"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hulkpocket-xbe-recompiler-android-arm64
+          path: ${{ runner.temp }}/android-recompiler-package/
+          if-no-files-found: error
       - name: Recompile actual x86 machine code from synthetic Xbox XBE into ARM64
         run: |
           set -euo pipefail
