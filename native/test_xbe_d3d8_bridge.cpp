@@ -6,7 +6,7 @@
 using namespace hulkpocket;
 class RecordingBackend final:public gpu::Backend {
 public:
-    unsigned clears=0,draws=0,presents=0;
+    unsigned clears=0,draws=0,presents=0,flushes=0;
     bool Init(uint32_t w,uint32_t h)override{return w==640&&h==480;}
     void Clear(const gpu::State& s,uint32_t n,const uint8_t* p,uint32_t flags,uint32_t color,float z,uint32_t stencil)override{
         assert(s.rt.header==0x10100 && n==0 && p==nullptr && flags==0xf0 && color==0xff123456 && z==1 && stencil==0);++clears;
@@ -20,7 +20,7 @@ public:
     void Copy(const gpu::Surface&,const gpu::Surface&,uint32_t,uint32_t,uint32_t,float,float)override{throw std::logic_error("not tested");}
     void Sync(uint32_t,uint32_t)override{throw std::logic_error("not tested");}
     void SyncLate(uint32_t)override{throw std::logic_error("not tested");}
-    void Flush()override{}
+    void Flush()override{++flushes;}
     void SetGamma(const uint8_t*)override{throw std::logic_error("not tested");}
 };
 int main(){
@@ -212,6 +212,21 @@ int main(){
     uint16_t indices[]={0,1,2};mem.Write(0x10300,indices,sizeof(indices));
     call("D3DDevice_DrawIndexedVertices",{5,3,0x10300});
     assert(bridge.Present(0x10100)==1 && backend.draws==2&&backend.clears==1&&backend.presents==1);
+    {
+        auto before=backend.flushes;
+        bridge.CompleteInitialGpuWait(0,0,2,0);
+        assert(backend.flushes==before+1);
+        for(auto args:{std::array<uint32_t,4>{1,0,2,0},
+                       std::array<uint32_t,4>{0,1,2,0},
+                       std::array<uint32_t,4>{0,0,8,0},
+                       std::array<uint32_t,4>{0,0,2,0x1234}}){
+            bool rejected=false;
+            try{bridge.CompleteInitialGpuWait(args[0],args[1],args[2],args[3]);}
+            catch(const std::logic_error&){rejected=true;}
+            assert(rejected&&backend.flushes==before+1);
+        }
+    }
+
     // Reproduce the observed XDK object layout and real line-list count.
     constexpr uint32_t dev2=0x16000,shader=0x19000;
     mem.Write32(dev2+0x794,shader);mem.Write32(shader,1);mem.Write32(shader+4,0x400);

@@ -97,7 +97,7 @@ private:
         XbeGlesBackend backend;
         XbeD3d8Bridge bridge;
         uint32_t owner;
-        unsigned setter_calls=0,diagnostic_draw_returns=0;
+        unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0;
         uint32_t diagnostic_vertices=0;
         std::unique_ptr<gpu::State> diagnostic_line_profile;
         static constexpr unsigned diagnostic_draw_limit=8;
@@ -954,10 +954,65 @@ private:
                 throw std::runtime_error("D3D draw requires GLES backend");
 #endif
             }
-            case kGraphicsDraw: case kGraphicsDrawIndexed: case kGraphicsSwap: {
-                Check(cpu,ordinal==kGraphicsSwap?1:3);
-                std::fprintf(stderr,"D3D8 draw/swap boundary id=%X caller=%08X first=%08X\n",ordinal,mem_.Read32(cpu.esp),Arg(cpu,0));
-                throw std::runtime_error("D3D8 draw/swap guest integration pending (generated tables unavailable or swap)");
+            case kGraphicsBlockOnTime: {
+                Check(cpu,2);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D wait without owned live device");
+                auto& live=*live_d3d_;
+                const auto dev=live.buffers.DeviceAddress();
+                const auto target=Arg(cpu,0),flags=Arg(cpu,1);
+                const auto current=mem_.Read32(dev+0x2c),callback=mem_.Read32(dev+0x19fc);
+                std::fprintf(stderr,"D3D LIVE WAIT caller=%08X target=%08X current=%08X flags=%08X callback=%08X\n",
+                    mem_.Read32(cpu.esp),target,current,flags,callback);
+                const char* allow=std::getenv("HULK_CONTINUE_DRAW");
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_gpu_waits>=32)
+                    throw std::runtime_error("D3D initial wait diagnostic continuation not enabled");
+                live.buffers.VerifyInitialTargets();
+                DrainLivePush(live);
+                live.bridge.CompleteInitialGpuWait(target,current,flags,callback);
+                ++live.diagnostic_gpu_waits;
+                std::fprintf(stderr,"D3D LIVE WAIT PASS: GPU completed synchronous work, initial timeline only\n");
+                Ret(cpu,2,0);return;
+#else
+                throw std::runtime_error("D3D wait requires GLES backend");
+#endif
+            }
+            case kGraphicsSwap: {
+                Check(cpu,1);
+                std::fprintf(stderr,"D3D ORIGINAL SWAP caller=%08X flags=%08X\n",mem_.Read32(cpu.esp),Arg(cpu,0));
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D swap without owned live device");
+                auto& live=*live_d3d_;
+                const char* allow=std::getenv("HULK_CONTINUE_DRAW");
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||Arg(cpu,0)!=0)
+                    throw std::runtime_error("Unsupported diagnostic swap request");
+                live.buffers.VerifyInitialTargets();
+                DrainLivePush(live);
+                gpu::ScopedGuestMemory scope(mem_);
+                const auto state=live.bridge.Snapshot();
+                gpu::TextureDesc desc{};
+                if(!gpu::DescribeSurface(state.rt,desc)||state.rt.header!=live.buffers.BackBuffer(0))
+                    throw std::runtime_error("Unsupported diagnostic swap target");
+                live.backend.ReadbackColor(state.rt);
+                auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
+                if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
+                    try{WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);}
+                    catch(const std::exception& ex){std::fprintf(stderr,"D3D SWAP BITMAP FAILED: %s\n",ex.what());}
+                }
+                const auto presented=live.bridge.Present(state.rt.header);
+                std::fprintf(stderr,"D3D ORIGINAL SWAP OFFSCREEN PASS: presents=%u draws=%u vertices=%u waits=%u (reduced diagnostic, no guest return)\n",
+                    presented,live.diagnostic_draw_returns,live.diagnostic_vertices,live.diagnostic_gpu_waits);
+                throw std::runtime_error("D3D original swap reached; guest buffer rotation and display integration pending");
+#else
+                throw std::runtime_error("D3D swap requires GLES backend");
+#endif
+            }
+            case kGraphicsDraw: case kGraphicsDrawIndexed: {
+                Check(cpu,3);
+                std::fprintf(stderr,"D3D8 draw boundary id=%X caller=%08X first=%08X\n",ordinal,mem_.Read32(cpu.esp),Arg(cpu,0));
+                throw std::runtime_error("D3D8 draw guest integration pending (generated tables unavailable)");
             }
             case 103: case 129: case 130: case 160: case 161: {
                 Check(cpu,0);

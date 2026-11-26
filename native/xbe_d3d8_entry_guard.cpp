@@ -30,6 +30,8 @@ constexpr bool Stdcall(std::string_view name){
     // A callback that did not complete its stdcall frame must still stop.
     if((id==hulkpocket::kGraphicsCreate||id==hulkpocket::kGraphicsClear)&&
         uint64_t(original_esp)+28==ctx.esp&&ctx.eax==0)return;
+    if(id==hulkpocket::kGraphicsBlockOnTime&&
+        uint64_t(original_esp)+12==ctx.esp&&ctx.eax==0)return;
     if(id==(hulkpocket::kGraphicsDraw|0x1000u)&&
         uint64_t(original_esp)+16==ctx.esp&&ctx.eax==0)return;
     throw std::runtime_error("D3D8 guest device integration checkpoint");
@@ -299,6 +301,18 @@ void sub_0037F720(X86Context& ctx,uint8_t* base){
         auto observation=saved;
         hulkpocket::graphics_callback(observation,base,hulkpocket::kViewportTraceLeave);
     }
+}
+#endif
+#endif
+
+#if __has_include("hulk_verified_block_on_time.h")
+#include "hulk_verified_block_on_time.h"
+#if HULK_VERIFIED_BLOCK_ON_TIME
+// Verified local USA routine: original ret 8, time and wait flags on stack.
+// Do not execute hardware polling or invent a register backing page.
+extern "C" __attribute__((visibility("default")))
+void sub_0038A2C0(X86Context& ctx,uint8_t* base){
+    Boundary(ctx,base,hulkpocket::kGraphicsBlockOnTime,"D3D_BlockOnTime",true);
 }
 #endif
 #endif

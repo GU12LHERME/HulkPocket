@@ -399,6 +399,14 @@ public:
         auto result=Execute(name,std::span<const uint32_t>(args.data(),abi.count));
         cpu.eax=result;cpu.esp=uint32_t(end);return result;
     }
+    // Synchronous diagnostic timeline: only the initial epoch is known.
+    // Original timestamps cannot be compared to unrelated GLES fence IDs.
+    void CompleteInitialGpuWait(uint32_t target,uint32_t current,uint32_t flags,uint32_t callback){
+        std::lock_guard guard(lock_);
+        if(!initialized_||target||current||callback||(flags!=1&&flags!=2&&flags!=4))
+            throw std::logic_error("Unsupported D3D wait timeline or callback");
+        backend_.Flush(); // GLES implementation performs glFinish + error check.
+    }
     // Explicit present endpoint, called only by the owning device layer.
     uint32_t Present(uint32_t surface) {
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
