@@ -1,5 +1,6 @@
 #pragma once
 #include "xbe_kernel_pool.h"
+#include "hulk_audio_queue.h"
 #include "xbe_graphics_boundary.h"
 #include "../third_party/xboxxberecomp/audio/adpcm.h"
 #include <array>
@@ -45,6 +46,7 @@ class HulkSound {
         for(auto a:effect_allocations_)pool_.Free(a);
         effect_allocations_.clear();effect_states_.clear();
     }
+    HulkAudioQueue<>* output_=nullptr; // caller owns queue until mixer is stopped
     uint64_t rendered_=0,nonzero_=0;
     std::chrono::steady_clock::time_point last_{};
     int capture_=-1;
@@ -115,6 +117,7 @@ public:
         std::fprintf(stderr,"HULK DSOUND FULL HRTF REQUEST (recorded; 3D processing not implemented)\n");
     }
     bool FullHrtfRequested()const{return full_hrtf_requested_;}
+    void AttachOutput(HulkAudioQueue<>* output){output_=output;}
     bool Device(uint32_t id)const{return id&&id==device_;}
     uint32_t Speaker(uint32_t id,uint32_t out){
         if(!Device(id)||!Range(out,4))return bad;
@@ -243,6 +246,14 @@ public:
             if(!v.locked||a[1]!=v.lock_ptr||a[2]!=v.lock_bytes||
                a[3]!=v.lock_ptr2||a[4]!=v.lock_bytes2)return bad;
             v.locked=false;return 0;
+        case kSoundBufferFormat:{
+            Format f{};
+            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align)return bad;
+            // Reset regions and phase when the unit of a sample changes.
+            v.fmt=f;v.frequency=0;v.phase=0;v.paused=v.sync=false;
+            v.play_start=v.loop_start=0;v.play_length=v.loop_length=v.bytes;
+            return 0;
+        }
         case kSoundBufferHeadroom:
             if(a[1]>10000)return bad;
             v.headroom=std::pow(10.0f,-float(a[1])/2000.0f);return 0;
@@ -348,7 +359,11 @@ public:
         uint32_t frames=uint32_t(std::min<int64_t>(elapsed,100000)*kRate/1000000);
         last_=now;
         if(rendered_+frames>uint64_t(kRate)*120)throw std::runtime_error("Audio diagnostic capture budget reached");
-        if(!voices_.empty())Capture(Render(frames));
+        if(!voices_.empty()||output_){
+            auto pcm=Render(frames);
+            Capture(pcm);
+            if(output_)output_->Push(pcm.data(),frames);
+        }
     }
 };
 }

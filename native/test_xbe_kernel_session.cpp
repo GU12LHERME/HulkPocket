@@ -258,7 +258,7 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     // Real completion FIFO and actual disc read through class 30.
     call(*c,base,cb,191,{0x12e00,0,0,0});assert(c->eax==0);
     auto port=memory->Read32(0x12e00);
-    const uint64_t poll=0;memory->Write(0x12e20,&poll,8);
+    const uint64_t io_poll=0;memory->Write(0x12e20,&io_poll,8);
     call(*c,base,cb,223,{port,0x12e04,0x12e08,0x12e10,0x12e20});assert(c->eax==0x102);
     call(*c,base,cb,227,{port,0x111,0x222,0xc0000011u,7});assert(c->eax==0);
     call(*c,base,cb,227,{port,0x333,0x444,0,9});assert(c->eax==0);

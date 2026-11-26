@@ -525,7 +525,7 @@ SOUND_STOP(IDirectSoundBuffer_SetEG)
 SOUND_STOP(IDirectSoundBuffer_SetFilter)
 #endif
 #if HAS_IDirectSoundBuffer_SetFormat
-SOUND_STOP(IDirectSoundBuffer_SetFormat)
+SOUND_HOOK(IDirectSoundBuffer_SetFormat,kSoundBufferFormat,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetHeadroom
 SOUND_HOOK(IDirectSoundBuffer_SetHeadroom,kSoundBufferHeadroom,2)

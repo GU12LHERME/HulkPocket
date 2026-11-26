@@ -6,6 +6,16 @@ int main(){
     mem.Commit(0x10000,0x10000);
     XbeKernelPool pool(mem,0x200000,0x100000);
     HulkSound s(mem,pool);
+    // Portable output boundary, independent of Android callback scheduling.
+    HulkAudioQueue<4> q;
+    const int16_t in[]={1,2,3,4,5,6,7,8,9,10};
+    int16_t out[12]{};
+    assert(q.Push(in,5)==4&&q.Overrun()==1);
+    assert(q.Pull(out,3)==3);
+    for(unsigned i=0;i<6;++i)assert(out[i]==in[i]);
+    assert(q.Push(in,3)==3);
+    assert(q.Pull(out,5)==4&&q.Underrun()==1);
+    assert(out[0]==7&&out[1]==8&&out[2]==1&&out[7]==6&&out[8]==0&&out[9]==0);
     assert(s.Create(0,0x10000,0)==0);
     auto ds=mem.Read32(0x10000);assert(s.Device(ds));
     assert(!s.FullHrtfRequested());s.SelectFullHrtf();assert(s.FullHrtfRequested());
@@ -42,6 +52,13 @@ int main(){
     auto got=s.Render(4);
     for(unsigned i=0;i<4;++i)assert(got[2*i]==pcm[i]&&got[2*i+1]==pcm[i]);
     assert(s.Buffer(v,kSoundBufferStatus,{v,0x1000c})==0&&mem.Read32(0x1000c)==0);
+    const uint8_t stereo_fmt[]={1,0,2,0,0x80,0xbb,0,0,0,0xee,2,0,4,0,16,0,0,0};
+    mem.Write(0x10140,stereo_fmt,sizeof(stereo_fmt));
+    assert(s.Buffer(v,kSoundBufferFormat,{v,0x10140})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,2})==0);
+    got=s.Render(2);assert(got[0]==1000&&got[1]==-2000&&got[2]==3000&&got[3]==-4000);
+    assert(s.Buffer(v,kSoundBufferFormat,{v,0x10100})==0);
+    assert(s.Buffer(v,kSoundBufferFormat,{v,0x400000})==0x88780032u);
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
     got=s.Render(5);assert(got[8]==1000&&got[9]==1000);
     assert(s.Buffer(v,kSoundBufferPlayRegion,{v,2,6})==0);

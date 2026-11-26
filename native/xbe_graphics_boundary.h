@@ -32,7 +32,7 @@ constexpr uint32_t kSoundBufferPause=0x10413;
 constexpr uint32_t kSoundBufferPlayRegion=0x10414;
 constexpr uint32_t kSoundBufferLoopRegion=0x10415;
 constexpr uint32_t kSoundSynchPlayback=0x10416;
-constexpr uint32_t kSoundBufferLock=0x10417,kSoundBufferUnlock=0x10418,kSoundBufferHeadroom=0x10419;
+constexpr uint32_t kSoundBufferLock=0x10417,kSoundBufferUnlock=0x10418,kSoundBufferHeadroom=0x10419,kSoundBufferFormat=0x1041a;
 constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture=0x10102,
     kDefaultMakeSpace=0x10103,kDefaultComplexBase=0x10200;
 // Bounded experimental presentation loop; the final swap is presented

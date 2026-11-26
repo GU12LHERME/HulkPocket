@@ -586,6 +586,7 @@ private:
             case kSoundBufferLock:
             case kSoundBufferUnlock:
             case kSoundBufferHeadroom:
+            case kSoundBufferFormat:
             case kSoundBufferPause:
             case kSoundBufferPlayRegion:
             case kSoundBufferLoopRegion:
@@ -1332,7 +1333,7 @@ private:
                 if(completions_.size()>=256||next_completion_>=0x60010000){
                     Ret(cpu,4,0xc000011fu);return;
                 }
-                auto h=next_completion_++;completions_.emplace(h,std::make_shared<XbeIoCompletion>());
+                auto h=next_completion_;next_completion_+=4;completions_.emplace(h,std::make_shared<XbeIoCompletion>());
                 Output(out,h);Ret(cpu,4,0);return;
             }
             case 227: {
@@ -1379,7 +1380,7 @@ private:
                 if(port&&context){
                     if(port->Full()){Ret(cpu,8,0xc000009au);return;}
                     if(!mem_.IsCommitted(iosb,8)||!mem_.IsCommitted(Arg(cpu,5),Arg(cpu,6))||
-                        Arg(cpu,6)>64u*1024*1024){Ret(cpu,8,0xc000000du);return;}
+                        Arg(cpu,6)>64u*1024*1024||(Arg(cpu,7)&&!mem_.IsCommitted(Arg(cpu,7),8))){Ret(cpu,8,0xc000000du);return;}
                 }
                 auto status=files_.Read(Arg(cpu,0),iosb,Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
                 if(port&&context){

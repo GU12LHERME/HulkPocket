@@ -12,6 +12,7 @@ on:
       - 'native/xbe_d3d8_default_trace.h'
       - 'native/xbe_kernel_session.h'
       - 'native/hulk_sound.h'
+      - 'native/hulk_audio_queue.h'
       - 'native/test_hulk_sound.cpp'
       - 'third_party/xboxxberecomp/audio/**'
       - 'native/xbe_kernel_files.h'
