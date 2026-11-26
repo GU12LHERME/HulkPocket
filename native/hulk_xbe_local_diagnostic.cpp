@@ -1,4 +1,12 @@
 #include "hulk_xbe_preflight.h"
+#ifdef HULK_ENABLE_ENTRY_DIAGNOSTIC
+#include "xbe_entry_session.h"
+#include "xbe_kernel_session.h"
+#include "hulk_kernel_missing_data.h"
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+#endif
 #include "xbe_bootstrap.h"
 #include "xbe_kernel_imports.h"
 #include "xbe_image_memory_loader.h"
@@ -18,10 +26,11 @@
 // from your own game and trusted source code.
 int main(int argc,char** argv) {
     std::vector<std::string> paths;
-    bool imports_requested=false, bootstrap_requested=false;
+    bool imports_requested=false, bootstrap_requested=false, execute_requested=false;
     for (int i=1; i<argc; ++i) {
         const std::string arg(argv[i]);
         if (arg=="--imports") imports_requested=true;
+        else if (arg=="--execute-diagnostic") execute_requested=true;
         else if (arg=="--bootstrap") bootstrap_requested=true;
         else if (arg.rfind("--",0)==0) {
             std::cerr << "unknown diagnostic option: " << arg << '\n';
@@ -34,6 +43,16 @@ int main(int argc,char** argv) {
         std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so] [--imports] [--bootstrap]\n";
         return 2;
     }
+    if(execute_requested && (paths.size()!=2 || bootstrap_requested)) {
+        std::cerr << "Execution requires a module and cannot be combined with --bootstrap\n";
+        return 2;
+    }
+#ifndef HULK_ENABLE_ENTRY_DIAGNOSTIC
+    if(execute_requested) {
+        std::cerr << "Rebuild with HULK_ENABLE_ENTRY_DIAGNOSTIC and SDK headers\n";
+        return 2;
+    }
+#endif
     try {
         std::ifstream file(paths[0],std::ios::binary|std::ios::ate);
         if(!file) throw std::runtime_error("cannot open local XBE");
@@ -93,6 +112,60 @@ int main(int argc,char** argv) {
                 std::cerr << "Reason: " << result.failure << '\n';
                 return 3;
             }
+#ifdef HULK_ENABLE_ENTRY_DIAGNOSTIC
+            if(execute_requested) {
+                using namespace hulkpocket;
+                HulkKernelDataRegistry registry;
+                auto imports=ScanXbeKernelImports(loaded,guest);
+                auto guards=PlanMissingKernelDataGuards(registry,imports,guest,0x08000000,0x08200000);
+                for(auto g:guards) std::cout << "Unsupported data ordinal " << g.ordinal
+                    << " guard=0x" << std::hex << g.address << std::dec << '\n';
+                auto boot=PrepareXbeBootstrap(loaded,guest,0x04000000,0x06000000);
+                InitializeDiagnosticTlsIndex(boot,guest);
+                guest.Commit(0x07000000,guest.PageSize());
+                auto cpu=PrepareInitialCpu(boot,guest,0x07000000,0x10,0);
+                InitializeKernelThread(guest,0x07000000,0x07000400,
+                    boot.memory.stack_top,boot.memory.stack_base,cpu.esp,boot.tls_data,0x10);
+                // Explicit diagnostic binding: unsupported data stays inaccessible.
+                for(auto ordinal:imports.ordinals)
+                    if(HulkKernelExportKind(ordinal)==KernelExportKind::Unknown)
+                        throw std::runtime_error("Unknown kernel ordinal "+std::to_string(ordinal));
+                for(size_t i=0;i<imports.entries;++i) {
+                    auto slot=loaded.kernel_thunk+static_cast<uint32_t>(i*4);
+                    auto ordinal=guest.Read32(slot)&0xffffu;
+                    uint32_t target=0;
+                    if(HulkKernelExportKind(ordinal)==KernelExportKind::Function)
+                        target=0xFE000000u+ordinal*4u;
+                    else for(auto g:guards) if(g.ordinal==ordinal) target=g.address;
+                    if(!target) throw std::runtime_error("Missing diagnostic binding");
+                    guest.Write32(slot,target);
+                }
+                auto entry=native.ResolveKernelEntry();
+                std::cout << "Starting isolated guest entry diagnostic" << std::endl;
+                std::cerr.flush();
+                auto pid=fork();
+                if(pid<0) throw std::runtime_error("fork failed");
+                if(pid==0) {
+                    alarm(15);
+                    try {
+                        XbeKernelSession session(guest,0x09000000,0x01000000);
+                        int status=session.Run(entry,cpu,loaded.entry);
+                        std::cerr << "Guest entry status: " << status << std::endl;
+                        _exit(status==0?0:5);
+                    } catch(const std::exception& ex) {
+                        std::cerr << ex.what() << std::endl;
+                        _exit(5);
+                    }
+                }
+                int status=0;
+                if(waitpid(pid,&status,0)!=pid) throw std::runtime_error("waitpid failed");
+                if(WIFSIGNALED(status)) {
+                    std::cerr << "Guest diagnostic stopped by signal " << WTERMSIG(status) << '\n';
+                    return 6;
+                }
+                return WIFEXITED(status)?WEXITSTATUS(status):6;
+            }
+#endif
         } else {
             std::cout << "No ELF supplied: native function mapping NOT checked.\n";
         }
