@@ -23,6 +23,8 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         const auto tls=memory->Read32(thread+0x28);
         assert(memory->Read32(tls)==0xdeadbeef);
         assert(memory->Read32(tls+4)==0);
+        assert(memory->Read32(c->fs_base+4)-tls==24);
+        assert(memory->Read32(c->fs_base+4)-memory->Read32(c->fs_base+8)>0x80000);
         call(*c,base,cb,104,{});
         assert(c->eax==thread);
         ++ran;
@@ -136,7 +138,7 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,294,{0x10500});
     call(*c,base,cb,294,{0x10500});
     assert(memory->Read32(0x10510)==0xffffffff);
-    call(*c,base,cb,255,{0x10100,0,0x10000,8,0x10104,0x3000,0x1234,1,0,0x2000});
+    call(*c,base,cb,255,{0x10100,0,0x100000,24,0x10104,0x3000,0x1234,1,0,0x2000});
     assert(c->eax==0 && ran==0);
     const auto h=memory->Read32(0x10100);
     assert(h!=memory->Read32(0x10104));

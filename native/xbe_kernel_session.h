@@ -81,22 +81,35 @@ private:
         const uint32_t system=ordinal==255?Arg(cpu,9):0;
         const uint32_t requested=ordinal==255?Arg(cpu,2):0;
         const uint32_t requested_tls=ordinal==255?Arg(cpu,3):0;
-        const uint32_t template_size=tls_.end-tls_.start+tls_.zero_fill;
-        const uint32_t aligned_tls=(template_size+3u)&~3u;
-        if(!entry_ || !start || count_>=workers_.size() || requested>0x80000 ||
-           aligned_tls>0x8000 || (requested_tls && ((uint64_t(requested_tls)+3)&~uint64_t(3))!=aligned_tls))
-            throw std::runtime_error("Unsupported diagnostic thread stack/TLS or capacity");
+        const uint64_t template_size=uint64_t(tls_.end)-tls_.start+tls_.zero_fill;
+        const uint64_t default_tls=template_size?((template_size+15)&~uint64_t(15))+4:0;
+        const uint64_t requested_aligned=(uint64_t(requested_tls)+3)&~uint64_t(3);
+        // XAPI can request extra per-thread TLS. Keep enough space for both
+        // the image template and the requested allocation, without changing
+        // the image's global TLS index from a secondary thread.
+        const uint64_t tls_bytes=std::max(default_tls,requested_aligned);
+        const uint64_t stack_bytes=std::max<uint64_t>(requested,0x10000);
+        const auto page=uint64_t(mem_.PageSize());
+        const uint64_t committed=(stack_bytes+tls_bytes+32+page-1)&~(page-1);
+        std::fprintf(stderr,"PsCreateSystemThread%s: stack=%08X tls=%08X template=%llu allocated_tls=%llu start=%08X system=%08X suspend=%u workers=%zu\n",
+            ordinal==255?"Ex":"",requested,requested_tls,
+            static_cast<unsigned long long>(template_size),static_cast<unsigned long long>(tls_bytes),
+            start,system,ordinal==255?(Arg(cpu,7)&255u):0,count_);
+        if(!entry_ || (!start && !system)) throw std::runtime_error("Invalid guest thread entry");
+        if(count_>=workers_.size()) throw std::runtime_error("Diagnostic thread capacity exhausted");
+        if(tls_bytes>0x10000 || committed>0x3D0000 || tls_.end<tls_.start)
+            throw std::runtime_error("Diagnostic thread stack/TLS exceeds reserved arena");
         for(auto addr:{out,idout})
             if(addr && !mem_.IsCommitted(addr,4)) throw std::runtime_error("Invalid thread output");
-        const uint32_t slot=0x0A000000u+static_cast<uint32_t>(count_)*0x100000u;
+        const uint32_t slot=0x0A000000u+static_cast<uint32_t>(count_)*0x400000u;
         const uint32_t handle=0x100u+static_cast<uint32_t>(count_)*4u;
         const uint32_t id=0x1000u+static_cast<uint32_t>(count_)*4u;
-        const uint32_t top=slot+0xF0000, stack=slot+0x60000;
+        const uint32_t top=slot+0x3F0000, stack=top-static_cast<uint32_t>(committed);
         if(mem_.IsCommitted(slot,mem_.PageSize()) || mem_.IsCommitted(stack,top-stack))
             throw std::runtime_error("Thread arena occupied");
-        mem_.Commit(slot,0x1000);
+        mem_.Commit(slot,mem_.PageSize());
         mem_.Commit(stack,top-stack);
-        const uint32_t tls=top-aligned_tls;
+        const uint32_t tls=top-static_cast<uint32_t>(tls_bytes);
         if(template_size) CopyXbeTls(tls_,mem_,tls);
         X86Context child{};
         child.esp=(tls&~15u)-16;
@@ -106,7 +119,7 @@ private:
         mem_.Write32(child.esp+4,system?start:context);
         if(system) mem_.Write32(child.esp+8,context);
         InitializeKernelThread(mem_,slot,slot+0x400,top,stack,child.esp,
-                               template_size?tls:0,id);
+                               tls_bytes?tls:0,id);
         auto& w=workers_[count_++];
         w.pcr=slot; w.handle=handle; w.id=id;
         w.suspend=ordinal==255 && (Arg(cpu,7)&255u)?1u:0u;

@@ -21,7 +21,7 @@ int main() {
     m.Write32(s.tls.index,0xffffffff);
     InitializeDiagnosticTlsIndex(s,m);
     assert(s.memory.stack_top+4u*m.Read32(s.tls.index)==s.tls_data);
-    assert(s.tls_data==s.memory.stack_top-12);
+    assert(s.tls_data==s.memory.stack_top-20);
     assert((s.initial_esp-4)%16==0);
     auto bad=s;
     bad.tls.callbacks=0x13000;

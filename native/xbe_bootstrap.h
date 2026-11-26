@@ -17,7 +17,8 @@ inline XbeBootstrapState PrepareXbeBootstrap(
         throw std::invalid_argument("unmapped guest entry");
     const auto tls=ReadXbeTls(image,mem);
     const std::size_t size=std::size_t(tls.end-tls.start)+tls.zero_fill;
-    const uint64_t aligned=(uint64_t(size)+3)&~uint64_t(3);
+    // Match XboxXBERecomp boot allocation: align template to 16 bytes plus a DWORD.
+    const uint64_t aligned=size?((uint64_t(size)+15)&~uint64_t(15))+4:0;
     auto expanded=image;
     const uint64_t stack=uint64_t(image.stack_commit)+aligned+32;
     if(stack>0xffffffffu) throw std::invalid_argument("TLS stack overflow");
