@@ -519,6 +519,24 @@ int main(){
         bool lit_blocked=false;
         try{bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);}catch(const std::logic_error&){lit_blocked=true;}
         assert(lit_blocked);
+        // Actual lighting render: +Z packed normal and a directional
+        // light aimed down -Z. Blue mip texture times blue diffuse,
+        // with a separate red specular contribution.
+        auto vertices_lit=std::array<QuadVertex,4>{minified[0],minified[1],minified[2],minified[3]};
+        for(auto& v:vertices_lit)v.color=511u<<22;
+        mem.Write(0x80105000,vertices_lit.data(),sizeof(vertices_lit));
+        std::array<float,17> material{};material[2]=1;material[3]=1;material[8]=.25f;material[16]=8;
+        mem.Write(0x11900,material.data(),68);assert(bridge.ObserveMaterial(0x11900));
+        std::array<uint32_t,26> light{};light[0]=3;light[3]=std::bit_cast<uint32_t>(1.f);
+        light[5]=std::bit_cast<uint32_t>(1.f);light[18]=std::bit_cast<uint32_t>(-1.f);
+        mem.Write(0x11900,light.data(),104);assert(bridge.ObserveLight(0,0x11900));
+        assert(bridge.ObserveLightEnable(0,1));
+        bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
+        auto lit_pixel=backend.ReadPixel(32,32);
+        assert(lit_pixel[0]>=63&&lit_pixel[0]<=65&&lit_pixel[1]==0&&lit_pixel[2]==255&&lit_pixel[3]==255);
+        assert(bridge.ObserveLightEnable(0,0));
+        bridge.ReplayTexturedDiffuseDiagnostic(6,0,4,0x11880);
+        assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,0,0,255}));
     }
     std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");
 }

@@ -42,7 +42,7 @@ class XbeD3d8Bridge {
     std::mutex lock_;
     bool initialized_=false;
     bool material_captured_=false;
-    uint32_t light_defined_=0;
+    uint32_t light_defined_=0,light_enable_seen_=0;
     uint32_t presents_=0;
     static float Float(uint32_t x){return std::bit_cast<float>(x);}
     uint32_t Read(uint64_t a){return gpu::ReadGuest32(a);}
@@ -250,6 +250,7 @@ public:
     bool ObserveLightEnable(uint32_t index,uint32_t enabled){
         std::lock_guard guard(lock_);
         if(index>=8)return false;
+        light_enable_seen_|=1u<<index;
         if(enabled)state_.light_enable|=1u<<index;else state_.light_enable&=~(1u<<index);
         return true;
     }
@@ -452,6 +453,13 @@ public:
         // This does not translate hardware clip, multisample or raster hints.
         replay.rs.fill(0);replay.tss={};replay.simple.fill(0);
         replay.rs[gpu::kRsZEnable]=state_.rs[gpu::kRsZEnable];
+        if(packed){
+            for(auto i:{gpu::kRsLighting,gpu::kRsSpecularEnable,gpu::kRsLocalViewer,gpu::kRsColorVertex,
+                        gpu::kRsNormalizeNormals,gpu::kRsDiffuseMaterialSource,gpu::kRsSpecularMaterialSource,
+                        gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient,
+                        gpu::kRsFrontFace,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode})
+                replay.rs[i]=state_.rs[i];
+        }
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,
                     gpu::kMBlendEnable,gpu::kMSrcBlend,gpu::kMDestBlend,gpu::kMBlendOp,
                     gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
@@ -510,14 +518,17 @@ public:
     }
     void ReplayTexturedDiffuseDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
-        if(!initialized_||state_.vs_handle!=0x142||state_.vs||state_.ps||
+        const bool packed=bool(state_.vs);
+        if(packed&&(!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))
+            throw std::logic_error("Packed normal lighting requires captured material and enabled light records");
+        if(!initialized_||(!packed&&state_.vs_handle!=0x142)||state_.ps||
            !state_.textures[0]||!count||count>262144||
            !((prim==5&&count%3==0)||(prim==6&&count>=3))||state_.scissor_count||
            state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||
            state_.viewport.max_z!=1||state_.ss_offset_x||state_.ss_offset_y||
-           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
-           state_.rs[gpu::kRsSpecularEnable]||state_.rs[gpu::kRsVertexBlend]||
-           state_.rs[gpu::kRsStencilEnable]||
+           (packed?state_.rs[gpu::kRsLighting]!=1:state_.rs[gpu::kRsLighting]!=0)||state_.rs[gpu::kRsFogEnable]||
+           (!packed&&state_.rs[gpu::kRsSpecularEnable])||state_.rs[gpu::kRsVertexBlend]||
+           state_.rs[gpu::kRsStencilEnable]||(packed&&state_.rs[gpu::kRsTwoSidedLighting])||
            std::any_of(state_.textures.begin()+1,state_.textures.end(),[](auto p){return p!=0;})||
            std::any_of(state_.palettes.begin(),state_.palettes.end(),[](auto p){return p!=0;}))
             throw std::logic_error("Unsupported original textured quad profile");

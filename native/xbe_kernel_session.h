@@ -125,7 +125,7 @@ private:
         uint32_t diagnostic_vertices=0;
         unsigned diagnostic_swap_returns=0,draws_at_swap=0;
         std::unique_ptr<gpu::State> diagnostic_line_profile,diagnostic_texture_profile;
-        unsigned diagnostic_texture_returns=0;
+        unsigned diagnostic_texture_returns=0,diagnostic_lit_returns=0;
         uint64_t last_frame_hash=0;
         const bool compact_capture=std::getenv("HULK_COMPACT_REPORT")&&
             std::strcmp(std::getenv("HULK_COMPACT_REPORT"),"1")==0;
@@ -1139,7 +1139,7 @@ private:
                 const bool zero_viewport=!synced.viewport.w||!synced.viewport.h;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 const bool opted_in=allow&&std::strcmp(allow,"1")==0;
-                if(synced.vs){
+                if(synced.vs&&!live.diagnostic_lit_returns){
                     std::fprintf(stderr,"D3D PACKED NORMAL GEOMETRY PASS vertices=%u lighting=%u specular=%u ambient=%08X diffuse_source=%u ambient_source=%u\n",
                         vertices,synced.rs[gpu::kRsLighting],synced.rs[gpu::kRsSpecularEnable],synced.rs[gpu::kRsAmbient],
                         synced.rs[gpu::kRsDiffuseMaterialSource],synced.rs[gpu::kRsAmbientMaterialSource]);
@@ -1153,12 +1153,14 @@ private:
                         for(auto word:synced.lights[i])std::fprintf(stderr," %08X",word);
                         std::fprintf(stderr,"\n");
                     }
-                    throw std::logic_error("Packed normal geometry verified; original fixed-function lighting/material integration required");
+                    // The bridge validates captured light coverage and the
+                    // restricted combiner before drawing; never fake a light.
+                
                 }
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=indexed?0u:Arg(cpu,1),count=indexed?Arg(cpu,1):Arg(cpu,2);
                 const auto indices=indexed?Arg(cpu,2):0u;
-                if(((!indexed&&caller==0x0031c10f)||(indexed&&caller==0x00327371&&indices))&&fvf==0x142&&
+                if(((!indexed&&caller==0x0031c10f)||(indexed&&caller==0x00327371&&indices))&&(fvf==0x142||synced.vs)&&
                    ((Arg(cpu,0)==5&&count&&count%3==0)||(Arg(cpu,0)==6&&count>=3))){
                     if(frame_draws>=live.diagnostic_draw_limit)
                         throw std::runtime_error("Textured diagnostic draw budget reached");
@@ -1170,7 +1172,7 @@ private:
                         throw std::runtime_error("Textured quad target description failed");
                     gpu::TextureDesc tex{};
                     if(!gpu::Describe(synced.textures[0],tex))throw std::runtime_error("Invalid capture texture");
-                    const bool capture=live.detailed_draws||!live.diagnostic_texture_returns||
+                    const bool capture=live.detailed_draws||!live.diagnostic_texture_returns||(synced.vs&&!live.diagnostic_lit_returns)||
                         live.last_capture_format!=tex.format||live.last_capture_primitive!=Arg(cpu,0);
                     // Keep first-draw pixel proof and capture each new texture
                     // format/primitive. Normal repeated draws are read back at swap.
@@ -1202,6 +1204,9 @@ private:
                         if(!live.diagnostic_texture_profile)
                             live.diagnostic_texture_profile=std::make_unique<gpu::State>(synced);
                         ++live.diagnostic_texture_returns;
+                        if(synced.vs){++live.diagnostic_lit_returns;
+                            if(live.diagnostic_lit_returns==1)std::fprintf(stderr,"D3D PACKED NORMAL LIGHT DRAW PASS vertices=%u changed_pixels=%u\n",vertices,changed);
+                        }
                         ++live.diagnostic_draw_returns;
                         live.diagnostic_vertices+=vertices;
                         std::fprintf(stderr,"D3D DIAGNOSTIC TEXTURED DRAW RETURN: frame=%u batch=%u/%u total_textured=%u changed_pixels=%u measured=%u (reduced profile)\n",

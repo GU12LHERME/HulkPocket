@@ -2,6 +2,7 @@
 #include "gpu/texture.h"
 #include "gpu/guest_memory.h"
 #include "xbe_bc_decode.h"
+#include "xbe_packed_normal_lighting.h"
 #include "gpu/vertex.h"
 #include <algorithm>
 #include <cmath>
@@ -30,6 +31,7 @@ constexpr const char* vs=R"(#version 300 es
 layout(location=0) in vec4 a_position;
 layout(location=1) in vec4 a_color;
 layout(location=2) in vec2 a_uv;
+layout(location=3) in vec3 a_specular;
 uniform vec2 u_extent;
 uniform int u_transformed;
 uniform mat4 u_world;
@@ -37,6 +39,7 @@ uniform mat4 u_view;
 uniform mat4 u_projection;
 out vec4 v_color;
 out vec2 v_uv;
+out vec3 v_specular;
 void main(){
     if(u_transformed!=0){
         float w=1.0/a_position.w;
@@ -48,12 +51,13 @@ void main(){
         gl_Position=vec4(p.xy,2.0*p.z-p.w,p.w);
     }
     gl_PointSize=1.0;
-    v_color=a_color;v_uv=a_uv;
+    v_color=a_color;v_uv=a_uv;v_specular=a_specular;
 })";
 constexpr const char* fs=R"(#version 300 es
 precision highp float;
 in vec4 v_color;
 in vec2 v_uv;
+in vec3 v_specular;
 uniform sampler2D u_texture;
 uniform int u_textured;
 uniform int u_color_op;
@@ -68,6 +72,7 @@ void main(){
         color.rgb=u_color_op==2?t.rgb:t.rgb*v_color.rgb;
         color.a=u_alpha_op==2?t.a:u_alpha_op==4?t.a*v_color.a:v_color.a;
     }
+    color.rgb=clamp(color.rgb+v_specular,0.0,1.0);
     if(u_alpha_func!=0){
         int a=int(floor(clamp(color.a,0.0,1.0)*255.0+0.5));
         bool pass=u_alpha_func==0x207 ||
@@ -80,7 +85,7 @@ void main(){
         if(!pass)discard;
     }
 })";
-struct Vertex {float p[4];float c[4];float uv[2];};
+struct Vertex {float p[4];float c[4];float uv[2];float specular[3];};
 }
 XbeGlesBackend::~XbeGlesBackend(){Destroy();}
 void XbeGlesBackend::Destroy() noexcept {
@@ -145,6 +150,7 @@ bool XbeGlesBackend::Init(uint32_t w,uint32_t h){
         glEnableVertexAttribArray(0);glVertexAttribPointer(0,4,GL_FLOAT,GL_FALSE,sizeof(Vertex),nullptr);
         glEnableVertexAttribArray(1);glVertexAttribPointer(1,4,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<const void*>(sizeof(float)*4));
         glEnableVertexAttribArray(2);glVertexAttribPointer(2,2,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<const void*>(sizeof(float)*8));
+        glEnableVertexAttribArray(3);glVertexAttribPointer(3,3,GL_FLOAT,GL_FALSE,sizeof(Vertex),reinterpret_cast<const void*>(sizeof(float)*10));
         glViewport(0,0,w,h);glDisable(GL_DITHER);
         GlCheck("GLES init");width_=w;height_=h;
         std::fprintf(stderr,"GLES renderer: %s\n",reinterpret_cast<const char*>(glGetString(GL_RENDERER)));
@@ -176,6 +182,14 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
         if(!s.rs[i])continue;
         switch(i){
             case gpu::kRsZEnable:case gpu::kRsStencilEnable:case gpu::kRsStencilFail:break;
+            case gpu::kRsLighting:case gpu::kRsSpecularEnable:case gpu::kRsLocalViewer:
+            case gpu::kRsColorVertex:case gpu::kRsNormalizeNormals:
+            case gpu::kRsDiffuseMaterialSource:case gpu::kRsSpecularMaterialSource:
+            case gpu::kRsAmbientMaterialSource:case gpu::kRsEmissiveMaterialSource:
+            case gpu::kRsAmbient:
+            case gpu::kRsFrontFace:case gpu::kRsCullMode:
+                if(s.vs)break; // validated packed-normal lighting draw
+                Unsupported("Unexpected lighting or cull state in diffuse draw");
             case gpu::kRsFillMode:case gpu::kRsBackFillMode:
                 if(s.rs[i]==0x1b02)break; // solid polygons
                 [[fallthrough]];
@@ -246,6 +260,14 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
         glStencilOp(fail,zfail,pass);
     }else glDisable(GL_STENCIL_TEST);
     glDisable(GL_CULL_FACE);glDisable(GL_SCISSOR_TEST);
+    if(s.vs&&s.rs[gpu::kRsCullMode]){
+        auto cull=s.rs[gpu::kRsCullMode];
+        if(cull!=0x900&&cull!=0x901)Unsupported("Unknown packed-normal cull mode");
+        // D3D culls a winding in top-down screen coordinates; GLES
+        // framebuffer coordinates are bottom-up.
+        glFrontFace(cull==0x900?GL_CW:GL_CCW);
+        glCullFace(GL_BACK);glEnable(GL_CULL_FACE);
+    }
 }
 void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rects,uint32_t flags,uint32_t color,float z,uint32_t stencil){
     Check();Target(s.rt);
@@ -348,9 +370,10 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     Check();Target(s.rt);
     if(color_requires_clear_)Unsupported("Rotated backbuffer requires full color clear before draw");
     const bool textured=s.textures[0]!=0;
-    const bool transformed=(s.vs_handle&0xe)==4;
+    const bool packed=bool(s.vs);
+    const bool transformed=!packed&&(s.vs_handle&0xe)==4;
     const uint32_t expected=(textured?0x140u:0x40u)|(transformed?4u:2u);
-    if(s.vs_handle!=expected||s.vs||s.ps||s.scissor_count||
+    if((!packed&&s.vs_handle!=expected)||(packed&&(!textured||!(s.vs_handle&1)))||s.ps||s.scissor_count||
        s.ss_offset_x!=0||s.ss_offset_y!=0||
        std::any_of(s.textures.begin()+1,s.textures.end(),[](auto v){return v!=0;})||
        std::any_of(s.tss.begin()+1,s.tss.end(),[](const auto& stage){return std::any_of(stage.begin(),stage.end(),[](auto v){return v!=0;});}))
@@ -387,9 +410,9 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     if(prim<1||prim>10)throw std::invalid_argument("Invalid Xbox primitive");
     gpu::Assembled a;
     if(!gpu::Assemble(s,prim,start,count,indices,a))throw std::runtime_error("Vertex assembly failed");
-    if(a.regs!=(textured?0x209u:9u)||a.pretransformed!=transformed||
+    if(a.regs!=(packed?0x205u:(textured?0x209u:9u))||a.pretransformed!=transformed||
        a.elements[0].format!=(transformed?gpu::kVertexR32G32B32A32_FLOAT:gpu::kVertexR32G32B32_FLOAT)||
-       a.elements[3].format!=gpu::kVertexB8G8R8A8_UNORM||
+       (packed?a.elements[2].format!=gpu::kVertexR32_UINT:a.elements[3].format!=gpu::kVertexB8G8R8A8_UNORM)||
        (textured&&a.elements[9].format!=gpu::kVertexR32G32_FLOAT))Unsupported("Unsupported GLES vertex layout");
     uint32_t n=a.index_count?a.index_count:a.draw_count;
     GLenum mode=GL_TRIANGLES;
@@ -403,6 +426,8 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     gpu::TextureDesc sampled{};
     if(textured&&!gpu::Describe(s.textures[0],sampled))
         throw std::invalid_argument("Invalid sampled texture");
+    std::unique_ptr<PackedNormalLighting> lighting;
+    if(packed)lighting=std::make_unique<PackedNormalLighting>(s);
     std::vector<Vertex> vertices(n);
     for(uint32_t i=0;i<n;++i){
         int64_t id=i;
@@ -418,7 +443,9 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
             std::memcpy(dest,b.src+off,bytes);
         };
         auto& v=vertices[i];v.p[3]=1;read(0,v.p,transformed?16:12);
-        uint8_t bgra[4];read(3,bgra,4);
+        uint8_t bgra[4]{};
+        uint32_t normal=0;
+        if(packed)read(2,&normal,4);else read(3,bgra,4);
         if(textured){
             read(9,v.uv,8);
             if(!std::isfinite(v.uv[0])||!std::isfinite(v.uv[1]))throw std::invalid_argument("Invalid texture coordinates");
@@ -427,7 +454,13 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
         }
         if(!std::all_of(v.p,v.p+4,[](float x){return std::isfinite(x);})||v.p[3]<=0)
             throw std::invalid_argument("Invalid XYZRHW position");
-        v.c[0]=bgra[2]/255.0f;v.c[1]=bgra[1]/255.0f;v.c[2]=bgra[0]/255.0f;v.c[3]=bgra[3]/255.0f;
+        if(packed){
+            auto lit=lighting->Evaluate({v.p[0],v.p[1],v.p[2]},normal);
+            std::copy(lit.diffuse.begin(),lit.diffuse.end(),v.c);
+            std::copy(lit.specular.begin(),lit.specular.end(),v.specular);
+        }else{
+            v.c[0]=bgra[2]/255.0f;v.c[1]=bgra[1]/255.0f;v.c[2]=bgra[0]/255.0f;v.c[3]=bgra[3]/255.0f;
+        }
     }
     auto alpha_enable=s.simple[gpu::kMAlphaTestEnable>>2];
     auto alpha_cmp=s.simple[gpu::kMAlphaFunc>>2],alpha_reference=s.simple[gpu::kMAlphaRef>>2];
