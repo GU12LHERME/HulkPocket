@@ -606,7 +606,7 @@ private:
             case kSoundStreamAddRef:case kSoundStreamRelease:case kSoundStreamInfo:
             case kSoundStreamStatus:case kSoundStreamProcess:case kSoundStreamDiscontinuity:
             case kSoundStreamFlush:case kSoundStreamFlushEx:case kSoundStreamPause:
-            case kSoundStreamVolume:case kSoundStreamFrequency:case kSoundStreamHeadroom:case kSoundStreamFormat:{
+            case kSoundStreamVolume:case kSoundStreamFrequency:case kSoundStreamHeadroom:case kSoundStreamMixBins:case kSoundStreamMixBinVolumes:case kSoundStreamFormat:{
                 unsigned n=ordinal==kSoundStreamFlushEx?4:ordinal==kSoundStreamProcess?3:
                     (ordinal==kSoundStreamAddRef||ordinal==kSoundStreamRelease||ordinal==kSoundStreamDiscontinuity||ordinal==kSoundStreamFlush)?1:2;
                 Check(cpu,n);std::array<uint32_t,8> a{};for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
@@ -634,6 +634,8 @@ private:
             case kSoundBufferLock:
             case kSoundBufferUnlock:
             case kSoundBufferHeadroom:
+            case kSoundBufferMixBins:
+            case kSoundBufferMixBinVolumes:
             case kSoundBufferFormat:
             case kSoundBufferPause:
             case kSoundBufferPlayRegion:

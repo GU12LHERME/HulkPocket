@@ -48,6 +48,8 @@ constexpr uint32_t kSoundStreamVolume=0x10426;
 constexpr uint32_t kSoundStreamFrequency=0x10427;
 constexpr uint32_t kSoundStreamHeadroom=0x10428;
 constexpr uint32_t kSoundStreamFormat=0x10429;
+constexpr uint32_t kSoundBufferMixBins=0x1042a,kSoundBufferMixBinVolumes=0x1042b;
+constexpr uint32_t kSoundStreamMixBins=0x1042c,kSoundStreamMixBinVolumes=0x1042d;
 constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture=0x10102,
     kDefaultMakeSpace=0x10103,kDefaultComplexBase=0x10200;
 // Bounded experimental presentation loop; the final swap is presented

@@ -59,6 +59,22 @@ int main(){
     got=s.Render(2);assert(got[0]==1000&&got[1]==-2000&&got[2]==3000&&got[3]==-4000);
     assert(s.Buffer(v,kSoundBufferFormat,{v,0x10100})==0);
     assert(s.Buffer(v,kSoundBufferFormat,{v,0x400000})==0x88780032u);
+    // Actual per-speaker routing: mono source to left only, then right.
+    uint32_t bins[]={1,0x10810},pair[]={0,0};
+    mem.Write(0x10800,bins,sizeof(bins));mem.Write(0x10810,pair,sizeof(pair));
+    assert(s.Buffer(v,kSoundBufferMixBins,{v,0x10800})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,2})==0);
+    got=s.Render(1);assert(got[0]==1000&&got[1]==0);
+    mem.Write32(0x10814,uint32_t(-10000));
+    assert(s.Buffer(v,kSoundBufferMixBinVolumes,{v,0x10800})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==0);
+    mem.Write32(0x10810,10);
+    assert(s.Buffer(v,kSoundBufferMixBins,{v,0x10800})==0x88780032u);
+    mem.Write32(0x10810,1);mem.Write32(0x10814,0);
+    assert(s.Buffer(v,kSoundBufferMixBins,{v,0x10800})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,2})==0);
+    got=s.Render(1);assert(got[0]==0&&got[1]==1000);
+    assert(s.Buffer(v,kSoundBufferMixBins,{v,0})==0);
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
     got=s.Render(5);assert(got[8]==1000&&got[9]==1000);
     assert(s.Buffer(v,kSoundBufferPlayRegion,{v,2,6})==0);

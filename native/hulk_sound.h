@@ -32,12 +32,20 @@ private:
         uint32_t Frames(uint32_t n)const{return tag==0x69?n/align*64:n/align;}
         uint32_t Bytes(uint32_t n)const{return tag==0x69?n/64*align:n*align;}
     };
+    // Xbox speaker mix bins 0/1 (front), 2 (centre), 4/5 (rear).
+    // Stereo diagnostics fold centre/rear at -3 dB. Subwoofer,
+    // crosstalk and DSP sends are not implemented and remain explicit errors.
+    struct Routing {
+        uint32_t mask=0;
+        std::array<float,6> gains{{1,1,1,1,1,1}};
+    };
     struct Voice {
         Format fmt{};
         uint32_t data=0,bytes=0,owned=0,frequency=0;
         bool playing=false,loop=false,paused=false,sync=false;
         uint32_t play_start=0,play_length=0,loop_start=0,loop_length=0;
         float gain=1,headroom=1;
+        Routing routing{};
         bool locked=false;
         uint32_t lock_ptr=0,lock_bytes=0,lock_ptr2=0,lock_bytes2=0;
         uint64_t phase=0;
@@ -48,6 +56,7 @@ private:
         Format fmt{};
         uint32_t limit=0,callback=0,context=0,frequency=0,refs=1;
         float gain=1,headroom=1;
+        Routing routing{};
         bool paused=false,sync=false,ending=false;
         uint64_t phase=0;
         std::deque<Packet> packets;
@@ -109,6 +118,36 @@ private:
         if(f.tag==1)return (f.bits==8||f.bits==16)&&f.align==f.channels*f.bits/8;
         if(f.tag!=0x69||f.bits!=4||f.align!=36*f.channels||u16(16)<2||!Range(p,20))return false;
         mem_.Read(p+18,x.data()+18,2);return u16(18)==64;
+    }
+    bool SetRouting(Routing& routing,uint32_t p,uint32_t channels,bool volumes_only)const{
+        if(!p){
+            if(volumes_only)return false;
+            routing=Routing{};return true;
+        }
+        if(!Range(p,8))return false;
+        auto n=mem_.Read32(p),pairs=mem_.Read32(p+4);
+        if(!n||n>6||!Range(pairs,n*8))return false;
+        Routing next=volumes_only?routing:Routing{};
+        uint32_t seen=0;
+        for(unsigned i=0;i<n;++i){
+            auto bin=mem_.Read32(pairs+8*i);
+            auto mb=static_cast<int32_t>(mem_.Read32(pairs+8*i+4));
+            if(bin>5||bin==3||mb< -10000||mb>0)return false;
+            auto bit=1u<<bin;
+            if(seen&bit||(channels==2&&bin>1)||(volumes_only&&!(next.mask&bit)))return false;
+            seen|=bit;next.gains[bin]=mb==-10000?0.0f:std::pow(10.0f,float(mb)/2000.0f);
+        }
+        if(!volumes_only)next.mask=seen;
+        routing=next;return true;
+    }
+    static void Route(const Routing& r,uint32_t channels,const std::array<float,2>& value,float* out){
+        if(!r.mask){out[0]+=value[0];out[1]+=value[1];return;}
+        const float fold=0.70710678f;
+        if(r.mask&1)out[0]+=value[0]*r.gains[0];
+        if(r.mask&2)out[1]+=value[channels==1?0:1]*r.gains[1];
+        if(r.mask&4){out[0]+=value[0]*r.gains[2]*fold;out[1]+=value[0]*r.gains[2]*fold;}
+        if(r.mask&16)out[0]+=value[0]*r.gains[4]*fold;
+        if(r.mask&32)out[1]+=value[0]*r.gains[5]*fold;
     }
     void Capture(const std::vector<int16_t>& samples){
         if(!capture_attempted_){
@@ -244,12 +283,13 @@ public:
         auto bytes=mem_.Read32(desc+8),flags=mem_.Read32(desc+4);
         Format f{};
         // Accept only plain 2D voices; no unimplemented 3D or custom bins.
-        if(mem_.Read32(desc)<20||flags&0x10u||mem_.Read32(desc+16)||
+        if(mem_.Read32(desc)<20||flags&0x10u||
            !Parse(mem_.Read32(desc+12),f)||bytes>kMaxBytes||bytes%f.align)return bad;
+        Routing routing{};if(!SetRouting(routing,mem_.Read32(desc+16),f.channels,false))return bad;
         auto obj=pool_.Allocate(0x40);if(!obj)return oom;
         auto data=bytes?pool_.Allocate(bytes):0;
         if(bytes&&!data){pool_.Free(obj);return oom;}
-        Voice v{};v.fmt=f;v.data=v.owned=data;v.bytes=bytes;v.play_length=v.loop_length=bytes;
+        Voice v{};v.fmt=f;v.routing=routing;v.data=v.owned=data;v.bytes=bytes;v.play_length=v.loop_length=bytes;
         voices_.emplace(obj,v);mem_.Write32(out,obj);
         std::fprintf(stderr,"HULK DSOUND BUFFER PASS obj=%08X tag=%04X channels=%u rate=%u bytes=%u flags=%08X\n",
             obj,f.tag,f.channels,f.rate,bytes,flags);return 0;
@@ -298,9 +338,12 @@ public:
             if(!v.locked||a[1]!=v.lock_ptr||a[2]!=v.lock_bytes||
                a[3]!=v.lock_ptr2||a[4]!=v.lock_bytes2)return bad;
             v.locked=false;return 0;
+        case kSoundBufferMixBins:
+        case kSoundBufferMixBinVolumes:
+            return SetRouting(v.routing,a[1],v.fmt.channels,op==kSoundBufferMixBinVolumes)?0:bad;
         case kSoundBufferFormat:{
             Format f{};
-            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align)return bad;
+            if(v.locked||v.playing||!Parse(a[1],f)||v.bytes%f.align||(f.channels==2&&(v.routing.mask&~3u)))return bad;
             // Reset regions and phase when the unit of a sample changes.
             v.fmt=f;v.frequency=0;v.phase=0;v.paused=v.sync=false;
             v.play_start=v.loop_start=0;v.play_length=v.loop_length=v.bytes;
@@ -358,11 +401,12 @@ public:
         if(!device_||!Range(desc,24)||!Range(out,4)||!Range(vt,4)||!Range(vt2,4)||vt==vt2||streams_.size()>=64)return bad;
         Format f{};auto flags=mem_.Read32(desc),limit=mem_.Read32(desc+4);
         auto callback=mem_.Read32(desc+12),context=mem_.Read32(desc+16);
-        if((flags&0x10u)||mem_.Read32(desc+20)||limit>32||!Parse(mem_.Read32(desc+8),f)||
+        if((flags&0x10u)||limit>32||!Parse(mem_.Read32(desc+8),f)||
            (callback&&!Range(callback,1)))return bad;
+        Routing routing{};if(!SetRouting(routing,mem_.Read32(desc+20),f.channels,false))return bad;
         auto obj=pool_.Allocate(0x80);if(!obj)return oom;
         mem_.Write32(obj,vt);mem_.Write32(obj+4,vt2);
-        StreamVoice v{};v.fmt=f;v.limit=std::max(limit,1u);v.callback=callback;v.context=context;
+        StreamVoice v{};v.fmt=f;v.routing=routing;v.limit=std::max(limit,1u);v.callback=callback;v.context=context;
         streams_.emplace(obj,std::move(v));mem_.Write32(out,obj);
         std::fprintf(stderr,"HULK DSOUND STREAM PASS obj=%08X tag=%04X channels=%u packets=%u callback=%08X\n",obj,f.tag,f.channels,limit,callback);
         return 0;
@@ -419,8 +463,11 @@ public:
         case kSoundStreamHeadroom:
             if(a[1]>10000)return bad;
             v.headroom=std::pow(10.0f,-float(a[1])/2000.0f);return 0;
+        case kSoundStreamMixBins:
+        case kSoundStreamMixBinVolumes:
+            return SetRouting(v.routing,a[1],v.fmt.channels,op==kSoundStreamMixBinVolumes)?0:bad;
         case kSoundStreamFormat:{
-            Format f{};if(!Parse(a[1],f))return bad;
+            Format f{};if(!Parse(a[1],f)||(f.channels==2&&(v.routing.mask&~3u)))return bad;
             FlushStream(v);v.fmt=f;v.frequency=0;return 0;
         }
         default:throw std::logic_error("Unsupported stream operation");
@@ -460,13 +507,15 @@ public:
                     audio::DecodeXboxAdpcm(data+cached*v.fmt.align,v.fmt.align,v.fmt.channels,
                         decoded.data(),size_t(64)*v.fmt.channels);
                 }
+                std::array<float,2> sample{};
                 for(unsigned ch=0;ch<2;++ch){
                     unsigned c=std::min(ch,v.fmt.channels-1);int16_t value=0;
                     if(v.fmt.tag==0x69)value=decoded[(frame%64)*v.fmt.channels+c];
                     else if(v.fmt.bits==8)value=int16_t((int(data[frame*v.fmt.align+c])-128)*256);
                     else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
-                    mix[2*i+ch]+=float(value)*v.gain*v.headroom;
+                    sample[ch]=float(value)*v.gain*v.headroom;
                 }
+                Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
                 v.phase+=v.frequency?v.frequency:v.fmt.rate;
             }
             if(!v.loop&&v.phase>=uint64_t(total)*kRate){v.phase=uint64_t(total)*kRate;v.playing=false;}
@@ -497,13 +546,15 @@ public:
                     audio::DecodeXboxAdpcm(data+cached_block*v.fmt.align,v.fmt.align,v.fmt.channels,
                         decoded.data(),size_t(64)*v.fmt.channels);
                 }
+                std::array<float,2> sample{};
                 for(unsigned ch=0;ch<2;++ch){
                     unsigned c=std::min(ch,v.fmt.channels-1);int16_t value=0;
                     if(v.fmt.tag==0x69)value=decoded[(frame%64)*v.fmt.channels+c];
                     else if(v.fmt.bits==8)value=int16_t((int(data[frame*v.fmt.align+c])-128)*256);
                     else std::memcpy(&value,data+frame*v.fmt.align+2*c,2);
-                    mix[2*i+ch]+=float(value)*v.gain*v.headroom;
+                    sample[ch]=float(value)*v.gain*v.headroom;
                 }
+                Route(v.routing,v.fmt.channels,sample,mix.data()+2*i);
                 v.phase+=v.frequency?v.frequency:v.fmt.rate;
             }
             advance();

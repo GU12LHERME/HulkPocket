@@ -16,6 +16,7 @@ on:
       - 'tools/supplemental_guest_mapping.py'
       - 'tools/extend_hulk_generated.py'
       - 'tools/discover_hulk_xpp.py'
+      - 'tools/audit_hulk_stream_vtables.py'
       - 'tools/run_hulk_next.sh'
       - 'native/test_xbe_supplemental_mapping.cpp'
       - 'native/portable_xbe_dispatch.cpp'
@@ -79,6 +80,7 @@ jobs:
           python3 tools/supplemental_guest_mapping.py --self-test
           python3 tools/extend_hulk_generated.py --self-test
           python3 tools/discover_hulk_xpp.py --self-test
+          python3 tools/audit_hulk_stream_vtables.py --self-test
           python3 tools/discover_hulk_fvf.py --self-test
       - name: Host tests
         run: |

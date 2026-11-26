@@ -12,6 +12,7 @@ downloads="$HOME/storage/downloads"
 log="$downloads/HulkPocket-$(date +%Y%m%d-%H%M%S).txt"
 {
     echo "HulkPocket revision: $(git rev-parse --short HEAD)"
+    python tools/audit_hulk_stream_vtables.py "$xbe" "$base" || echo 'DirectSound vtable audit inconclusive; no override enabled'
     seeds=$(python tools/discover_hulk_xpp.py "$xbe" "$base")
     if [[ -n "$seeds" ]]; then
         recompiler="${HULK_RECOMPILER:-}"

@@ -441,10 +441,10 @@ SOUND_STOP(CDirectSoundStream_SetMaxDistance)
 SOUND_STOP(CDirectSoundStream_SetMinDistance)
 #endif
 #if HAS_CDirectSoundStream_SetMixBins
-SOUND_STOP(CDirectSoundStream_SetMixBins)
+SOUND_HOOK(CDirectSoundStream_SetMixBins,kSoundStreamMixBins,2)
 #endif
 #if HAS_CDirectSoundStream_SetMixBinVolumes
-SOUND_STOP(CDirectSoundStream_SetMixBinVolumes)
+SOUND_HOOK(CDirectSoundStream_SetMixBinVolumes,kSoundStreamMixBinVolumes,2)
 #endif
 #if HAS_CDirectSoundStream_SetPosition
 SOUND_STOP(CDirectSoundStream_SetPosition)
@@ -562,10 +562,10 @@ SOUND_STOP(IDirectSoundBuffer_SetMaxDistance)
 SOUND_STOP(IDirectSoundBuffer_SetMinDistance)
 #endif
 #if HAS_IDirectSoundBuffer_SetMixBins
-SOUND_STOP(IDirectSoundBuffer_SetMixBins)
+SOUND_HOOK(IDirectSoundBuffer_SetMixBins,kSoundBufferMixBins,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetMixBinVolumes
-SOUND_STOP(IDirectSoundBuffer_SetMixBinVolumes)
+SOUND_HOOK(IDirectSoundBuffer_SetMixBinVolumes,kSoundBufferMixBinVolumes,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetOutputBuffer
 SOUND_STOP(IDirectSoundBuffer_SetOutputBuffer)
