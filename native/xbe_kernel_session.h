@@ -96,6 +96,7 @@ private:
         XbeGlesBackend backend;
         XbeD3d8Bridge bridge;
         uint32_t owner;
+        unsigned setter_calls=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
             :buffers(mem,pool,physical),bridge(mem,backend),owner(thread){}
     };
@@ -478,13 +479,37 @@ private:
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
         if(ordinal==kDefaultSimple||ordinal==kDefaultRender||ordinal==kDefaultTexture||
             (ordinal>=kDefaultComplexBase&&ordinal<kDefaultComplexBase+gpu::kRsMax)){
-            if(!default_trace_||default_thread_!=cpu.thread_handle)
-                throw std::runtime_error("D3D state setter outside original defaults diagnostic");
-            if(ordinal==kDefaultSimple){Check(cpu,0);default_trace_->Simple(cpu.ecx,cpu.edx);Ret(cpu,0,0);}
-            else if(ordinal==kDefaultRender){Check(cpu,2);default_trace_->Render(cpu.ecx,cpu.edx,Arg(cpu,0),Arg(cpu,1));Ret(cpu,2,0);}
-            else if(ordinal==kDefaultTexture){Check(cpu,3);default_trace_->Texture(cpu.ecx,Arg(cpu,0),Arg(cpu,1),Arg(cpu,2));Ret(cpu,3,0);}
-            else{Check(cpu,1);default_trace_->Render(0,cpu.edx,ordinal-kDefaultComplexBase,Arg(cpu,0));Ret(cpu,1,0);}
-            return;
+            const unsigned n=ordinal==kDefaultSimple?0:ordinal==kDefaultRender?2:ordinal==kDefaultTexture?3:1;
+            Check(cpu,n);
+            auto apply=[&](XbeD3dDefaultTrace& trace){
+                if(ordinal==kDefaultSimple)trace.Simple(cpu.ecx,cpu.edx);
+                else if(ordinal==kDefaultRender)trace.Render(cpu.ecx,cpu.edx,Arg(cpu,0),Arg(cpu,1));
+                else if(ordinal==kDefaultTexture)trace.Texture(cpu.ecx,Arg(cpu,0),Arg(cpu,1),Arg(cpu,2));
+                else trace.Render(0,cpu.edx,ordinal-kDefaultComplexBase,Arg(cpu,0));
+            };
+            if(default_trace_){
+                if(default_thread_!=cpu.thread_handle)throw std::runtime_error("Concurrent D3D default setter");
+                apply(*default_trace_);
+            }else{
+                if(!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D state setter without owned live device");
+                auto& live=*live_d3d_;
+                if(live.setter_calls++>=16384)throw std::runtime_error("D3D live setter diagnostic budget exceeded");
+                std::fprintf(stderr,"D3D LIVE SETTER caller=%08X id=%08X\n",mem_.Read32(cpu.esp),ordinal);
+                // Preserve ordering with direct guest writes. Only supported
+                // state-only packets may be consumed; unknown ones stop.
+                auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
+                if(end!=begin){
+                    auto methods=DecodeNv2aMethods(mem_,begin,end);
+                    for(auto m:methods)std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
+                    live.bridge.ApplyPush(begin,end);
+                    live.buffers.RewindScratch();
+                }
+                XbeD3dDefaultTrace trace(mem_,live.bridge.Snapshot());
+                apply(trace);
+                live.bridge.AdoptLiveSetters(trace.State());
+            }
+            Ret(cpu,n,0);return;
         }
 #endif
         switch(ordinal) {

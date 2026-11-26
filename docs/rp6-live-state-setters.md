@@ -1,0 +1,3 @@
+# RP6 physical allocation and live D3D state checkpoint
+
+07549bb was tested on RP6: caller 0020C8D8 allocated 0012C000 bytes with protection 404 and received 83B40000. The game then performed two VM commits and reached a render/texture state setter outside the default initializer. This batch reuses the checked setter ABI and table mirroring for the owning live device, retaining the original state and any already consumed raw method values. Direct guest scratch writes are processed in order using the existing state-only allowlist; unknown packets still stop. Caller and method values are logged. No rendering success is implied by recording a setter, and Draw/Swap remain hard checkpoints. CI and RP6 validation pending.

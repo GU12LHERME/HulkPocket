@@ -214,6 +214,13 @@ public:
         }
         state_.simple=next;state_.rs=captured.rs;state_.tss=captured.tss;
     }
+    // Transfer state-only setter updates without resetting render targets,
+    // streams, shader constants or the pending NV2A constant cursor.
+    void AdoptLiveSetters(const gpu::State& captured){
+        std::lock_guard guard(lock_);
+        if(!initialized_||!state_.rt.header)throw std::logic_error("D3D targets not initialized");
+        state_.simple=captured.simple;state_.rs=captured.rs;state_.tss=captured.tss;
+    }
     void ApplyPush(uint32_t begin,uint32_t end){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");

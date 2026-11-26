@@ -113,6 +113,19 @@ int main(){
     try{bridge.AdoptOriginalDefaults(gpu::State{},0x10400,0x10408);}
     catch(const std::logic_error&){bad_default=true;}
     assert(bad_default&&bridge.Snapshot().simple==adopted.simple&&bridge.Snapshot().rs==adopted.rs);
+    XbeD3dDefaultTrace live_trace(mem,bridge.Snapshot());
+    mem.Write32(0x11000,gpu::kMBlendEnable);
+    live_trace.Render(0x11000,0x11400,0,1);
+    live_trace.Render(0,0x11400,gpu::kRsZEnable,0);
+    live_trace.Texture(0x11800,2,gpu::kTssColorOp,4);
+    bridge.AdoptLiveSetters(live_trace.State());
+    auto updated=bridge.Snapshot();
+    assert(updated.rt.header==adopted.rt.header&&updated.viewport.w==adopted.viewport.w);
+    assert(updated.simple[0x0a20>>2]==adopted.simple[0x0a20>>2]);
+    assert(updated.simple[gpu::kMBlendEnable>>2]==1&&updated.rs[gpu::kRsZEnable]==0);
+    assert(updated.tss[2][gpu::kTssColorOp]==4&&updated.tss[0][gpu::kTssColorOp]==4);
+    assert(mem.Read32(0x11400+4*gpu::kRsZEnable)==0);
+    assert(mem.Read32(0x11800+4*(64+gpu::kTssColorOp))==4);
     call("D3DDevice_Clear",{0,0,0xf0,0xff123456,std::bit_cast<uint32_t>(1.0f),0});
     mem.Write32(0x10200,0x40000);mem.Write32(0x10204,0x100100);
     float v[]={0,0,0,1,0,0,0,1,0};mem.Write(0x80100100,v,sizeof(v));
