@@ -207,10 +207,18 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("programmable vertex constant",f.Pixel(32,32),{64,255,0,255});
         auto shader_count=f.shaders.Compiled();
+        auto pipeline_count=f.pipeline_creates,cache_hits=f.pipeline_hits;
         guest_state.vsc[96]={0.f,.25f,1.f,1.f};
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("updated vertex constant",f.Pixel(32,32),{0,64,255,255});
         if(f.shaders.Compiled()!=shader_count)throw std::runtime_error("Vertex constant update recompiled shader");
+        if(f.pipeline_creates!=pipeline_count||f.pipeline_hits!=cache_hits+1)
+            throw std::runtime_error("Constant-only draw failed to reuse pipeline");
+        guest_state.viewport={0,0,64,64,0,1};
+        guest_state.scissor_count=1;guest_state.scissors={32,0,64,64};
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true,true,true);
+        if(f.pipeline_creates!=pipeline_count)throw std::runtime_error("Dynamic scissor recreated pipeline");
+        guest_state.scissor_count=0;
         // Final Xbox combiner: D = C0, G = C1.a. Independent pixel buffer.
         guest_state.ps=std::make_shared<gpu::PixelShader>();
         guest_state.ps->def[8]=0x00000001;guest_state.ps->def[9]=0x00001200;
@@ -218,8 +226,10 @@ int main(int argc,char** argv){
         guest_state.simple[kMPsFinalConstant1/4]=0x80000000;
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("programmable final combiner",f.Pixel(32,32),{128,64,32,128});
+        pipeline_count=f.pipeline_creates;
         guest_state.simple[kMPsFinalConstant0/4]=0xff20ff40;
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        if(f.pipeline_creates!=pipeline_count)throw std::runtime_error("Pixel constant update recreated pipeline");
         Expect("updated pixel constant",f.Pixel(32,32),{32,255,64,128});
         // Reconstruct the very same shader from NV2A writes, including
         // explicit zero stage mode; an incomplete register set must fail.
@@ -260,6 +270,20 @@ int main(int argc,char** argv){
         memory.Write32(tex+12,0x01110620);memory.Write32(tex+16,0);memory.Write32(tex+4,0x10ffff);bad=false;
         try{f.UploadGuestTexture(tex);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted texture span accepted");
+        // Vary stencil reference (baked state) to exceed the cache bound.
+        // The synchronous fixture must evict old pipelines without leaking.
+        State cache_state{};cache_state.simple[kMColorWriteEnable/4]=0x01010101;
+        cache_state.rs[kRsStencilEnable]=1;cache_state.rs[kRsStencilFail]=0x1e00;
+        cache_state.simple[kMStencilFunc/4]=0x207;cache_state.simple[kMStencilPass/4]=0x1e00;
+        cache_state.simple[kMStencilZFail/4]=0x1e00;
+        for(unsigned i=0;i<VulkanCore::PipelineLimit+2;++i){
+            cache_state.simple[kMStencilRef/4]=i;
+            f.Draw(argv[1],false,false,false,false,&cache_state);
+        }
+        if(f.pipelines.size()!=VulkanCore::PipelineLimit)throw std::runtime_error("Vulkan pipeline cache not bounded");
+        Expect("pipeline cache eviction",f.Pixel(32,32),{0,255,0,255});
+        std::printf("Vulkan pipelines created=%llu reused=%llu resident=%zu\n",
+            (unsigned long long)f.pipeline_creates,(unsigned long long)f.pipeline_hits,f.pipelines.size());
         }
         // Invoke the same Xbox D3D8 ABI bridge that drives the GLES runtime.
         // No direct fixture calls for this sequence.

@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <map>
 #include <stdexcept>
 #include <vector>
 namespace hulkpocket::vkexp {
@@ -76,14 +77,18 @@ struct VulkanCore{
     VkRenderPass pass{},load_pass{};bool frame_valid=false;VkFramebuffer fb{};VkSampler sampler{};
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
     VkDescriptorPool descriptors{};VkDescriptorSet set{};
-    VkShaderModule vs{},fs{};VkPipeline pipeline{};
+    VkPipeline pipeline{};
+    // Exact SPIR-V and explicit pipeline fields, no pointer/padding hashes.
+    // Per-device bounded cache; synchronous submissions permit safe eviction.
+    struct CachedPipeline {VkPipeline handle{};uint64_t used=0;};
+    std::map<std::vector<uint32_t>,CachedPipeline> pipelines;
+    uint64_t pipeline_tick=0,pipeline_creates=0,pipeline_hits=0;
+    static constexpr size_t PipelineLimit=64;
     hulkpocket::vkexp::RuntimeShaders shaders;
     ~VulkanCore(){
         if(dev){
             vkDeviceWaitIdle(dev);
-            if(pipeline)vkDestroyPipeline(dev,pipeline,nullptr);
-            if(vs)vkDestroyShaderModule(dev,vs,nullptr);
-            if(fs)vkDestroyShaderModule(dev,fs,nullptr);
+            for(const auto& entry:pipelines)vkDestroyPipeline(dev,entry.second.handle,nullptr);
             if(descriptors)vkDestroyDescriptorPool(dev,descriptors,nullptr);
             if(pipeline_layout)vkDestroyPipelineLayout(dev,pipeline_layout,nullptr);
             if(set_layout)vkDestroyDescriptorSetLayout(dev,set_layout,nullptr);
@@ -365,37 +370,31 @@ struct VulkanCore{
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
         last_pixels[stage]=std::move(pixels);
     }
-    VkShaderModule Module(const std::filesystem::path& path){
+    std::vector<uint32_t> ShaderWords(const std::filesystem::path& path){
         std::ifstream f(path,std::ios::binary|std::ios::ate);
         if(!f)throw std::runtime_error("Missing shader "+path.string());
         auto bytes=f.tellg();
         if(bytes<=0||bytes>1024*1024||bytes%4)throw std::runtime_error("Bad shader size");
         std::vector<uint32_t> data(static_cast<size_t>(bytes)/4);f.seekg(0);f.read(reinterpret_cast<char*>(data.data()),bytes);
         if(!f||data[0]!=0x07230203)throw std::runtime_error("Bad shader file");
-        return Module(data);
+        return data;
     }
     VkShaderModule Module(const std::vector<uint32_t>& data){
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=data.size()*4;ci.pCode=data.data();
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
     void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan,bool dynamic,const ViewRegion* region=nullptr){
-        if(pipeline){vkDestroyPipeline(dev,pipeline,nullptr);pipeline={};}
-        if(vs){vkDestroyShaderModule(dev,vs,nullptr);vs={};}
-        if(fs){vkDestroyShaderModule(dev,fs,nullptr);fs={};}
+        std::vector<uint32_t> vertex,fragment;
         if(dynamic){
             if(!override_state||!guest)throw std::invalid_argument("Missing dynamic draw state");
             gpu::TexInfo tex[4]{};
             for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=gpu::kTex2D;tex[i].rect=tex_rect[i];}
-            vs=Module(shaders.Vertex(*override_state,*guest));
-            fs=Module(shaders.Pixel(*override_state,tex));
+            vertex=shaders.Vertex(*override_state,*guest);
+            fragment=shaders.Pixel(*override_state,tex);
         }else{
-            vs=Module(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv"));
-            fs=Module(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv"));
+            vertex=ShaderWords(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv"));
+            fragment=ShaderWords(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv"));
         }
-        VkPipelineShaderStageCreateInfo stages[2]{};
-        stages[0].sType=stages[1].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";
-        stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fs;stages[1].pName="main";
         VkVertexInputBindingDescription bind{0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX};
         VkVertexInputAttributeDescription attrs[]={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{packed?2u:3u,0,packed?VK_FORMAT_R32_UINT:VK_FORMAT_B8G8R8A8_UNORM,12},{9,0,VK_FORMAT_R32G32_SFLOAT,16}};
         VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};vi.vertexBindingDescriptionCount=1;vi.pVertexBindingDescriptions=&bind;vi.vertexAttributeDescriptionCount=3;vi.pVertexAttributeDescriptions=attrs;
@@ -404,9 +403,10 @@ struct VulkanCore{
             vi.vertexAttributeDescriptionCount=plan->attributes.size();vi.pVertexAttributeDescriptions=plan->attributes.data();
         }
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=guest?hulkpocket::vkexp::Topology(*guest):VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-        VkViewport vp{0,float(H),float(W),-float(H),0,1};VkRect2D sc{{0,0},{W,H}};
-        if(region){vp=region->viewport;sc=region->scissor;}
-        VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.pViewports=&vp;vps.scissorCount=1;vps.pScissors=&sc;
+        (void)region; // viewport/scissor are dynamic command-buffer state
+        VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.scissorCount=1;
+        const VkDynamicState dynamic_states[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dyn.dynamicStateCount=2;dyn.pDynamicStates=dynamic_states;
         auto rs=hulkpocket::vkexp::TranslateWinding(override_state?*override_state:gpu::State{},
             ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
@@ -418,8 +418,48 @@ struct VulkanCore{
         auto raster=hulkpocket::vkexp::TranslateRaster(override_state?*override_state:state);
         auto& cb=raster.color;
         VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&cb;
-        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};gp.stageCount=2;gp.pStages=stages;gp.pVertexInputState=&vi;gp.pInputAssemblyState=&ia;gp.pViewportState=&vps;gp.pRasterizationState=&rs;gp.pMultisampleState=&ms;gp.pColorBlendState=&bs;gp.pDepthStencilState=&raster.depth;gp.layout=pipeline_layout;gp.renderPass=pass;
-        Check(vkCreateGraphicsPipelines(dev,pipeline_cache,1,&gp,nullptr,&pipeline),"graphics pipeline");
+        std::vector<uint32_t> key;
+        auto add=[&](uint32_t n){key.push_back(n);};
+        add(uint32_t(vertex.size()));key.insert(key.end(),vertex.begin(),vertex.end());
+        add(uint32_t(fragment.size()));key.insert(key.end(),fragment.begin(),fragment.end());
+        add(vi.vertexBindingDescriptionCount);
+        for(unsigned i=0;i<vi.vertexBindingDescriptionCount;++i){auto b=vi.pVertexBindingDescriptions[i];add(b.binding);add(b.stride);add(b.inputRate);}
+        add(vi.vertexAttributeDescriptionCount);
+        for(unsigned i=0;i<vi.vertexAttributeDescriptionCount;++i){auto a=vi.pVertexAttributeDescriptions[i];add(a.location);add(a.binding);add(a.format);add(a.offset);}
+        add(ia.topology);add(ia.primitiveRestartEnable);
+        add(rs.polygonMode);add(rs.cullMode);add(rs.frontFace);
+        add(rs.depthBiasEnable);add(std::bit_cast<uint32_t>(rs.depthBiasConstantFactor));add(std::bit_cast<uint32_t>(rs.depthBiasSlopeFactor));
+        auto& ds=raster.depth;
+        add(ds.depthTestEnable);add(ds.depthWriteEnable);add(ds.depthCompareOp);add(ds.stencilTestEnable);
+        for(auto st:{ds.front,ds.back}){add(st.failOp);add(st.passOp);add(st.depthFailOp);add(st.compareOp);add(st.compareMask);add(st.writeMask);add(st.reference);}
+        add(cb.blendEnable);add(cb.srcColorBlendFactor);add(cb.dstColorBlendFactor);add(cb.colorBlendOp);
+        add(cb.srcAlphaBlendFactor);add(cb.dstAlphaBlendFactor);add(cb.alphaBlendOp);add(cb.colorWriteMask);
+        auto found=pipelines.find(key);
+        if(found!=pipelines.end()){
+            found->second.used=++pipeline_tick;pipeline=found->second.handle;++pipeline_hits;return;
+        }
+        VkShaderModule vs{},fs{};VkPipeline created{};
+        try{
+            vs=Module(vertex);fs=Module(fragment);
+            VkPipelineShaderStageCreateInfo stages[2]{};
+            stages[0].sType=stages[1].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";
+            stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fs;stages[1].pName="main";
+            VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};gp.stageCount=2;gp.pStages=stages;gp.pVertexInputState=&vi;gp.pInputAssemblyState=&ia;gp.pViewportState=&vps;gp.pRasterizationState=&rs;gp.pMultisampleState=&ms;gp.pColorBlendState=&bs;gp.pDepthStencilState=&raster.depth;gp.pDynamicState=&dyn;gp.layout=pipeline_layout;gp.renderPass=pass;
+            Check(vkCreateGraphicsPipelines(dev,pipeline_cache,1,&gp,nullptr,&created),"graphics pipeline");
+            pipelines.emplace(std::move(key),CachedPipeline{created,++pipeline_tick});
+        }catch(...){
+            if(created)vkDestroyPipeline(dev,created,nullptr);
+            if(vs)vkDestroyShaderModule(dev,vs,nullptr);
+            if(fs)vkDestroyShaderModule(dev,fs,nullptr);
+            throw;
+        }
+        vkDestroyShaderModule(dev,vs,nullptr);vkDestroyShaderModule(dev,fs,nullptr);
+        pipeline=created;++pipeline_creates;
+        if(pipelines.size()>PipelineLimit){
+            auto oldest=std::min_element(pipelines.begin(),pipelines.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;});
+            vkDestroyPipeline(dev,oldest->second.handle,nullptr);pipelines.erase(oldest);
+        }
     }
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
@@ -554,6 +594,9 @@ struct VulkanCore{
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=preserve?load_pass:pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=preserve?0:2;ri.pClearValues=preserve?nullptr:clear;
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
+        VkViewport draw_vp{0,float(H),float(W),-float(H),0,1};VkRect2D draw_sc{{0,0},{W,H}};
+        if(guest_viewport){draw_vp=region.viewport;draw_sc=region.scissor;}
+        vkCmdSetViewport(cmd,0,1,&draw_vp);vkCmdSetScissor(cmd,0,1,&draw_sc);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
         VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&verts.b,&offset);
         if(guest){
