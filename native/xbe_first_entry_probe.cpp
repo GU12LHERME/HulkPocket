@@ -35,7 +35,8 @@ void stop_kernel(X86Context&, uint8_t*, uint32_t ordinal) {
 // Trusted local caller must prepare the guest memory and CPU first.
 // Run in an isolated diagnostic process: native faults are not C++ exceptions.
 extern "C" __attribute__((visibility("default")))
-int hulk_entry_execute(X86Context* cpu, uint8_t* base, uint32_t entry) {
+int hulk_entry_execute_with_kernel(X86Context* cpu, uint8_t* base, uint32_t entry,
+    hulkpocket::PortableXbeDispatch::KernelCall kernel) {
     if(!cpu || !base || entry!=X86EntryPoint || !cpu->esp ||
        !cpu->fs_base || !cpu->thread_handle) return 2;
     try {
@@ -43,7 +44,7 @@ int hulk_entry_execute(X86Context* cpu, uint8_t* base, uint32_t entry) {
         while(n<1000000 && X86FuncMappings[n].host) ++n;
         if(!n || n==1000000) return 3;
         hulkpocket::PortableXbeDispatch dispatch(
-            X86FuncMappings,n,X86CodeBase,X86CodeEnd,stop_kernel);
+            X86FuncMappings,n,X86CodeBase,X86CodeEnd,kernel ? kernel : stop_kernel);
         hulkpocket::ScopedXbeDispatch scope(dispatch);
         std::fprintf(stderr,"Entering guest at %08X ESP=%08X\n",entry,cpu->esp);
         dispatch.Call(*cpu,base,entry);
@@ -54,4 +55,9 @@ int hulk_entry_execute(X86Context* cpu, uint8_t* base, uint32_t entry) {
                      e.what(),cpu->last_icall);
         return 1;
     }
+}
+
+extern "C" __attribute__((visibility("default")))
+int hulk_entry_execute(X86Context* cpu, uint8_t* base, uint32_t entry) {
+    return hulk_entry_execute_with_kernel(cpu,base,entry,nullptr);
 }
