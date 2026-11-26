@@ -37,7 +37,7 @@ void stop_kernel(X86Context&, uint8_t*, uint32_t ordinal) {
 extern "C" __attribute__((visibility("default")))
 int hulk_entry_execute_with_kernel(X86Context* cpu, uint8_t* base, uint32_t entry,
     hulkpocket::PortableXbeDispatch::KernelCall kernel) {
-    if(!cpu || !base || entry!=X86EntryPoint || !cpu->esp ||
+    if(!cpu || !base || !entry || !cpu->esp ||
        !cpu->fs_base || !cpu->thread_handle) return 2;
     try {
         size_t n=0;
