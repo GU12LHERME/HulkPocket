@@ -4,6 +4,7 @@
 #include "xbe_kernel_session.h"
 #include "hulk_kernel_missing_data.h"
 #include "hulk_kernel_launch_data.h"
+#include "hulk_kernel_profile.h"
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
@@ -127,6 +128,8 @@ int main(int argc,char** argv) {
                 guest.Commit(0x07200000,guest.PageSize());
                 HulkKernelClock clock(guest,registry,0x07200000,10000);
                 RegisterLaunchData(guest,registry,0x07200100,0,"\\Device\\CdRom0\\default.xbe");
+                RegisterKernelProfile(guest,registry,0x07200200,kRetailDiagnosticProfile);
+                std::cout << "Xbox retail diagnostic profile: kernel 1.0.5838.1, hardware flags 0x20" << '\n';
                 auto guards=PlanMissingKernelDataGuards(registry,imports,guest,0x08000000,0x08200000);
                 for(auto g:guards) std::cout << "Unsupported data ordinal " << g.ordinal
                     << " guard=0x" << std::hex << g.address << std::dec << '\n';

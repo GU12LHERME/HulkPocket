@@ -21,6 +21,12 @@ int main() {
     char name[15]{};
     m.Read(0x1020c,name,15);
     assert(std::strcmp(name,"D:\\default.xbe")==0);
+    HulkKernelDataRegistry retail;
+    RegisterKernelProfile(m,retail,0x10300,kRetailDiagnosticProfile);
+    assert(retail.Resolve(322).guest_data==0x10300);
+    assert(m.Read32(0x10300)==0x20 && m.Read32(0x10304)==0xb1d3);
+    assert(m.Read32(0x10308)==1 && m.Read32(0x1030c)==(5838u|0x10000u));
+    assert(m.Read32(0x10310)==3 && m.Read32(0x10314)==0);
     HulkKernelDataRegistry conflict;
     conflict.Register(157,0x10300,4,m);
     bool rejected=false;

@@ -7,6 +7,8 @@ struct HulkKernelProfile {
     uint8_t gpu_revision,mcp_revision;
     uint32_t disk_cache_partitions,boot_video_mode;
 };
+// Compatibility profile matching XboxXBERecomp InitKernelData, not Android hardware.
+inline constexpr HulkKernelProfile kRetailDiagnosticProfile{1,0,5838,1,0x20,0xd3,0xb1,3,0};
 // Layouts from nxdk xboxkrnl.h; caller chooses verified profile values.
 // No console secrets or fabricated object-type structures.
 inline void RegisterKernelProfile(XboxGuestAddressSpace& mem,
