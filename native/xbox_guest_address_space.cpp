@@ -1,6 +1,7 @@
 #include "xbox_guest_address_space.h"
 #include <sys/mman.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include <cstring>
 #include <stdexcept>
 
@@ -65,6 +66,33 @@ void XboxGuestAddressSpace::Commit(
         throw std::runtime_error("failed to commit Xbox guest pages");
     for (std::uint64_t i = first; i <= last; ++i)
         committed_[static_cast<std::size_t>(i)] = 1;
+}
+
+// Map the same anonymous file into two non-overlapping guest windows.
+// Both views are normal host RAM: no physical DMA or host cache-mode claim.
+void XboxGuestAddressSpace::CommitSharedPair(uint32_t first,uint32_t second,size_t bytes){
+    Validate(first,bytes);Validate(second,bytes);
+    if(!bytes||first%page_||second%page_||bytes%page_||
+       (uint64_t(first)<uint64_t(second)+bytes&&uint64_t(second)<uint64_t(first)+bytes))
+        throw std::invalid_argument("Invalid shared guest mapping");
+    for(size_t off=0;off<bytes;off+=page_)
+        if(IsCommitted(first+uint32_t(off),1)||IsCommitted(second+uint32_t(off),1))
+            throw std::runtime_error("Shared guest mapping overlaps committed pages");
+#ifdef SYS_memfd_create
+    int fd=static_cast<int>(syscall(SYS_memfd_create,"hulk-physical",1u));
+#else
+    int fd=-1;
+#endif
+    if(fd<0)throw std::runtime_error("Cannot create shared Xbox RAM backing");
+    if(ftruncate(fd,static_cast<off_t>(bytes))!=0){close(fd);throw std::runtime_error("Cannot size shared Xbox RAM backing");}
+    void* a=mmap(base_+first,bytes,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_FIXED,fd,0);
+    if(a==MAP_FAILED){close(fd);throw std::runtime_error("Cannot map Xbox physical RAM");}
+    void* b=mmap(base_+second,bytes,PROT_READ|PROT_WRITE,MAP_SHARED|MAP_FIXED,fd,0);
+    close(fd);
+    if(b==MAP_FAILED){Decommit(first,bytes);throw std::runtime_error("Cannot map Xbox RAM alias");}
+    for(size_t off=0;off<bytes;off+=page_){
+        committed_[(first+off)/page_]=1;committed_[(second+off)/page_]=1;
+    }
 }
 
 void XboxGuestAddressSpace::Decommit(

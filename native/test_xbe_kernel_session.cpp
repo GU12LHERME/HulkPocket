@@ -265,6 +265,11 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(physical>=0x80100000 && physical<0x80200000 && physical%0x10000==0);
     call(*c,base,cb,181,{0x12800});assert(c->eax==0&&memory->Read32(0x12808)==available-memory->PageSize()/4096);
     memory->Write32(physical,0xaabbccdd);
+    auto alias=physical-0x80000000u+0xf0000000u;
+    assert(memory->Read32(alias)==0xaabbccdd);
+    memory->Write32(alias,0x11223344);
+    assert(memory->Read32(physical)==0x11223344);
+    call(*c,base,cb,173,{alias});assert(c->eax==physical-0x80000000u);
     call(*c,base,cb,173,{physical});
     assert(c->eax==physical-0x80000000);
     call(*c,base,cb,178,{physical,0x1000,1});
@@ -275,7 +280,11 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,179,{physical});assert(c->eax==4);
     call(*c,base,cb,174,{physical});assert(c->eax==1);
     call(*c,base,cb,171,{physical});
-    assert(!memory->IsCommitted(physical,1));
+    assert(!memory->IsCommitted(physical,1)&&!memory->IsCommitted(alias,1));
+    call(*c,base,cb,166,{0x1000,0x100000,0x1fffff,0x10000,0x404});
+    assert(c->eax==physical&&memory->Read32(alias)==0);
+    call(*c,base,cb,179,{alias});assert(c->eax==0x404);
+    call(*c,base,cb,171,{alias});assert(!memory->IsCommitted(physical,1));
     call(*c,base,cb,174,{physical});assert(c->eax==0);
     call(*c,base,cb,179,{physical});assert(c->eax==0);
     call(*c,base,cb,167,{5000,4});auto sys=c->eax;

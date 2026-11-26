@@ -917,10 +917,15 @@ private:
             case 217: Check(cpu,2);Ret(cpu,2,virtual_.Query(Arg(cpu,0),Arg(cpu,1)));return;
             case 165: case 166: {
                 unsigned n=ordinal==165?1:5;Check(cpu,n);
-                if(ordinal==166 && Arg(cpu,4)!=4)
+                auto bytes=Arg(cpu,0),lo=ordinal==165?0:Arg(cpu,1),
+                    hi=ordinal==165?0xffffffffu:Arg(cpu,2),align=ordinal==165?0:Arg(cpu,3),
+                    protect=ordinal==165?4:Arg(cpu,4);
+                std::fprintf(stderr,"MM CONTIG REQUEST caller=%08X bytes=%08X low=%08X high=%08X align=%08X protect=%08X\n",
+                    mem_.Read32(cpu.esp),bytes,lo,hi,align,protect);
+                if(!XbePhysicalMemory::SupportedProtection(protect))
                     throw std::runtime_error("Unsupported physical memory protection/alias");
-                auto a=physical_.Allocate(Arg(cpu,0),ordinal==165?0:Arg(cpu,1),
-                    ordinal==165?0xffffffffu:Arg(cpu,2),ordinal==165?0:Arg(cpu,3));
+                auto a=physical_.Allocate(bytes,lo,hi,align,protect);
+                std::fprintf(stderr,"MM CONTIG RESULT base=%08X physical=%08X\n",a,physical_.Physical(a));
                 Ret(cpu,n,a);return;
             }
             case 178: {
@@ -965,7 +970,8 @@ private:
             }
             case 174: case 179: {
                 Check(cpu,1);bool mapped=mem_.IsCommitted(Arg(cpu,0),1);
-                Ret(cpu,1,ordinal==174?uint32_t(mapped):mapped?4u:0u);return;
+                auto protect=physical_.Protection(Arg(cpu,0));
+                Ret(cpu,1,ordinal==174?uint32_t(mapped):mapped?(protect?protect:4u):0u);return;
             }
             case 175: {
                 Check(cpu,3);auto a=Arg(cpu,0),bytes=Arg(cpu,1);
