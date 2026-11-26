@@ -1,0 +1,5 @@
+# RP6 HRTF selection and save image
+
+2b696b4 RP6: ordinal 327/328 successfully loaded/unloaded original header 000108E8, VA 00586060, 10240 bytes; TitleImage.xbx written. SaveImage.xbx exact OPEN_IF denied, U: absent. 16 textured returns, 30 successful reads, preserved copyright BMP 640x480 34937 nonblack pixels. Actual DSP descriptor succeeded: 23528 bytes, 7 effects, 7 copied state segments, zero absent, table 5AC8. Next controlled stop DirectSoundUseFullHRTF. No audio output yet.
+
+Use pinned XboxXBERecomp 767a818 runtime/xdk/dsound.cpp for zero-argument FullHRTF selector and buffer region/pause/synchronization ABI. Record HRTF mode selection (no 3D/HRTF rendering, still reject unsupported 3D buffers); immediate bounded DSP state writes only, deferred writes not accepted. Actual 2D playback regions/loops, pause and synchronized start; tests verify exact samples. Extend existing private 64KiB metadata policy to SaveImage.xbx only, no arbitrary save writes or fabricated U: link. CI and real RP6 execution pending.

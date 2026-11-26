@@ -567,6 +567,9 @@ private:
             case kSoundSpeaker:Check(cpu,2);Ret(cpu,2,sound_.Speaker(Arg(cpu,0),Arg(cpu,1)));return;
             case kSoundDownloadEffects:Check(cpu,5);Ret(cpu,5,sound_.DownloadEffects(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
             case kSoundGetEffectData:Check(cpu,5);Ret(cpu,5,sound_.GetEffectData(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
+            case kSoundFullHrtf:Check(cpu,0);sound_.SelectFullHrtf();Ret(cpu,0,0);return;
+            case kSoundSetEffectData:Check(cpu,6);Ret(cpu,6,sound_.SetEffectData(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5)));return;
+            case kSoundSynchPlayback:Check(cpu,1);sound_.Pump();Ret(cpu,1,sound_.SynchPlayback(Arg(cpu,0)));return;
             case kSoundPump:Check(cpu,0);sound_.Pump();Ret(cpu,0,0);return;
             case kSoundNewBuffer:Check(cpu,2);Ret(cpu,2,sound_.NewBuffer(Arg(cpu,0),Arg(cpu,1)));return;
             case kSoundNewDeviceBuffer:Check(cpu,4);Ret(cpu,4,sound_.Device(Arg(cpu,0))&&!Arg(cpu,3)?sound_.NewBuffer(Arg(cpu,1),Arg(cpu,2)):0x88780032u);return;
@@ -578,9 +581,12 @@ private:
             case kSoundBufferVolume:
             case kSoundBufferFrequency:
             case kSoundBufferSetPosition:
+            case kSoundBufferPause:
+            case kSoundBufferPlayRegion:
+            case kSoundBufferLoopRegion:
             case kSoundBufferGetPosition: {
                 unsigned n=ordinal==kSoundBufferPlay?4:
-                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition)?3:
+                    (ordinal==kSoundBufferData||ordinal==kSoundBufferGetPosition||ordinal==kSoundBufferPlayRegion||ordinal==kSoundBufferLoopRegion)?3:
                     (ordinal==kSoundBufferRelease||ordinal==kSoundBufferStop)?1:2;
                 Check(cpu,n);
                 sound_.Pump();

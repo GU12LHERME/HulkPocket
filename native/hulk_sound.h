@@ -28,12 +28,14 @@ class HulkSound {
     struct Voice {
         Format fmt{};
         uint32_t data=0,bytes=0,owned=0,frequency=0;
-        bool playing=false,loop=false;
+        bool playing=false,loop=false,paused=false,sync=false;
+        uint32_t play_start=0,play_length=0,loop_start=0,loop_length=0;
         float gain=1;
         uint64_t phase=0;
     };
     std::map<uint32_t,Voice> voices_;
     uint32_t device_=0,refs_=0;
+    bool full_hrtf_requested_=false;
     struct EffectSegment {uint32_t address=0,size=0;};
     std::vector<uint32_t> effect_allocations_;
     std::vector<EffectSegment> effect_states_;
@@ -103,6 +105,14 @@ public:
         if(!voices_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
         FreeEffects();pool_.Free(device_);device_=0;return 0;
     }
+    // Upstream 767a818 dsound.cpp uses a zero-argument HLE for this
+    // selector. Record the request; our current 2D-only mixer never
+    // claims to reproduce HRTF, nor accepts unsupported 3D voices.
+    void SelectFullHrtf(){
+        full_hrtf_requested_=true;
+        std::fprintf(stderr,"HULK DSOUND FULL HRTF REQUEST (recorded; 3D processing not implemented)\n");
+    }
+    bool FullHrtfRequested()const{return full_hrtf_requested_;}
     bool Device(uint32_t id)const{return id&&id==device_;}
     uint32_t Speaker(uint32_t id,uint32_t out){
         if(!Device(id)||!Range(out,4))return bad;
@@ -164,6 +174,14 @@ public:
         std::memmove(mem_.Base()+dest,mem_.Base()+seg.address+offset,size);
         return 0;
     }
+    uint32_t SetEffectData(uint32_t id,uint32_t effect,uint32_t offset,uint32_t src,uint32_t size,uint32_t flags){
+        // Immediate writes only; deferred effect scheduling remains a boundary.
+        if(flags!=0||!Device(id)||effect>=effect_states_.size()||!Range(src,size))return bad;
+        auto seg=effect_states_[effect];
+        if(offset>seg.size||size>seg.size-offset)return bad;
+        std::memmove(mem_.Base()+seg.address+offset,mem_.Base()+src,size);
+        return 0;
+    }
     uint32_t NewBuffer(uint32_t desc,uint32_t out){
         if(!device_||!Range(desc,20)||!Range(out,4)||voices_.size()>=192)return bad;
         auto bytes=mem_.Read32(desc+8),flags=mem_.Read32(desc+4);
@@ -174,7 +192,7 @@ public:
         auto obj=pool_.Allocate(0x40);if(!obj)return oom;
         auto data=bytes?pool_.Allocate(bytes):0;
         if(bytes&&!data){pool_.Free(obj);return oom;}
-        Voice v{};v.fmt=f;v.data=v.owned=data;v.bytes=bytes;
+        Voice v{};v.fmt=f;v.data=v.owned=data;v.bytes=bytes;v.play_length=v.loop_length=bytes;
         voices_.emplace(obj,v);mem_.Write32(out,obj);
         std::fprintf(stderr,"HULK DSOUND BUFFER PASS obj=%08X tag=%04X channels=%u rate=%u bytes=%u flags=%08X\n",
             obj,f.tag,f.channels,f.rate,bytes,flags);return 0;
@@ -194,14 +212,30 @@ public:
             auto allocated=!p&&n?pool_.Allocate(n):0;
             if(!p&&n&&!allocated)return oom;
             if(v.owned)pool_.Free(v.owned);
-            v.owned=allocated;v.data=p?p:allocated;v.bytes=n;v.phase=0;v.playing=false;return 0;
+            v.owned=allocated;v.data=p?p:allocated;v.bytes=n;v.phase=0;v.playing=false;v.paused=v.sync=false;
+            v.play_start=v.loop_start=0;v.play_length=v.loop_length=n;return 0;
         }
         case kSoundBufferPlay:
-            if(!v.bytes||!Range(v.data,v.bytes)||a[1]||a[2]||(a[3]&~3u))return bad;
-            v.loop=(a[3]&1)!=0;
-            if(a[3]&2||v.phase>=uint64_t(v.fmt.Frames(v.bytes))*kRate)v.phase=0;
+            if(!v.play_length||!Range(v.data,v.bytes)||a[1]||a[2]||(a[3]&~7u))return bad;
+            v.loop=(a[3]&1)!=0;v.sync=(a[3]&4)!=0;v.paused=false;
+            if(a[3]&2||v.phase>=uint64_t(v.fmt.Frames(v.play_length))*kRate)v.phase=0;
             v.playing=true;return 0;
-        case kSoundBufferStop:v.playing=false;return 0;
+        case kSoundBufferStop:v.playing=false;v.paused=v.sync=false;return 0;
+        case kSoundBufferPause:
+            if(a[1]>2)return bad;
+            v.paused=a[1]==1;v.sync=a[1]==2;return 0;
+        case kSoundBufferPlayRegion:{
+            if(a[1]>v.bytes||a[2]>v.bytes-a[1])return bad;
+            auto n=a[2]?a[2]:v.bytes-a[1];
+            if(!n||a[1]%v.fmt.align||n%v.fmt.align)return bad;
+            v.play_start=a[1];v.play_length=v.loop_length=n;v.loop_start=0;v.phase=0;return 0;
+        }
+        case kSoundBufferLoopRegion:{
+            if(a[1]>v.play_length||a[2]>v.play_length-a[1])return bad;
+            auto n=a[2]?a[2]:v.play_length-a[1];
+            if(!n||a[1]%v.fmt.align||n%v.fmt.align)return bad;
+            v.loop_start=a[1];v.loop_length=n;return 0;
+        }
         case kSoundBufferStatus:
             if(!Range(a[1],4))return bad;
             mem_.Write32(a[1],v.playing?(v.loop?5:1):0);return 0;
@@ -213,7 +247,7 @@ public:
             if(a[1]&&(a[1]<100||a[1]>200000))return bad;
             v.frequency=a[1];return 0;
         case kSoundBufferSetPosition:
-            if(a[1]>=v.bytes||a[1]%v.fmt.align)return bad;
+            if(a[1]>=v.play_length||a[1]%v.fmt.align)return bad;
             v.phase=uint64_t(v.fmt.Frames(a[1]))*kRate;return 0;
         case kSoundBufferGetPosition:
             if((a[1]&&!Range(a[1],4))||(a[2]&&!Range(a[2],4)))return bad;
@@ -224,6 +258,11 @@ public:
         default:throw std::logic_error("Unsupported software buffer operation");
         }
     }
+    uint32_t SynchPlayback(uint32_t id){
+        if(!Device(id))return bad;
+        for(auto& entry:voices_)entry.second.sync=false;
+        return 0;
+    }
     // Render exactly n frames. A single checked snapshot per voice per
     // block is decoded without reading any inaccessible guest page.
     std::vector<int16_t> Render(uint32_t frames){
@@ -231,19 +270,22 @@ public:
         std::vector<float> mix(size_t(frames)*2);
         for(auto& [id,v]:voices_){
             (void)id;
-            if(!v.playing)continue;
+            if(!v.playing||v.paused||v.sync)continue;
             if(!Range(v.data,v.bytes))throw std::runtime_error("Playing sound buffer outside committed memory");
-            const auto total=v.fmt.Frames(v.bytes);
+            const auto total=v.fmt.Frames(v.play_length);
+            const uint64_t loop_begin=uint64_t(v.fmt.Frames(v.loop_start))*kRate;
+            const uint64_t loop_span=uint64_t(v.fmt.Frames(v.loop_length))*kRate;
+            const uint64_t end=v.loop?loop_begin+loop_span:uint64_t(total)*kRate;
             if(!total){v.playing=false;continue;}
             std::array<int16_t,128> decoded{};
             uint32_t cached=UINT32_MAX;
             for(unsigned i=0;i<frames;++i){
-                if(v.phase>=uint64_t(total)*kRate){
-                    if(v.loop)v.phase%=uint64_t(total)*kRate;
-                    else{v.phase=uint64_t(total)*kRate;v.playing=false;break;}
+                if(v.phase>=end){
+                    if(v.loop&&loop_span)v.phase=loop_begin+(v.phase-loop_begin)%loop_span;
+                    else{v.phase=end;v.playing=false;break;}
                 }
                 uint32_t frame=uint32_t(v.phase/kRate);
-                const uint8_t* data=mem_.Base()+v.data;
+                const uint8_t* data=mem_.Base()+v.data+v.play_start;
                 if(v.fmt.tag==0x69&&cached!=frame/64){
                     cached=frame/64;
                     audio::DecodeXboxAdpcm(data+cached*v.fmt.align,v.fmt.align,v.fmt.channels,

@@ -8,6 +8,7 @@ int main(){
     HulkSound s(mem,pool);
     assert(s.Create(0,0x10000,0)==0);
     auto ds=mem.Read32(0x10000);assert(s.Device(ds));
+    assert(!s.FullHrtfRequested());s.SelectFullHrtf();assert(s.FullHrtfRequested());
     assert(s.Speaker(ds,0x10004)==0&&mem.Read32(0x10004)==0);
     const uint8_t fmt[]={1,0,1,0,0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,0,0};
     mem.Write(0x10100,fmt,sizeof(fmt));
@@ -24,6 +25,17 @@ int main(){
     assert(s.Buffer(v,kSoundBufferStatus,{v,0x1000c})==0&&mem.Read32(0x1000c)==0);
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,3})==0);
     got=s.Render(5);assert(got[8]==1000&&got[9]==1000);
+    assert(s.Buffer(v,kSoundBufferPlayRegion,{v,2,6})==0);
+    assert(s.Buffer(v,kSoundBufferLoopRegion,{v,2,2})==0);
+    assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,7})==0);
+    got=s.Render(2);for(auto x:got)assert(x==0);
+    assert(s.SynchPlayback(ds)==0);
+    got=s.Render(4);assert(got[0]==-2000&&got[2]==3000&&got[4]==3000&&got[6]==3000);
+    assert(s.Buffer(v,kSoundBufferPause,{v,1})==0);
+    got=s.Render(2);for(auto x:got)assert(x==0);
+    assert(s.Buffer(v,kSoundBufferPause,{v,0})==0);
+    got=s.Render(1);assert(got[0]==3000);
+    assert(s.Buffer(v,kSoundBufferPlayRegion,{v,1,6})==0x88780032u);
     assert(s.Buffer(v,kSoundBufferVolume,{v,uint32_t(-10000)})==0);
     got=s.Render(1);assert(got[0]==0&&got[1]==0);
     assert(s.Buffer(v,kSoundBufferData,{v,0x400000,8})==0x88780032u);
@@ -58,6 +70,11 @@ int main(){
     assert(mem.Read32(mem.Read32(effect+16))==0x89abcdef);
     assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x89abcdef);
     assert(s.GetEffectData(ds,0,1,0x10014,4)==0x88780032u);
+    mem.Write32(0x10018,0x11223344);
+    assert(s.SetEffectData(ds,0,0,0x10018,4,1)==0x88780032u);
+    assert(s.SetEffectData(ds,0,1,0x10018,4,0)==0x88780032u);
+    assert(s.SetEffectData(ds,0,0,0x10018,4,0)==0);
+    assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x11223344);
     assert(s.ReleaseDevice(ds)==0&&pool.Outstanding()==0);
     std::puts("Software DirectSound device, PCM/ADPCM, looping, volume and bounds passed");
 }

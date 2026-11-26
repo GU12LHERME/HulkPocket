@@ -459,7 +459,7 @@ SOUND_STOP(CDirectSoundStream_SetVolume)
 SOUND_STOP(DirectSoundCreateStream)
 #endif
 #if HAS_DirectSoundUseFullHRTF
-SOUND_STOP(DirectSoundUseFullHRTF)
+SOUND_HOOK(DirectSoundUseFullHRTF,kSoundFullHrtf,0)
 #endif
 #if HAS_IDirectSound_CommitDeferredSettings
 SOUND_STOP(IDirectSound_CommitDeferredSettings)
@@ -486,7 +486,7 @@ SOUND_STOP(IDirectSound_SetDistanceFactor)
 SOUND_STOP(IDirectSound_SetDopplerFactor)
 #endif
 #if HAS_IDirectSound_SetEffectData
-SOUND_STOP(IDirectSound_SetEffectData)
+SOUND_HOOK(IDirectSound_SetEffectData,kSoundSetEffectData,6)
 #endif
 #if HAS_IDirectSound_SetI3DL2Listener
 SOUND_STOP(IDirectSound_SetI3DL2Listener)
@@ -507,13 +507,13 @@ SOUND_STOP(IDirectSound_SetRolloffFactor)
 SOUND_STOP(IDirectSound_SetVelocity)
 #endif
 #if HAS_IDirectSound_SynchPlayback
-SOUND_STOP(IDirectSound_SynchPlayback)
+SOUND_HOOK(IDirectSound_SynchPlayback,kSoundSynchPlayback,1)
 #endif
 #if HAS_IDirectSoundBuffer_Lock
 SOUND_STOP(IDirectSoundBuffer_Lock)
 #endif
 #if HAS_IDirectSoundBuffer_Pause
-SOUND_STOP(IDirectSoundBuffer_Pause)
+SOUND_HOOK(IDirectSoundBuffer_Pause,kSoundBufferPause,2)
 #endif
 #if HAS_IDirectSoundBuffer_SetAllParameters
 SOUND_STOP(IDirectSoundBuffer_SetAllParameters)
@@ -534,7 +534,7 @@ SOUND_STOP(IDirectSoundBuffer_SetHeadroom)
 SOUND_STOP(IDirectSoundBuffer_SetI3DL2Source)
 #endif
 #if HAS_IDirectSoundBuffer_SetLoopRegion
-SOUND_STOP(IDirectSoundBuffer_SetLoopRegion)
+SOUND_HOOK(IDirectSoundBuffer_SetLoopRegion,kSoundBufferLoopRegion,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetMaxDistance
 SOUND_STOP(IDirectSoundBuffer_SetMaxDistance)
@@ -552,7 +552,7 @@ SOUND_STOP(IDirectSoundBuffer_SetMixBinVolumes)
 SOUND_STOP(IDirectSoundBuffer_SetOutputBuffer)
 #endif
 #if HAS_IDirectSoundBuffer_SetPlayRegion
-SOUND_STOP(IDirectSoundBuffer_SetPlayRegion)
+SOUND_HOOK(IDirectSoundBuffer_SetPlayRegion,kSoundBufferPlayRegion,3)
 #endif
 #if HAS_IDirectSoundBuffer_SetPosition
 SOUND_STOP(IDirectSoundBuffer_SetPosition)

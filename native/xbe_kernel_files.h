@@ -362,9 +362,12 @@ public:
         if(!canonical.empty()&&canonical.back()=='\\')canonical.pop_back();
         if(root==0&&access==0x40100000u&&disposition==3&&options==0x22u&&
            (canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEMETA.XBX"||
-            canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEIMAGE.XBX")){
+            canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEIMAGE.XBX"||
+            canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\SAVEIMAGE.XBX")){
             if(files_.size()+link_handles_.size()>=256)return Finish(iosb,0xc000011fu);
-            return OpenTitleMetadata(out,iosb,canonical.back()=='X'&&canonical.find("TITLEIMAGE.XBX")!=std::string::npos?"TitleImage.xbx":"TitleMeta.xbx");
+            const auto leaf=canonical.substr(canonical.find_last_of('\\')+1);
+            return OpenTitleMetadata(out,iosb,leaf=="SAVEIMAGE.XBX"?"SaveImage.xbx":
+                leaf=="TITLEIMAGE.XBX"?"TitleImage.xbx":"TitleMeta.xbx");
         }
         const bool title_directory_intent=root==0&&access==0x00120117u&&
             disposition==3&&options==0x00004021u&&

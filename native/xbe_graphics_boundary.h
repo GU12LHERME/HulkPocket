@@ -26,6 +26,12 @@ constexpr uint32_t kSoundBufferSetPosition=0x1040d;
 constexpr uint32_t kSoundBufferGetPosition=0x1040e;
 constexpr uint32_t kSoundDownloadEffects=0x1040f;
 constexpr uint32_t kSoundGetEffectData=0x10410;
+constexpr uint32_t kSoundFullHrtf=0x10411;
+constexpr uint32_t kSoundSetEffectData=0x10412;
+constexpr uint32_t kSoundBufferPause=0x10413;
+constexpr uint32_t kSoundBufferPlayRegion=0x10414;
+constexpr uint32_t kSoundBufferLoopRegion=0x10415;
+constexpr uint32_t kSoundSynchPlayback=0x10416;
 constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture=0x10102,
     kDefaultMakeSpace=0x10103,kDefaultComplexBase=0x10200;
 // Bounded experimental presentation loop; the final swap is presented
