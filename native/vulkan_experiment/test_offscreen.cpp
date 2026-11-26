@@ -7,6 +7,7 @@
 #include "raster_state.h"
 #include "guest_resources.h"
 #include "vertex_plan.h"
+#include "runtime_shaders.h"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -43,6 +44,7 @@ struct Fixture{
     VkDescriptorSetLayout set_layout{};VkPipelineLayout pipeline_layout{};
     VkDescriptorPool descriptors{};VkDescriptorSet set{};
     VkShaderModule vs{},fs{};VkPipeline pipeline{};
+    hulkpocket::vkexp::RuntimeShaders shaders;
     ~Fixture(){
         if(dev){
             vkDeviceWaitIdle(dev);
@@ -266,15 +268,26 @@ struct Fixture{
         if(bytes<=0||bytes>1024*1024||bytes%4)throw std::runtime_error("Bad shader size");
         std::vector<uint32_t> data(static_cast<size_t>(bytes)/4);f.seekg(0);f.read(reinterpret_cast<char*>(data.data()),bytes);
         if(!f||data[0]!=0x07230203)throw std::runtime_error("Bad shader file");
+        return Module(data);
+    }
+    VkShaderModule Module(const std::vector<uint32_t>& data){
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=data.size()*4;ci.pCode=data.data();
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
-    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan){
+    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan,bool dynamic){
         if(pipeline){vkDestroyPipeline(dev,pipeline,nullptr);pipeline={};}
         if(vs){vkDestroyShaderModule(dev,vs,nullptr);vs={};}
         if(fs){vkDestroyShaderModule(dev,fs,nullptr);fs={};}
-        vs=Module(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv"));
-        fs=Module(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv"));
+        if(dynamic){
+            if(!override_state||!guest)throw std::invalid_argument("Missing dynamic draw state");
+            gpu::TexInfo tex[4]{};
+            for(unsigned i=0;i<4;++i)if(override_state->textures[i])tex[i].kind=gpu::kTex2D;
+            vs=Module(shaders.Vertex(*override_state,*guest));
+            fs=Module(shaders.Pixel(*override_state,tex));
+        }else{
+            vs=Module(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv"));
+            fs=Module(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv"));
+        }
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType=stages[1].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";
@@ -305,19 +318,19 @@ struct Fixture{
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
     }
-    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr){
+    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false){
         hulkpocket::vkexp::VertexPlan plan;
         if(guest){
             // Current precompiled shaders require exactly these register sets.
             // Other declarations must use a matching generated shader later.
-            if(second||guest->pretransformed||guest->regs!=(packed?0x205:0x209))
+            if(second||(!dynamic&&(guest->pretransformed||guest->regs!=(packed?0x205:0x209))))
                 throw std::invalid_argument("No matching probe shader for Xbox declaration");
             plan=hulkpocket::vkexp::PlanVertices(*guest,limits);
             for(const auto& a:plan.attributes){
                 VkFormatProperties fp{};vkGetPhysicalDeviceFormatProperties(physical,a.format,&fp);
                 if(!(fp.bufferFeatures&VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT))throw std::invalid_argument("GPU vertex format unavailable");
                 const auto expected=a.location==0?VK_FORMAT_R32G32B32_SFLOAT:a.location==9?VK_FORMAT_R32G32_SFLOAT:packed?VK_FORMAT_R32_UINT:VK_FORMAT_B8G8R8A8_UNORM;
-                if(a.format!=expected)throw std::invalid_argument("Probe shader input format mismatch");
+                if(!dynamic&&a.format!=expected)throw std::invalid_argument("Probe shader input format mismatch");
             }
             EnsureBuffer(verts,plan.bytes,VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
             for(unsigned i=0;i<guest->buffer_count;++i)
@@ -328,7 +341,7 @@ struct Fixture{
                 EnsureBuffer(indices,bytes,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);std::memcpy(indices.data,guest->index_src,bytes);
             }
         }
-        Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr);
+        Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr,dynamic);
         uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
         if(!guest){std::memcpy(verts.data,v,sizeof(v));const uint16_t idx[]={2,0,1};std::memcpy(indices.data,idx,sizeof(idx));}
@@ -341,6 +354,18 @@ struct Fixture{
         for(unsigned i=0;i<4;++i){dc.texsize[i][0]=tex_width[i];dc.texsize[i][1]=tex_height[i];}
         dc.mat[0][2]=dc.mat[0][3]=1; // blue diffuse
         dc.mat[4][0]=8;dc.lt[0][0][2]=1;dc.lt[0][4][2]=-1; // directional -Z
+        if(dynamic){
+            if(!state||state->rs[gpu::kRsLighting])throw std::invalid_argument("Dynamic lighting constants not integrated");
+            if(state->simple[gpu::kMAlphaTestEnable/4]){
+                auto fn=state->simple[gpu::kMAlphaFunc/4];
+                if(fn<0x200||fn>0x207)throw std::invalid_argument("Invalid Xbox alpha function");
+                dc.misc[0]=float(state->simple[gpu::kMAlphaRef/4]&255);
+                dc.misc[1]=float(fn-0x200);
+            }
+            auto factor=state->rs[gpu::kRsTextureFactor];
+            dc.tfactor[0]=float((factor>>16)&255)/255;dc.tfactor[1]=float((factor>>8)&255)/255;
+            dc.tfactor[2]=float(factor&255)/255;dc.tfactor[3]=float(factor>>24)/255;
+        }
         std::memset(uniform.data,0,4096);std::memcpy(uniform.data,&dc,sizeof(dc));
         Begin();
         VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};
@@ -451,6 +476,30 @@ int main(int argc,char** argv){
         f.UploadGuestTexture(tex,1);
         f.Draw(argv[1],false,true,false,true,&guest_state,false,&assembled);
         Expect("independent Xbox texture stages",f.Pixel(32,32),{128,0,0,255});
+        // No precompiled variant has this 16-byte position/diffuse layout.
+        struct Compact{float x,y,z;uint32_t rgba;};
+        const Compact compact[]={{-.75f,-.75f,.5f,0x80ff00ff},{.75f,-.75f,.5f,0x80ff00ff},{0,.75f,.5f,0x80ff00ff}};
+        memory.Write(0x80100100,compact,sizeof(compact));
+        guest_state.vs_handle=0x42;guest_state.streams[0].stride=sizeof(Compact);
+        guest_state.tss[0][kTssColorOp]=guest_state.tss[0][kTssAlphaOp]=1;
+        if(!hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0,assembled))
+            throw std::runtime_error("Compact guest declaration failed");
+        auto before=f.shaders.Compiled();
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("runtime compiled compact declaration",f.Pixel(32,32),{255,0,255,128});
+        if(f.shaders.Compiled()!=before+2)throw std::runtime_error("Runtime shader compilation missing");
+        auto hits=f.shaders.Hits();
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        if(f.shaders.Compiled()!=before+2||f.shaders.Hits()!=hits+2)throw std::runtime_error("Runtime shader cache miss");
+        guest_state.simple[kMAlphaTestEnable/4]=1;guest_state.simple[kMAlphaFunc/4]=0x204;
+        guest_state.simple[kMAlphaRef/4]=200;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("runtime alpha test discard",f.Pixel(32,32),{0,0,0,255});
+        if(f.shaders.Compiled()!=before+3)throw std::runtime_error("Alpha shader variant missing");
+        guest_state.simple[kMAlphaRef/4]=100;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("runtime alpha threshold update",f.Pixel(32,32),{255,0,255,128});
+        if(f.shaders.Compiled()!=before+3)throw std::runtime_error("Uniform change recompiled shader");
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");
