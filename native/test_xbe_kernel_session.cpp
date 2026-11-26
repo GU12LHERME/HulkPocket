@@ -29,6 +29,17 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         call(*c,base,cb,258,{42});
         assert(false);
     }
+    call(*c,base,cb,166,{0x1000,0x100000,0x1fffff,0x10000,4});
+    auto physical=c->eax;
+    assert(physical>=0x80100000 && physical<0x80200000 && physical%0x10000==0);
+    memory->Write32(physical,0xaabbccdd);
+    call(*c,base,cb,173,{physical});
+    assert(c->eax==physical-0x80000000);
+    call(*c,base,cb,171,{physical});
+    assert(!memory->IsCommitted(physical,1));
+    call(*c,base,cb,166,{0x1000,0x100000,0x1fffff,0x10000,4});
+    assert(c->eax==physical && memory->Read32(physical)==0);
+    call(*c,base,cb,171,{physical});
     memory->Write32(0x10800,0);memory->Write32(0x10804,0x2000);
     call(*c,base,cb,184,{0x10800,0,0x10804,0x2000,4});
     assert(c->eax==0);

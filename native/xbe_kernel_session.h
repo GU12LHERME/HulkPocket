@@ -6,6 +6,7 @@
 #include "xbe_guest_thread_exit.h"
 #include "xbe_kernel_rtl.h"
 #include "xbe_kernel_virtual_memory.h"
+#include "xbe_kernel_physical_memory.h"
 #include <map>
 #include <chrono>
 #include <array>
@@ -29,6 +30,7 @@ private:
     XboxGuestAddressSpace& mem_;
     XbeKernelPool pool_;
     XbeVirtualMemory virtual_;
+    XbePhysicalMemory physical_;
     XbeTlsTemplate tls_;
     const HulkKernelClock* clock_;
     std::mutex lock_;
@@ -218,7 +220,27 @@ private:
                 Ret(cpu,n,status);return;
             }
             case 217: Check(cpu,2);Ret(cpu,2,virtual_.Query(Arg(cpu,0),Arg(cpu,1)));return;
-            case 180: Check(cpu,1);Ret(cpu,1,virtual_.AllocationSize(Arg(cpu,0)));return;
+            case 165: case 166: {
+                unsigned n=ordinal==165?1:5;Check(cpu,n);
+                if(ordinal==166 && Arg(cpu,4)!=4)
+                    throw std::runtime_error("Unsupported physical memory protection/alias");
+                auto a=physical_.Allocate(Arg(cpu,0),ordinal==165?0:Arg(cpu,1),
+                    ordinal==165?0xffffffffu:Arg(cpu,2),ordinal==165?0:Arg(cpu,3));
+                Ret(cpu,n,a);return;
+            }
+            case 171: Check(cpu,1);
+                if(!physical_.Free(Arg(cpu,0))) throw std::runtime_error("Invalid contiguous free");
+                Ret(cpu,1,0);return;
+            case 173: {
+                Check(cpu,1);auto addr=Arg(cpu,0);
+                if(!physical_.Size(addr)) throw std::runtime_error("No physical mapping for guest address");
+                Ret(cpu,1,physical_.Physical(addr));return;
+            }
+            case 180: {
+                Check(cpu,1);auto addr=Arg(cpu,0);
+                auto size=physical_.Size(addr);
+                Ret(cpu,1,size?size:virtual_.AllocationSize(addr));return;
+            }
             case 291: case 277: case 294: Critical(cpu,ordinal,lock); return;
             case 289: Check(cpu,2); InitGuestAnsiString(mem_,Arg(cpu,0),Arg(cpu,1)); Ret(cpu,2,0); return;
             case 270: case 279: {
@@ -321,7 +343,7 @@ private:
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
                      XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr)
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),tls_(tls),clock_(clock) {}
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),tls_(tls),clock_(clock) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }
