@@ -15,15 +15,36 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     echo "HulkPocket diagnostic revision: $(git rev-parse --short HEAD)"
     python tools/link_hulk_cached.py --sdk "$sdk" --generated "$generated" \
         --cache "$cache" --ndk-bin "$PREFIX/bin" --output "$module"
-    clang++ -std=c++20 -O2 -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE \
-        -I"$sdk/runtime" -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp \
-        native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp \
-        native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp \
-        native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp \
-        third_party/xboxxberecomp/kernel/crypto.cpp \
-        native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp \
-        third_party/xboxxberecomp/gpu/vertex.cpp \
-        -ldl -lEGL -lGLESv3 -o "$out"
+    # Prefer the explicitly selected Android-NDK CI artifact when testing
+    # on Termux, whose sysroot intentionally excludes EGL/GLES headers.
+    # This executable must correspond to the current runtime sources.
+    if [[ -n "${HULK_DIAGNOSTIC_BIN:-}" ]]; then
+        out="$HULK_DIAGNOSTIC_BIN"
+        if [[ ! -f "$out" || ! -x "$out" ]]; then
+            echo "Selected diagnostic is not executable: $out"
+            exit 2
+        fi
+        header=$("$PREFIX/bin/llvm-readelf" -h "$out")
+        if [[ "$header" != *AArch64* || "$header" != *ELF64* ]]; then
+            echo "Selected diagnostic is not ARM64 ELF"
+            exit 2
+        fi
+        echo "Using explicitly selected prebuilt Android diagnostic: $out"
+    else
+        if ! printf '#include <EGL/egl.h>\n#include <GLES3/gl3.h>\n' | clang++ -x c++ -E - >/dev/null 2>&1; then
+            echo "Termux EGL/GLES headers unavailable. Use the matching CI hulk-live-diagnostic artifact via HULK_DIAGNOSTIC_BIN."
+            exit 2
+        fi
+        clang++ -std=c++20 -O2 -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE \
+            -Ithird_party/xboxxberecomp -I"$sdk/runtime" native/hulk_xbe_local_diagnostic.cpp \
+            native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp \
+            native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp \
+            native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp \
+            third_party/xboxxberecomp/kernel/crypto.cpp \
+            native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp \
+            third_party/xboxxberecomp/gpu/vertex.cpp \
+            -ldl -lEGL -lGLESv3 -o "$out"
+    fi
     args=()
     if [[ -n "$disc" ]]; then args+=(--disc-root "$disc"); fi
     execution_log=$(mktemp)
