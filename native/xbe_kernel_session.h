@@ -59,6 +59,7 @@ private:
     std::map<uint32_t,uint32_t> dpc_routines_;
     std::deque<uint32_t> dpc_queue_;
     bool dpc_running_=false;
+    std::map<uint32_t,uint32_t> system_allocations_;
     uint32_t cache_pages_=16;
     const std::chrono::steady_clock::time_point start_=std::chrono::steady_clock::now();
     bool stopping_=false;
@@ -576,17 +577,63 @@ private:
                     ordinal==165?0xffffffffu:Arg(cpu,2),ordinal==165?0:Arg(cpu,3));
                 Ret(cpu,n,a);return;
             }
+            case 178: {
+                Check(cpu,3);auto a=Arg(cpu,0),bytes=Arg(cpu,1);bool persist=(Arg(cpu,2)&255u)!=0;
+                std::fprintf(stderr,"MmPersistContiguousMemory base=%08X bytes=%08X persist=%u\n",a,bytes,unsigned(persist));
+                if(!physical_.Persist(a,bytes,persist))
+                    throw std::runtime_error("Persistence outside committed contiguous Xbox RAM");
+                // The session owns these flags; a firmware quick reboot is
+                // still unsupported. Explicit frees clear the flags.
+                Ret(cpu,3,0);return;
+            }
+            case 167: {
+                Check(cpu,2);auto bytes=Arg(cpu,0),protect=Arg(cpu,1);
+                if(protect!=4)throw std::runtime_error("Unsupported system memory protection");
+                uint64_t rounded=(uint64_t(bytes)+4095)&~4095ull;
+                if(!rounded||rounded>0x01000000){Ret(cpu,2,0);return;}
+                auto a=pool_.Allocate(uint32_t(rounded),4096);
+                if(a)system_allocations_.emplace(a,uint32_t(rounded));
+                Ret(cpu,2,a);return;
+            }
+            case 172: {
+                Check(cpu,2);auto a=Arg(cpu,0),bytes=Arg(cpu,1);
+                auto it=system_allocations_.find(a);
+                uint64_t rounded=(uint64_t(bytes)+4095)&~4095ull;
+                if(it==system_allocations_.end()||rounded!=it->second)
+                    throw std::runtime_error("Unsupported partial or invalid system memory free");
+                auto pages=it->second/4096;pool_.Free(a);system_allocations_.erase(it);
+                Ret(cpu,2,pages);return;
+            }
+            case 174: case 179: {
+                Check(cpu,1);bool mapped=mem_.IsCommitted(Arg(cpu,0),1);
+                Ret(cpu,1,ordinal==174?uint32_t(mapped):mapped?4u:0u);return;
+            }
+            case 175: {
+                Check(cpu,3);auto a=Arg(cpu,0),bytes=Arg(cpu,1);
+                // Diagnostic memory is non-relocating while committed.
+                // This is not a host DMA registration or physical page alias.
+                if(bytes&&!mem_.IsCommitted(a,bytes))throw std::runtime_error("Lock of uncommitted guest buffer");
+                Ret(cpu,3,0);return;
+            }
+            case 176: {
+                Check(cpu,2);auto a=Arg(cpu,0);
+                if(a<0x04000000u)a|=kXboxPhysicalBase;
+                if(!physical_.Contains(a,1))throw std::runtime_error("Lock of unmapped Xbox physical page");
+                Ret(cpu,2,0);return;
+            }
+            case 23: Check(cpu,1);Ret(cpu,1,pool_.AllocationSize(Arg(cpu,0)));return;
             case 171: Check(cpu,1);
                 if(!physical_.Free(Arg(cpu,0))) throw std::runtime_error("Invalid contiguous free");
                 Ret(cpu,1,0);return;
             case 173: {
                 Check(cpu,1);auto addr=Arg(cpu,0);
-                if(!physical_.Size(addr)) throw std::runtime_error("No physical mapping for guest address");
+                if(!physical_.Contains(addr,1)) throw std::runtime_error("No physical mapping for guest address");
                 Ret(cpu,1,physical_.Physical(addr));return;
             }
             case 180: {
                 Check(cpu,1);auto addr=Arg(cpu,0);
                 auto size=physical_.Size(addr);
+                if(!size)size=pool_.AllocationSize(addr);
                 Ret(cpu,1,size?size:virtual_.AllocationSize(addr));return;
             }
             case 335: Check(cpu,1); XbeKernelCrypto(mem_).Init(Arg(cpu,0)); Ret(cpu,1,0);return;

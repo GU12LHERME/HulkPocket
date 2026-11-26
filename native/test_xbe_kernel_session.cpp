@@ -136,8 +136,24 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     memory->Write32(physical,0xaabbccdd);
     call(*c,base,cb,173,{physical});
     assert(c->eax==physical-0x80000000);
+    call(*c,base,cb,178,{physical,0x1000,1});
+    call(*c,base,cb,176,{physical-0x80000000,0});
+    call(*c,base,cb,176,{physical-0x80000000,1});
+    call(*c,base,cb,175,{physical,0x1000,0});
+    call(*c,base,cb,175,{physical,0x1000,1});
+    call(*c,base,cb,179,{physical});assert(c->eax==4);
+    call(*c,base,cb,174,{physical});assert(c->eax==1);
     call(*c,base,cb,171,{physical});
     assert(!memory->IsCommitted(physical,1));
+    call(*c,base,cb,174,{physical});assert(c->eax==0);
+    call(*c,base,cb,179,{physical});assert(c->eax==0);
+    call(*c,base,cb,167,{5000,4});auto sys=c->eax;
+    assert(sys&&sys%4096==0&&memory->Read32(sys)==0);
+    call(*c,base,cb,180,{sys});assert(c->eax==8192);
+    memory->Write32(sys,0xdeadbeef);
+    call(*c,base,cb,172,{sys,5000});assert(c->eax==2);
+    call(*c,base,cb,167,{5000,4});assert(c->eax==sys&&memory->Read32(sys)==0);
+    call(*c,base,cb,172,{sys,5000});assert(c->eax==2);
     call(*c,base,cb,166,{0x1000,0x100000,0x1fffff,0x10000,4});
     assert(c->eax==physical && memory->Read32(physical)==0);
     call(*c,base,cb,171,{physical});
@@ -249,6 +265,18 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
 }
 int main() {
     XboxGuestAddressSpace mem;
+    InitializeXboxKernelPhysicalRegion(mem);
+    {
+        XbePhysicalMemory physical(mem);
+        assert(physical.Persist(0x80010000,4096,true));
+        assert(physical.IsPersistent(0x80010001));
+        assert(physical.Persist(0x80010000,4096,false));
+        assert(!physical.IsPersistent(0x80010000));
+        assert(!physical.Persist(0x84000000,4096,true));
+        auto a=physical.Allocate(4096,0x100000,0x3ffffff,4096);
+        assert(a&&physical.Persist(a,4096,true)&&physical.IsPersistent(a));
+        assert(physical.Free(a)&&!physical.IsPersistent(a));
+    }
     memory=&mem;
     mem.Commit(0x10000,0x10000);
     mem.Write32(0x10200,0xdeadbeef);

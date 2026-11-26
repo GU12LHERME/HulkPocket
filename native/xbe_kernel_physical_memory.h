@@ -1,6 +1,7 @@
 #pragma once
 #include "xbox_guest_address_space.h"
 #include <map>
+#include <set>
 #include <algorithm>
 #include <stdexcept>
 namespace hulkpocket {
@@ -20,6 +21,7 @@ inline void InitializeXboxKernelPhysicalRegion(XboxGuestAddressSpace& mem) {
 class XbePhysicalMemory {
     XboxGuestAddressSpace& mem_;
     std::map<uint32_t,uint32_t> live_;
+    std::set<uint32_t> persistent_;
     static constexpr uint32_t base=kXboxPhysicalBase, first=kXboxKernelReservedBytes, limit=0x04000000;
 public:
     explicit XbePhysicalMemory(XboxGuestAddressSpace& mem):mem_(mem) {}
@@ -53,6 +55,7 @@ public:
         if(!address) return true;
         auto it=live_.find(address);
         if(it==live_.end()) return false;
+        for(uint64_t a=address;a<uint64_t(address)+it->second;a+=4096) persistent_.erase(static_cast<uint32_t>(a));
         mem_.Decommit(address,it->second);live_.erase(it);return true;
     }
     uint32_t Size(uint32_t address) const {
@@ -62,8 +65,27 @@ public:
         uint64_t end=uint64_t(it->first)+it->second;
         return address<end?static_cast<uint32_t>(end-address):0;
     }
+    bool Contains(uint32_t address,uint32_t bytes) const {
+        if(!bytes)return true;
+        if(address<base||uint64_t(address)+bytes>uint64_t(base)+limit)return false;
+        if(!mem_.IsCommitted(address,bytes))return false;
+        // The reserved first MiB is kernel-owned, not an allocation.
+        if(address<base+first)return uint64_t(address)+bytes<=uint64_t(base)+first;
+        return Size(address)>=bytes;
+    }
+    bool Persist(uint32_t address,uint32_t bytes,bool enabled) {
+        if(!Contains(address,bytes))return false;
+        if(!bytes)return true;
+        // Xbox pages are 4 KiB regardless of Android host page size.
+        for(uint64_t a=uint64_t(address)&~4095ull;a<uint64_t(address)+bytes;a+=4096){
+            auto page=static_cast<uint32_t>(a);
+            if(enabled)persistent_.insert(page);else persistent_.erase(page);
+        }
+        return true;
+    }
+    bool IsPersistent(uint32_t address) const {return persistent_.count(address&~4095u)!=0;}
     uint32_t Physical(uint32_t address) const {
-        if(!Size(address)) return 0;
+        if(!Contains(address,1)) return 0;
         return address-base;
     }
 };
