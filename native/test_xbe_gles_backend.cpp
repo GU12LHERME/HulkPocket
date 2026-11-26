@@ -49,6 +49,24 @@ int main(){
     call("D3DDevice_DrawIndexedVertices",{5,3,0x10300});
     assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{255,0,0,255}));
     assert((backend.ReadPixel(1,1)==std::array<uint8_t,4>{0,0,255,255}));
+    // Quad conversion and native strips exercise the Xbox primitive assembler.
+    const V quad[]={{8,8,.5,1,0xff00ff00},{56,8,.5,1,0xff00ff00},
+                    {56,56,.5,1,0xff00ff00},{8,56,.5,1,0xff00ff00}};
+    mem.Write(0x80105000,quad,sizeof(quad));
+    call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+    call("D3DDevice_DrawVertices",{8,0,4});
+    assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,255,0,255}));
+    const V strip[]={quad[0],quad[1],quad[3],quad[2]};
+    mem.Write(0x80105000,strip,sizeof(strip));
+    call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+    call("D3DDevice_DrawVertices",{6,0,4});
+    assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,255,0,255}));
+    // Xbox top-left rectangle coordinates must become GLES bottom-left scissor.
+    const int32_t rect[]={4,8,20,24};mem.Write(0x10320,rect,sizeof(rect));
+    call("D3DDevice_Clear",{1,0x10320,0xf0,0xffff0000,std::bit_cast<uint32_t>(1.0f),0});
+    assert((backend.ReadPixel(5,9)==std::array<uint8_t,4>{255,0,0,255}));
+    assert((backend.ReadPixel(5,54)==std::array<uint8_t,4>{0,0,0,255}));
+    assert((backend.ReadPixel(32,32)==std::array<uint8_t,4>{0,255,0,255}));
     // Real guest texture: 2x2 swizzled A8R8G8B8, red/green/blue/white.
     mem.Write32(0x10400,0x40000);mem.Write32(0x10404,0x106000);
     mem.Write32(0x1040c,0x01110621);mem.Write32(0x10410,0);
@@ -116,6 +134,17 @@ int main(){
     tri(.5f,0x80ff0000);
     auto mixed=backend.ReadPixel(32,24);assert(mixed[0]>=127&&mixed[0]<=129&&mixed[1]==0&&mixed[2]>=126&&mixed[2]<=128);
     rs(gpu::kMBlendEnable,0);
+    // Alpha test: low alpha is discarded, high alpha reaches the target.
+    call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
+    rs(gpu::kMAlphaTestEnable,1);rs(gpu::kMAlphaFunc,0x204);rs(gpu::kMAlphaRef,127);
+    tri(.5f,0x40ff0000);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,0,255,255}));
+    tri(.5f,0xc000ff00);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,255,0,192}));
+    rs(gpu::kMAlphaTestEnable,0);
+    // Restore the previous blend sample for the existing channel-mask test.
+    call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
+    rs(gpu::kMBlendEnable,1);tri(.5f,0x80ff0000);rs(gpu::kMBlendEnable,0);
     // ARGB channel mask: write only green; preserve previous red/blue/alpha.
     rs(gpu::kMColorWriteEnable,0x00000100);
     tri(.5f,0xff00ff00);

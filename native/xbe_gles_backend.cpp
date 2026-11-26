@@ -47,16 +47,19 @@ void main(){
         // Xbox D3D clip depth is [0,w], GLES is [-w,w].
         gl_Position=vec4(p.xy,2.0*p.z-p.w,p.w);
     }
+    gl_PointSize=1.0;
     v_color=a_color;v_uv=a_uv;
 })";
 constexpr const char* fs=R"(#version 300 es
-precision mediump float;
+precision highp float;
 in vec4 v_color;
 in vec2 v_uv;
 uniform sampler2D u_texture;
 uniform int u_textured;
 uniform int u_color_op;
 uniform int u_alpha_op;
+uniform int u_alpha_func;
+uniform int u_alpha_ref;
 out vec4 color;
 void main(){
     color=v_color;
@@ -64,6 +67,17 @@ void main(){
         vec4 t=texture(u_texture,v_uv);
         color.rgb=u_color_op==2?t.rgb:t.rgb*v_color.rgb;
         color.a=u_alpha_op==2?t.a:u_alpha_op==4?t.a*v_color.a:v_color.a;
+    }
+    if(u_alpha_func!=0){
+        int a=int(floor(clamp(color.a,0.0,1.0)*255.0+0.5));
+        bool pass=u_alpha_func==0x207 ||
+            (u_alpha_func==0x201 && a<u_alpha_ref) ||
+            (u_alpha_func==0x202 && a==u_alpha_ref) ||
+            (u_alpha_func==0x203 && a<=u_alpha_ref) ||
+            (u_alpha_func==0x204 && a>u_alpha_ref) ||
+            (u_alpha_func==0x205 && a!=u_alpha_ref) ||
+            (u_alpha_func==0x206 && a>=u_alpha_ref);
+        if(!pass)discard;
     }
 })";
 struct Vertex {float p[4];float c[4];float uv[2];};
@@ -121,8 +135,10 @@ bool XbeGlesBackend::Init(uint32_t w,uint32_t h){
         world_=glGetUniformLocation(program_,"u_world");
         view_=glGetUniformLocation(program_,"u_view");
         projection_=glGetUniformLocation(program_,"u_projection");
+        alpha_func_=glGetUniformLocation(program_,"u_alpha_func");
+        alpha_ref_=glGetUniformLocation(program_,"u_alpha_ref");
         if(extent_<0||textured_<0||sampler_<0||color_op_<0||alpha_op_<0||
-           transformed_<0||world_<0||view_<0||projection_<0)throw std::runtime_error("GLES uniform missing");
+           transformed_<0||world_<0||view_<0||projection_<0||alpha_func_<0||alpha_ref_<0)throw std::runtime_error("GLES uniform missing");
         glGenTextures(1,&texture_);
         glGenVertexArrays(1,&vao_);glGenBuffers(1,&vbo_);
         glBindVertexArray(vao_);glBindBuffer(GL_ARRAY_BUFFER,vbo_);
@@ -162,7 +178,8 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
         if(!s.simple[i])continue;
         switch(i*4){
             case gpu::kMBlendEnable:case gpu::kMSrcBlend:case gpu::kMDestBlend:case gpu::kMBlendOp:
-            case gpu::kMZFunc:case gpu::kMZWriteEnable:case gpu::kMColorWriteEnable:break;
+            case gpu::kMZFunc:case gpu::kMZWriteEnable:case gpu::kMColorWriteEnable:
+            case gpu::kMAlphaTestEnable:case gpu::kMAlphaFunc:case gpu::kMAlphaRef:break;
             default:Unsupported("Unsupported simple render state");
         }
     }
@@ -190,7 +207,15 @@ void XbeGlesBackend::RasterState(const gpu::State& s){
 }
 void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rects,uint32_t flags,uint32_t color,float z,uint32_t stencil){
     Check();Target(s.rt);
-    if(count||rects)Unsupported("GLES rectangle clear not implemented");
+    if(count>4096||(count&&!rects))throw std::invalid_argument("Invalid GLES clear rectangles");
+    // Validate every rectangle before changing the framebuffer.
+    std::vector<std::array<int32_t,4>> regions(count);
+    for(uint32_t i=0;i<count;++i){
+        auto& r=regions[i];std::memcpy(r.data(),rects+size_t(i)*16,16);
+        if(r[0]<0||r[1]<0||r[2]<r[0]||r[3]<r[1]||
+            uint32_t(r[2])>width_||uint32_t(r[3])>height_)
+            throw std::invalid_argument("Clear rectangle outside framebuffer");
+    }
     if(flags&~(gpu::kClearTarget|gpu::kClearZ|gpu::kClearStencil))Unsupported("Unsupported clear flags");
     if(flags&gpu::kClearStencil)Unsupported("Guest stencil operations not implemented");
     if(flags&gpu::kClearZ)DepthTarget(s.zs);
@@ -203,8 +228,19 @@ void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rec
     GLbitfield mask=0;
     if(flags&gpu::kClearTarget)mask|=GL_COLOR_BUFFER_BIT;
     if(flags&gpu::kClearZ){glDepthMask(GL_TRUE);mask|=GL_DEPTH_BUFFER_BIT;}
-    if(mask)glClear(mask);
-    if(flags&gpu::kClearZ)depth_cleared_=true;
+    if(mask){
+        if(!count)glClear(mask);
+        else{
+            glEnable(GL_SCISSOR_TEST);
+            for(auto r:regions){
+                glScissor(r[0],GLint(height_)-r[3],r[2]-r[0],r[3]-r[1]);
+                glClear(mask);
+            }
+            glDisable(GL_SCISSOR_TEST);
+        }
+    }
+    // A partial depth clear cannot establish initialized depth everywhere.
+    if((flags&gpu::kClearZ)&&!count)depth_cleared_=true;
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);GlCheck("GLES clear");
 }
 void XbeGlesBackend::UploadTexture(const gpu::State& s){
@@ -273,7 +309,7 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
             Unsupported("Unsupported fixed-function texture combiner");
     } else if(op>1||alpha>1)Unsupported("Active texture combiner without a texture");
     if(!count)return;
-    if(prim!=5)Unsupported("GLES diagnostic only accepts triangle lists");
+    if(prim<1||prim>10)throw std::invalid_argument("Invalid Xbox primitive");
     gpu::Assembled a;
     if(!gpu::Assemble(s,prim,start,count,indices,a))throw std::runtime_error("Vertex assembly failed");
     if(a.regs!=(textured?0x209u:9u)||a.pretransformed!=transformed||
@@ -281,7 +317,14 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
        a.elements[3].format!=gpu::kVertexB8G8R8A8_UNORM||
        (textured&&a.elements[9].format!=gpu::kVertexR32G32_FLOAT))Unsupported("Unsupported GLES vertex layout");
     uint32_t n=a.index_count?a.index_count:a.draw_count;
-    if(n%3||n>262144)throw std::invalid_argument("Invalid triangle count");
+    GLenum mode=GL_TRIANGLES;
+    switch(a.topology){
+        case gpu::Topology::Points:mode=GL_POINTS;break;
+        case gpu::Topology::Lines:mode=a.strip?GL_LINE_STRIP:GL_LINES;break;
+        case gpu::Topology::Triangles:mode=a.strip?GL_TRIANGLE_STRIP:GL_TRIANGLES;break;
+    }
+    if(n>786432||!n||(mode==GL_LINES&&n%2)||(mode==GL_TRIANGLES&&n%3))
+        throw std::invalid_argument("Invalid assembled primitive count");
     std::vector<Vertex> vertices(n);
     for(uint32_t i=0;i<n;++i){
         int64_t id=i;
@@ -303,6 +346,10 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
             throw std::invalid_argument("Invalid XYZRHW position");
         v.c[0]=bgra[2]/255.0f;v.c[1]=bgra[1]/255.0f;v.c[2]=bgra[0]/255.0f;v.c[3]=bgra[3]/255.0f;
     }
+    auto alpha_enable=s.simple[gpu::kMAlphaTestEnable>>2];
+    auto alpha_cmp=s.simple[gpu::kMAlphaFunc>>2],alpha_reference=s.simple[gpu::kMAlphaRef>>2];
+    if(alpha_enable>1||(alpha_enable&&(alpha_cmp<0x200||alpha_cmp>0x207||alpha_reference>255)))
+        Unsupported("Invalid alpha test state");
     glViewport(0,0,width_,height_);RasterState(s);
     if(textured)UploadTexture(s);
     glUseProgram(program_);glUniform2f(extent_,float(width_),float(height_));
@@ -317,7 +364,9 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     glUniform1i(textured_,textured);glUniform1i(sampler_,0);glUniform1i(color_op_,op);glUniform1i(alpha_op_,alpha);
     glBindVertexArray(vao_);glBindBuffer(GL_ARRAY_BUFFER,vbo_);
     glBufferData(GL_ARRAY_BUFFER,GLsizeiptr(vertices.size()*sizeof(Vertex)),vertices.data(),GL_STREAM_DRAW);
-    glDrawArrays(GL_TRIANGLES,0,GLsizei(n));GlCheck("GLES draw");
+    glUniform1i(alpha_func_,alpha_enable?GLint(alpha_cmp):0);
+    glUniform1i(alpha_ref_,GLint(alpha_reference&255));
+    glDrawArrays(mode,0,GLsizei(n));GlCheck("GLES draw");
 }
 void XbeGlesBackend::Present(const gpu::Surface& s){Check();Target(s);glFinish();GlCheck("GLES present");if(!eglSwapBuffers(display_,surface_))throw std::runtime_error("EGL present failed");}
 void XbeGlesBackend::Flush(){Check();glFinish();GlCheck("GLES finish");}

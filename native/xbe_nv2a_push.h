@@ -50,6 +50,7 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         switch(m){
             case gpu::kMBlendEnable:case gpu::kMSrcBlend:case gpu::kMDestBlend:
             case gpu::kMBlendOp:case gpu::kMZFunc:case gpu::kMColorWriteEnable:
+            case gpu::kMAlphaTestEnable:case gpu::kMAlphaFunc:case gpu::kMAlphaRef:
             case gpu::kMZWriteEnable:
                 simple[m>>2]=v;break;
             default:throw std::logic_error("NV2A method not integrated");
