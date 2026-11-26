@@ -3,6 +3,7 @@
 #include <map>
 #include <stdexcept>
 #include <array>
+#include <algorithm>
 namespace hulkpocket {
 // Diagnostic private virtual arena; no physical aliases or executable pages.
 class XbeVirtualMemory {
@@ -35,24 +36,39 @@ class XbeVirtualMemory {
     }
 public:
     explicit XbeVirtualMemory(XboxGuestAddressSpace& mem):mem_(mem) {}
-    uint32_t Allocate(uint32_t& base,uint32_t& size,uint32_t type,uint32_t protect) {
-        // PAGE_READWRITE only. Reject unsupported flags instead of silently granting access.
-        if(!size || protect!=4 || !(type&0x3000u) || (type&~0x3000u))
+    uint32_t Allocate(uint32_t& base,uint32_t& size,uint32_t type,uint32_t protect,uint32_t zero_bits=0) {
+        // Xbox MEM_TOP_DOWN and MEM_NOZERO are allocation modifiers.
+        // Fresh pages remain zeroed even with MEM_NOZERO: never expose stale host data.
+        constexpr uint32_t top_down=0x100000, no_zero=0x800000;
+        if(!size || !(type&0x3000u) || (type&~(0x3000u|top_down|no_zero)) || zero_bits>21)
             return invalid;
+        // A no-access reservation is genuinely inaccessible until committed.
+        // Actual committed pages still require PAGE_READWRITE.
+        if(protect!=4 && !(protect==1 && !(type&0x1000u)))return invalid;
+        const uint64_t ceiling=std::min<uint64_t>(high,1ull<<(32-zero_bits));
         const uint64_t page=mem_.PageSize();
         const bool commit=type&0x1000u, reserve=(type&0x2000u)||(!base&&commit);
         if(reserve) {
             uint64_t start=base&~uint64_t(0xffff);
             uint64_t length=Round(uint64_t(base)+size,0x10000)-start;
             if(!length || length>high-low) return no_memory;
+            if(ceiling<low+length)return no_memory;
             if(!base) {
-                start=low;
-                for(const auto& kv:regions_) {
-                    if(start+length<=kv.first) break;
-                    start=Round(uint64_t(kv.first)+kv.second.size,0x10000);
+                if(type&top_down){
+                    bool found=false;
+                    for(uint64_t candidate=(ceiling-length)&~0xffffull;candidate>=low;candidate-=0x10000){
+                        if(FreeRange(uint32_t(candidate),uint32_t(length))){start=candidate;found=true;break;}
+                    }
+                    if(!found)return no_memory;
+                }else{
+                    start=low;
+                    for(const auto& kv:regions_) {
+                        if(start+length<=kv.first) break;
+                        start=Round(uint64_t(kv.first)+kv.second.size,0x10000);
+                    }
                 }
             }
-            if(start+length>high || !FreeRange(static_cast<uint32_t>(start),static_cast<uint32_t>(length)))
+            if(start+length>ceiling || !FreeRange(static_cast<uint32_t>(start),static_cast<uint32_t>(length)))
                 return base?conflict:no_memory;
             const auto a=static_cast<uint32_t>(start), n=static_cast<uint32_t>(length);
             if(commit) mem_.Commit(a,n);
@@ -62,7 +78,7 @@ public:
         auto it=Find(base);
         if(it==regions_.end()) return missing;
         const uint64_t first=uint64_t(base)&~(page-1), end=Round(uint64_t(base)+size,page);
-        if(first<it->first || end>uint64_t(it->first)+it->second.size) return conflict;
+        if(first<it->first || end>uint64_t(it->first)+it->second.size || end>ceiling) return conflict;
         mem_.Commit(static_cast<uint32_t>(first),end-first);
         base=static_cast<uint32_t>(first);size=static_cast<uint32_t>(end-first);return 0;
     }

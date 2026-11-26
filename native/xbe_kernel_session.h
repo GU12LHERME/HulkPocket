@@ -403,6 +403,11 @@ private:
                                 cpu.ecx,table,mem_.Read32(table),mem_.Read32(table+4),mem_.Read32(table+8),mem_.Read32(table+12));
                     }
                 }
+                if(ret==0x00266E38u&&mem_.IsCommitted(cpu.esp,44)){
+                    std::fprintf(stderr,"HULK ALLOC caller=%08X type=%08X bytes=%08X failure_context=%08X reason=%08X\n",
+                        mem_.Read32(cpu.esp+32),mem_.Read32(cpu.esp+8),mem_.Read32(cpu.esp+12),
+                        mem_.Read32(cpu.esp+4),mem_.Read32(cpu.esp+16));
+                }
                 for(unsigned i=0;i<16;++i){
                     uint64_t a=uint64_t(cpu.esp)+i*4;
                     if(a+4>XboxGuestAddressSpace::kSize||!mem_.IsCommitted(uint32_t(a),4))break;
@@ -663,8 +668,12 @@ private:
                    ((bp>=0x10000000 && bp<0x30000000)||(sp>=0x10000000 && sp<0x30000000)))
                     throw std::runtime_error("Virtual free output inside virtual arena");
                 auto status=ordinal==184?
-                    (Arg(cpu,1)?0xc000000du:virtual_.Allocate(b,z,Arg(cpu,3),Arg(cpu,4))):
+                    virtual_.Allocate(b,z,Arg(cpu,3),Arg(cpu,4),Arg(cpu,1)):
                     virtual_.Free(b,z,Arg(cpu,2));
+                if(ordinal==184){
+                    std::fprintf(stderr,"VM ALLOC caller=%08X base=%08X size=%08X zero=%08X type=%08X protect=%08X status=%08X result_base=%08X result_size=%08X\n",
+                        mem_.Read32(cpu.esp),mem_.Read32(bp),mem_.Read32(sp),Arg(cpu,1),Arg(cpu,3),Arg(cpu,4),status,b,z);
+                }
                 if(!status){mem_.Write32(bp,b);mem_.Write32(sp,z);}
                 Ret(cpu,n,status);return;
             }

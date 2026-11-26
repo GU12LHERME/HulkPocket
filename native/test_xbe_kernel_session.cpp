@@ -207,6 +207,23 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0 && !memory->IsCommitted(va,1));
     call(*c,base,cb,217,{va,0x10820});
     assert(c->eax==0 && memory->Read32(0x10830)==0x10000);
+    // Top-down allocation, NOZERO modifier, inaccessible reserve,
+    // and zero-bit constraint on the returned address.
+    memory->Write32(0x10800,0);memory->Write32(0x10804,0x1000);
+    call(*c,base,cb,184,{0x10800,0,0x10804,0x102000,1});
+    assert(c->eax==0&&memory->Read32(0x10800)==0x2fff0000&&!memory->IsCommitted(0x2fff0000,1));
+    memory->Write32(0x10804,0x1000);
+    call(*c,base,cb,184,{0x10800,0,0x10804,0x801000,4});
+    assert(c->eax==0&&memory->Read32(0x2fff0000)==0);
+    memory->Write32(0x10804,0);
+    call(*c,base,cb,199,{0x10800,0x10804,0x8000});assert(c->eax==0);
+    memory->Write32(0x10800,0);memory->Write32(0x10804,0x1000);
+    call(*c,base,cb,184,{0x10800,3,0x10804,0x103000,4});
+    assert(c->eax==0&&memory->Read32(0x10800)==0x1fff0000);
+    memory->Write32(0x10804,0);
+    call(*c,base,cb,199,{0x10800,0x10804,0x8000});assert(c->eax==0);
+    memory->Write32(0x10800,0);memory->Write32(0x10804,0x1000);
+    call(*c,base,cb,184,{0x10800,4,0x10804,0x3000,4});assert(c->eax==0xc0000017u);
     memory->Write(0x10300,"Hulk",5);
     memory->Write(0x10310,"hULK",5);
     call(*c,base,cb,289,{0x10400,0x10300});
