@@ -100,6 +100,21 @@ int main(){
         for(unsigned y=30;y<=33;++y)
             if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,0,255,255})replay_pixel=true;
         assert(replay_pixel&&bridge.Snapshot().viewport.w==0&&mem.Read32(dev+0xee8)==0);
+        // Re-run from a genuinely populated guest viewport; the replay
+        // must use it as-is and preserve the device fields.
+        mem.Write32(dev+0xee8,64);mem.Write32(dev+0xeec,64);
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x42);
+        call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+        bridge.ReplayFixedLinesDiagnostic(0,2);
+        replay_pixel=false;
+        for(unsigned y=30;y<=33;++y)
+            if(backend.ReadPixel(32,y)==std::array<uint8_t,4>{255,0,255,255})replay_pixel=true;
+        assert(replay_pixel&&bridge.Snapshot().viewport.w==64&&mem.Read32(dev+0xee8)==64);
+        mem.Write32(dev+0xee8,32);
+        assert(bridge.SyncFixedDiffuseShader(dev)==0x42);
+        bool partial_rejected=false;
+        try{bridge.ReplayFixedLinesDiagnostic(0,2);}catch(const std::logic_error&){partial_rejected=true;}
+        assert(partial_rejected&&bridge.Snapshot().viewport.w==32);
         mem.Write32(0x10340,0);mem.Write32(0x10344,0);
         mem.Write32(0x10348,64);mem.Write32(0x1034c,64);
         mem.Write32(0x10350,0);mem.Write32(0x10354,0x3f800000);

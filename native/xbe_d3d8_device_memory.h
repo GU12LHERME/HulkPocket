@@ -77,6 +77,12 @@ public:
         Set(0x1a14,resources_[1].header);Set(0x1a18,resources_[1].header);
         Set(0x1a20,resources_[3].header);
         Set(0x948,0x4b7fffff); // 16777215.0f
+        // Original USA SetViewport 0037F720 clamps scaled right/bottom
+        // against CDevice+954/+958 (0037F838 and 0037F88C). The physical
+        // surface is allocated at w*h with the currently supported unit
+        // supersample scale. Zero limits cause every valid viewport to
+        // collapse, even though its surface header is correct.
+        Set(0x954,w);Set(0x958,h);
         for(auto off:{0x95c,0x960,0x96c,0x970})Set(off,0x3f800000);
         Set(0xee8,w);Set(0xeec,h);Set(0xef4,0x3f800000);
         Set(0x1ddc,0x400000); // 60 Hz, no widescreen claim

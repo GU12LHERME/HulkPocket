@@ -109,6 +109,12 @@ int main(){
             XbeD3d8DeviceMemory device(guest,pool,physical);
             device.Initialize(dev,slot,pp);
             assert(device.BufferCount()==2&&guest.Read32(slot)==dev);
+            assert(guest.Read32(dev+0x954)==640&&guest.Read32(dev+0x958)==480);
+            assert(guest.Read32(dev+0x95c)==0x3f800000&&guest.Read32(dev+0x960)==0x3f800000);
+            // Verify the clamp read by original 0037F720: a full-size
+            // request cannot collapse to zero at the initialized limits.
+            assert(std::min(640u,guest.Read32(dev+0x954))==640);
+            assert(std::min(480u,guest.Read32(dev+0x958))==480);
             assert(device.Scratch()&&device.ScratchEnd()==device.Scratch());
             device.BindInitialFvf(0x25c00);
             assert(guest.Read32(dev+0x794)==0x25c00);
@@ -125,6 +131,14 @@ int main(){
             assert(device.Rotate()==1&&guest.Read32(front+4)==b&&guest.Read32(back+4)==a);
             assert(guest.Read32(dev+0x2478)==1);
             assert(device.Rotate()==2&&guest.Read32(front+4)==a);
+        }
+        assert(pool.Outstanding()==0&&physical.AllocatedPages()==0&&guest.Read32(slot)==0);
+        guest.Write32(pp,320);guest.Write32(pp+4,240);
+        {
+            XbeD3d8DeviceMemory device(guest,pool,physical);
+            device.Initialize(dev,slot,pp);
+            assert(guest.Read32(dev+0x954)==320&&guest.Read32(dev+0x958)==240);
+            assert(guest.Read32(dev+0xee8)==320&&guest.Read32(dev+0xeec)==240);
         }
         assert(pool.Outstanding()==0&&physical.AllocatedPages()==0&&guest.Read32(slot)==0);
     }

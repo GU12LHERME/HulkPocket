@@ -97,7 +97,7 @@ private:
         XbeGlesBackend backend;
         XbeD3d8Bridge bridge;
         uint32_t owner;
-        unsigned setter_calls=0;
+        unsigned setter_calls=0,diagnostic_draw_returns=0;
         std::array<uint32_t,6> last_viewport{};
         uint32_t last_viewport_call=0,last_viewport_caller=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
@@ -144,6 +144,7 @@ private:
         auto owned=std::make_unique<LiveD3dDevice>(mem_,pool_,physical_,cpu.thread_handle);
         auto& buffers=owned->buffers;
         buffers.Initialize(device,slot,pp);
+        std::fprintf(stderr,"D3D INITIAL RASTER LIMITS: %u x %u\n",mem_.Read32(device+0x954),mem_.Read32(device+0x958));
         const char* fvf_text=std::getenv("HULK_FVF_SHADER");
         if(!fvf_text||std::strlen(fvf_text)!=8)throw std::runtime_error("Original FVF pointer not resolved; inspect local discovery report");
         for(unsigned i=0;i<8;++i)if(!((fvf_text[i]>='0'&&fvf_text[i]<='9')||
@@ -891,8 +892,10 @@ private:
                     for(auto v:synced.transforms[slot])std::fprintf(stderr," %08X",std::bit_cast<uint32_t>(v));
                     std::fprintf(stderr,"\n");
                 }
-                if(!synced.viewport.w||!synced.viewport.h){
-                    if(!indexed&&Arg(cpu,0)==2){
+                const bool zero_viewport=!synced.viewport.w||!synced.viewport.h;
+                // Run at most one explicitly opt-in reduced draw return.
+                // Subsequent geometry remains guarded until integrated.
+                if(!indexed&&Arg(cpu,0)==2&&!live.diagnostic_draw_returns){
                         gpu::ScopedGuestMemory scope(mem_);
                         gpu::TextureDesc desc{};
                         if(!gpu::DescribeSurface(synced.rt,desc))
@@ -907,16 +910,28 @@ private:
                             size_t at=size_t(y)*desc.pitch+4*x;
                             if(std::memcmp(before.data()+at,pixels+at,4))++changed;
                         }
-                        std::fprintf(stderr,"D3D ORIGINAL LINE REPLAY (diagnostic target viewport %ux%u): changed_pixels=%u; not faithful guest draw or presented frame\n",desc.width,desc.height,changed);
+                        std::fprintf(stderr,"D3D ORIGINAL LINE REPLAY (%s viewport %ux%u): changed_pixels=%u; reduced state, not a presented frame\n",
+                            zero_viewport?"diagnostic target":"original guest",desc.width,desc.height,changed);
                         if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path){
                             try{
                                 WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
                                 std::fprintf(stderr,"D3D DIAGNOSTIC BITMAP: %s (reduced replay, not a presented frame)\n",path);
                             }catch(const std::exception& ex){std::fprintf(stderr,"D3D DIAGNOSTIC BITMAP FAILED: %s\n",ex.what());}
                         }
+                    // Explicitly experimental continuation of the observed
+                    // USA first untextured line draw only. No arbitrary draw
+                    // success, no raw-state guard removal, no swap bypass.
+                    const char* allow=std::getenv("HULK_CONTINUE_DRAW");
+                    if(allow&&std::strcmp(allow,"1")==0&&!zero_viewport&&changed&&
+                        synced.viewport.w==desc.width&&synced.viewport.h==desc.height&&
+                        mem_.Read32(cpu.esp)==0x0031c10f&&Arg(cpu,1)==0&&Arg(cpu,2)==1020){
+                        ++live.diagnostic_draw_returns;
+                        std::fprintf(stderr,"D3D DIAGNOSTIC DRAW RETURN: original viewport, reduced raster profile; one draw only\n");
+                        Ret(cpu,3,0);return;
                     }
-                    throw std::runtime_error("D3D original viewport has zero extent; investigate device initialization");
                 }
+                if(zero_viewport)
+                    throw std::runtime_error("D3D original viewport has zero extent; investigate device initialization");
                 throw std::runtime_error("D3D original geometry assembled; raw raster translation pending");
 #else
                 throw std::runtime_error("D3D draw requires GLES backend");

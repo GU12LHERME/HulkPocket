@@ -326,14 +326,14 @@ public:
             throw std::runtime_error("Guest diffuse geometry assembly failed");
         return a.vertex_count;
     }
-    // Diagnostic replay only: a zero guest viewport cannot produce a faithful
-    // draw. Project the verified original XYZ+diffuse line stream onto the
-    // allocated color target using the game's actual transforms. Keep all
-    // guest state and the unresolved raw-packet guard intact; caller must stop.
+    // Reduced diagnostic line profile. Use the actual guest viewport if
+    // valid; zero extent fallback is for investigation only. Keep guest
+    // state and the normal unresolved raw-packet guard intact.
     void ReplayFixedLinesDiagnostic(uint32_t start,uint32_t count){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!initialized_||state_.vs_handle!=0x42||state_.vs||state_.ps||
-           !count||count>262144||count%2||state_.viewport.w||state_.viewport.h||
+           !count||count>262144||count%2||
+           ((state_.viewport.w==0)!=(state_.viewport.h==0))||
            state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||
            state_.viewport.max_z!=1||state_.ss_offset_x||state_.ss_offset_y||
            state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
@@ -341,12 +341,15 @@ public:
            state_.rs[gpu::kRsStencilEnable]||state_.scissor_count||
            std::any_of(state_.textures.begin(),state_.textures.end(),[](auto p){return p!=0;})||
            std::any_of(state_.palettes.begin(),state_.palettes.end(),[](auto p){return p!=0;}))
-            throw std::logic_error("Unsupported zero-viewport diagnostic line replay profile");
+            throw std::logic_error("Unsupported diagnostic line replay profile");
         gpu::TextureDesc desc{};
         if(!gpu::DescribeSurface(state_.rt,desc)||!desc.width||!desc.height)
             throw std::invalid_argument("Missing replay target extent");
         auto replay=state_;
-        replay.viewport={0,0,desc.width,desc.height,0,1};
+        if(!replay.viewport.w&&!replay.viewport.h)
+            replay.viewport={0,0,desc.width,desc.height,0,1};
+        else if(replay.viewport.w!=desc.width||replay.viewport.h!=desc.height)
+            throw std::logic_error("Diagnostic line profile requires full target viewport");
         // Reduced fixed-function profile: texture sampling, lighting, fog,
         // stencil and polygon culling are inactive for these unlit lines.
         // This does not translate hardware clip, multisample or raster hints.
