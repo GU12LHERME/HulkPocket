@@ -76,7 +76,11 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     pc=$(sed -n 's/.*pc_minus_module_base=\(0x[0-9A-Fa-f]*\).*/\1/p' "$execution_log" | tail -n 1)
     if [[ -n "$pc" && -x "$PREFIX/bin/llvm-addr2line" ]]; then
         echo "Fault native function:"
-        "$PREFIX/bin/llvm-addr2line" -f -C -e "$module" "$pc" || true
+        fault_symbol=$("$PREFIX/bin/llvm-addr2line" -f -C -e "$module" "$pc" | head -n 1) || fault_symbol=""
+        printf '%s\n' "$fault_symbol"
+        if [[ "$fault_symbol" == *sub_0038A2C0* ]]; then
+            python tools/report_hulk_command_context.py "$generated" || true
+        fi
         if [[ -x "$PREFIX/bin/llvm-objdump" ]]; then
             echo "Native instruction window:"
             "$PREFIX/bin/llvm-objdump" -d --start-address="$((pc-24))" --stop-address="$((pc+16))" "$module" || true
