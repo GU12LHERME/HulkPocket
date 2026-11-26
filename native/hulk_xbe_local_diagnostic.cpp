@@ -117,6 +117,9 @@ int main(int argc,char** argv) {
                 using namespace hulkpocket;
                 HulkKernelDataRegistry registry;
                 auto imports=ScanXbeKernelImports(loaded,guest);
+                if(!imports.complete) throw std::runtime_error(imports.error);
+                guest.Commit(0x07200000,guest.PageSize());
+                HulkKernelClock clock(guest,registry,0x07200000,10000);
                 auto guards=PlanMissingKernelDataGuards(registry,imports,guest,0x08000000,0x08200000);
                 for(auto g:guards) std::cout << "Unsupported data ordinal " << g.ordinal
                     << " guard=0x" << std::hex << g.address << std::dec << '\n';
@@ -136,7 +139,10 @@ int main(int argc,char** argv) {
                     uint32_t target=0;
                     if(HulkKernelExportKind(ordinal)==KernelExportKind::Function)
                         target=0xFE000000u+ordinal*4u;
-                    else for(auto g:guards) if(g.ordinal==ordinal) target=g.address;
+                    else {
+                        target=registry.Resolve(ordinal).guest_data;
+                        if(!target) for(auto g:guards) if(g.ordinal==ordinal) target=g.address;
+                    }
                     if(!target) throw std::runtime_error("Missing diagnostic binding");
                     guest.Write32(slot,target);
                 }
@@ -148,7 +154,7 @@ int main(int argc,char** argv) {
                 if(pid==0) {
                     alarm(15);
                     try {
-                        XbeKernelSession session(guest,0x09000000,0x01000000);
+                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock);
                         int status=session.Run(entry,cpu,loaded.entry);
                         std::cerr << "Guest entry status: " << status << std::endl;
                         _exit(status==0?0:5);

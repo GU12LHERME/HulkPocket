@@ -1,6 +1,7 @@
 // Local probe: verifies dispatcher binding inside the same ELF as guest code.
 // Does not execute guest code until Xbox TLS and kernel import setup are ready.
 #include "portable_xbe_dispatch.h"
+#include "xbe_guest_thread_exit.h"
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -49,6 +50,10 @@ int hulk_entry_execute_with_kernel(X86Context* cpu, uint8_t* base, uint32_t entr
         std::fprintf(stderr,"Entering guest at %08X ESP=%08X\n",entry,cpu->esp);
         dispatch.Call(*cpu,base,entry);
         std::fprintf(stderr,"Guest entry returned\n");
+        return 0;
+    } catch(const hulkpocket::GuestThreadExit& e) {
+        cpu->eax=e.code;
+        std::fprintf(stderr,"Guest thread exited: %08X\n",e.code);
         return 0;
     } catch(const std::exception& e) {
         std::fprintf(stderr,"Guest stopped: %s; last indirect target=%08X\n",

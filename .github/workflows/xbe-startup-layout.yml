@@ -6,6 +6,7 @@ on:
       - 'native/hulk_xbe_local_diagnostic.cpp'
       - 'native/portable_xbe_image.*'
       - 'native/xbe_first_entry_probe.cpp'
+      - 'native/xbe_guest_thread_exit.h'
       - 'native/*xbe_kernel*'
       - 'native/hulk_kernel*'
       - 'native/xbe_initial_cpu.h'
@@ -47,6 +48,8 @@ jobs:
           /tmp/bindings
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/entry-session
           /tmp/entry-session
+          g++ -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-session
+          timeout 20 /tmp/kernel-session
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_kernel_data.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-data
           /tmp/kernel-data
           g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o
@@ -68,6 +71,8 @@ jobs:
           qemu-aarch64 /tmp/bindings-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk native/test_xbe_entry_session.cpp native/xbe_kernel_imports.cpp native/xbox_guest_address_space.cpp -o /tmp/entry-session-arm64
           qemu-aarch64 /tmp/entry-session-arm64
+          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror -pthread -I/tmp/hulk-sdk native/test_xbe_kernel_session.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-session-arm64
+          timeout 20 qemu-aarch64 /tmp/kernel-session-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_kernel_data.cpp native/xbox_guest_address_space.cpp -o /tmp/kernel-data-arm64
           qemu-aarch64 /tmp/kernel-data-arm64
           aarch64-linux-gnu-g++ -std=c++17 -Wall -Wextra -Werror -I/tmp/hulk-sdk -c native/portable_xbe_image.cpp -o /tmp/portable_xbe_image.o

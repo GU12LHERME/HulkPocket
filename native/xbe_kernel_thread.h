@@ -5,7 +5,7 @@
 namespace hulkpocket {
 // Layout reference: Cxbx-Reloaded src/core/kernel/common/types.h
 // blob 7da7fbc24a1ca3b84b2305752af741aa0feb5552.
-// Diagnostic single thread only; scheduler/APC state is not implemented.
+// Diagnostic thread layout; scheduler/APC state is not implemented.
 inline void InitializeKernelThread(XboxGuestAddressSpace& mem,uint32_t pcr,
     uint32_t thread,uint32_t stack_top,uint32_t stack_bottom,
     uint32_t esp,uint32_t tls,uint32_t handle) {
@@ -28,6 +28,7 @@ inline void InitializeKernelThread(XboxGuestAddressSpace& mem,uint32_t pcr,
     mem.Write32(pcr+0x28,thread);
     mem.Write32(pcr+0x50,pcr+0x50);
     mem.Write32(pcr+0x54,pcr+0x50);
+    mem.Write32(thread,0x00800006u); // dispatcher type 6, size 0x80 dwords
     mem.Write32(thread+0x10,thread+0x10);
     mem.Write32(thread+0x14,thread+0x10);
     mem.Write32(thread+0x1c,stack_top);
