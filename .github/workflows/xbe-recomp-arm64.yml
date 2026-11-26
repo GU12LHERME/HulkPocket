@@ -274,8 +274,8 @@ jobs:
             -o "$RUNNER_TEMP/hulk-xbe-local-diagnostic-android-arm64"
           "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-xbe-local-diagnostic-android-arm64" |
             grep -q AArch64
-          "$ndk/llvm-nm" -D -C "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" |
-            grep -q 'x86_icall(X86Context'
+          "$ndk/llvm-nm" -D -C "$RUNNER_TEMP/libhulkpocket-portable-xbe-dispatch.so" > "$RUNNER_TEMP/hulk-runtime-exported-symbols.txt"
+          grep -Fq 'x86_icall(X86Context' "$RUNNER_TEMP/hulk-runtime-exported-symbols.txt"
           echo "Portable XboxXBERecomp x86_icall ARM64 ELF shared library linked with Android NDK; synthetic game entry only." >> "$GITHUB_STEP_SUMMARY"
           echo "Tested the actual upstream X86Context guest state with real native AArch64 fiber stack switching." >> "$GITHUB_STEP_SUMMARY"
       - name: Compile actual XboxXBERecomp static recompiler for Linux host
