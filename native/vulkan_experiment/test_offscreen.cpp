@@ -228,6 +228,23 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("captured NV2A pixel combiner",f.Pixel(32,32),{32,255,64,128});
         guest_state.ps.reset();
+        // Upload the actual synthetic microcode through the NV2A window,
+        // split across packets, starting at a nonzero instruction slot.
+        const auto original=guest_state.vs->program;
+        hulkpocket::ApplyNv2aState(guest_state,cursor,{{0x1e94,2},{0x1e9c,3},{0x1ea0,3}},true);
+        for(unsigned i=0;i<4;++i)hulkpocket::ApplyNv2aState(guest_state,cursor,{{0xb00+i*4,original[i]}},true);
+        bool short_program=false;
+        try{(void)hulkpocket::CaptureNv2aVertexProgram(cursor,2);}catch(const std::logic_error&){short_program=true;}
+        if(!short_program)throw std::runtime_error("Incomplete vertex upload accepted");
+        for(unsigned i=4;i<8;++i)hulkpocket::ApplyNv2aState(guest_state,cursor,{{0xb00+(i-4)*4,original[i]}},true);
+        guest_state.vs->program=hulkpocket::CaptureNv2aVertexProgram(cursor,2);
+        if(guest_state.vs->program!=original)throw std::runtime_error("NV2A vertex upload differs");
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("captured NV2A vertex program",f.Pixel(32,32),{0,64,255,255});
+        hulkpocket::ApplyNv2aState(guest_state,cursor,{{0x1e94,0}},true);
+        bool wrong_mode=false;
+        try{(void)hulkpocket::CaptureNv2aVertexProgram(cursor,2);}catch(const std::logic_error&){wrong_mode=true;}
+        if(!wrong_mode)throw std::runtime_error("Fixed mode accepted as programmable");
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");

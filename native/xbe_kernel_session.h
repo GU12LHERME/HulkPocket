@@ -1148,7 +1148,7 @@ private:
                 const bool zero_viewport=!synced.viewport.w||!synced.viewport.h;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 const bool opted_in=allow&&std::strcmp(allow,"1")==0;
-                if(synced.vs&&!live.diagnostic_lit_returns){
+                if(synced.vs&&synced.vs->program.empty()&&!live.diagnostic_lit_returns){
                     std::fprintf(stderr,"D3D PACKED NORMAL GEOMETRY PASS vertices=%u lighting=%u specular=%u ambient=%08X diffuse_source=%u ambient_source=%u\n",
                         vertices,synced.rs[gpu::kRsLighting],synced.rs[gpu::kRsSpecularEnable],synced.rs[gpu::kRsAmbient],
                         synced.rs[gpu::kRsDiffuseMaterialSource],synced.rs[gpu::kRsAmbientMaterialSource]);
@@ -1169,12 +1169,14 @@ private:
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=indexed?0u:Arg(cpu,1),count=indexed?Arg(cpu,1):Arg(cpu,2);
                 const auto indices=indexed?Arg(cpu,2):0u;
-                if(synced.ps&&VulkanPreviewSelected()&&opted_in){
+                if((synced.ps||(synced.vs&&!synced.vs->program.empty()))&&VulkanPreviewSelected()&&opted_in){
                     if(frame_draws>=live.diagnostic_draw_limit)
                         throw std::runtime_error("Captured pixel draw budget reached");
-                    live.bridge.ReplayCapturedPixelDiagnostic(Arg(cpu,0),start,count,indices);
+                    live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices);
                     ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
-                    std::fprintf(stderr,"D3D CAPTURED PIXEL DRAW RETURN: handle=%08X combiners=%u vertices=%u\n",synced.ps->handle,synced.ps->def[53]&255,vertices);
+                    std::fprintf(stderr,"D3D CAPTURED SHADER DRAW RETURN: vs=%08X instructions=%zu ps=%08X combiners=%u vertices=%u\n",
+                        synced.vs_handle,synced.vs?synced.vs->program.size()/4:0,
+                        synced.ps?synced.ps->handle:0,synced.ps?synced.ps->def[53]&255:0,vertices);
                     Ret(cpu,3,0);return;
                 }
                 if(((!indexed&&caller==0x0031c10f)||(indexed&&caller==0x00327371&&indices))&&(fvf==0x142||synced.vs)&&

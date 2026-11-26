@@ -303,9 +303,13 @@ public:
         gpu::CheckedGuestRange(ptr,0x14+16*16);
         const auto flags=Read(uint64_t(ptr)+4);
         auto pixel=Read(uint64_t(device)+0x784);
-        if((flags!=0x400&&flags!=0)||Read(uint64_t(ptr)+8)||Read(uint64_t(ptr)+12)||
-           (pixel&&!capture_pixel))
+        const auto program_size=Read(uint64_t(ptr)+8),program_slots=Read(uint64_t(ptr)+12);
+        const bool programmable=capture_pixel&&(flags&0x10u);
+        if((pixel&&!capture_pixel)||(!programmable&&((flags!=0x400&&flags!=0)||program_size||program_slots))||
+           (programmable&&((flags&~0x3c10u)||!program_size||program_size>136||program_slots<program_size)))
             throw std::logic_error("Unsupported guest shader program or flags");
+        if(capture_pixel&&!programmable&&push_constants_.execution_mode_seen&&push_constants_.execution_mode==2)
+            throw std::logic_error("NV2A program selected without supported vertex declaration");
         std::array<uint32_t,4> textures{};
         for(unsigned st=0;st<4;++st){
             textures[st]=Read(uint64_t(device)+0xf88+4*st);
@@ -359,7 +363,7 @@ public:
         // Preserve the exact declaration for the upstream geometry assembler.
         // The GLES lighting stage is still deliberately guarded.
         std::shared_ptr<gpu::VertexShader> packed;
-        if(!fvf&&flags==0&&textures[0]&&state_.streams[0].vb&&state_.streams[0].stride==24){
+        if(!programmable&&!fvf&&flags==0&&textures[0]&&state_.streams[0].vb&&state_.streams[0].stride==24){
             auto layout=std::make_shared<gpu::VertexShader>();
             layout->inputs.fill({});
             layout->inputs[0]={0,0,0x32};
@@ -377,6 +381,39 @@ public:
                          Read(slot+4)!=want.offset||Read(slot+12))match=false;
             }
             if(match){packed=std::move(layout);fvf=ptr|1u;}
+        }
+        if(programmable){
+            auto layout=std::make_shared<gpu::VertexShader>();
+            layout->handle=ptr|1u;layout->program_type=0x2078;
+            layout->program=CaptureNv2aVertexProgram(push_constants_,program_size);
+            for(unsigned i=0;i<16;++i){
+                auto slot=uint64_t(ptr)+0x14+16*i;
+                auto stream=Read(slot),offset=Read(slot+4),type=Read(slot+8);
+                if(!type||type==2)continue;
+                // Explicit supported formats only; no tessellation or implicit
+                // vertex inputs. Bounds are checked again by the assembler.
+                unsigned bytes=0;
+                switch(type){
+                    case 0x12:case 0x16:case 0x40:bytes=4;break;
+                    case 0x22:bytes=8;break;
+                    case 0x32:case 0x72:bytes=12;break;
+                    case 0x42:bytes=16;break;
+                    case 0x11:case 0x15:bytes=2;break;
+                    case 0x21:case 0x25:bytes=4;break;
+                    case 0x31:case 0x35:bytes=6;break;
+                    case 0x41:case 0x45:bytes=8;break;
+                    case 0x14:bytes=1;break;case 0x24:bytes=2;break;
+                    case 0x34:bytes=3;break;case 0x44:bytes=4;break;
+                    default:throw std::logic_error("Unsupported NV2A program vertex format");
+                }
+                if(stream>=16||!state_.streams[stream].vb||Read(slot+12)&0xffffu||
+                   uint64_t(offset)+bytes>state_.streams[stream].stride)
+                    throw std::logic_error("Unsupported NV2A program vertex input");
+                layout->inputs[i]={int(stream),offset,type};
+                layout->stream_stride[stream]=state_.streams[stream].stride;
+            }
+            if(layout->inputs[0].stream<0)throw std::logic_error("NV2A program has no position input");
+            packed=std::move(layout);fvf=ptr|1u;
         }
         if(!fvf)throw std::logic_error("Guest fixed vertex declaration not equivalent to supported diffuse or packed-normal layout");
         auto next=state_;
@@ -413,7 +450,8 @@ public:
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         gpu::Assembled a;
         const auto regs=state_.vs?0x205u:((state_.vs_handle&0x100u)?0x209u:9u);
-        if(!gpu::Assemble(state_,prim,start,count,ip,a)||a.regs!=regs)
+        const bool program=state_.vs&&!state_.vs->program.empty();
+        if(!gpu::Assemble(state_,prim,start,count,ip,a)||(program?!(a.regs&1):a.regs!=regs))
             throw std::runtime_error("Guest diffuse geometry assembly failed");
         return a.vertex_count;
     }
@@ -586,9 +624,10 @@ public:
     // Narrow live programmable-pixel path: preserve only the existing
     // verified fixed diffuse vertex profile and captured combiner words.
     // All other raw configuration remains guarded; this is not general D3D replay.
-    void ReplayCapturedPixelDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
+    void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
-        if(!initialized_||!state_.ps||state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42)||
+        const bool program=state_.vs&&!state_.vs->program.empty();
+        if(!initialized_||(!state_.ps&&!program)||(!program&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42)))||
            !count||count>262144||!((prim==5&&count%3==0)||(prim==6&&count>=3))||
            state_.scissor_count||state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||state_.viewport.max_z!=1||
            state_.ss_offset_x||state_.ss_offset_y||state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||

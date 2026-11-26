@@ -65,6 +65,10 @@ struct Nv2aConstantCursor {
     std::array<uint8_t,4> texture_words{}, texture_dirty{};
     std::array<bool,4> texture_control{};
     std::bitset<0x800> combiner_seen{};
+    std::array<uint32_t,136*4> program{};
+    std::bitset<136*4> program_seen{};
+    uint32_t program_word=0,program_start=0,execution_mode=0;
+    bool program_load_seen=false,program_start_seen=false,execution_mode_seen=false,context_write=false;
     bool TextureReady(unsigned stage)const{
         return texture_words.at(stage)==3&&texture_dirty.at(stage)&&
             (texture_dirty.at(stage)==3||texture_control.at(stage));
@@ -113,6 +117,23 @@ inline std::shared_ptr<gpu::PixelShader> CaptureNv2aCombiner(const gpu::State& s
     if(n){d[10]=get(kMPsConstant0);d[18]=get(kMPsConstant1);}
     return shader;
 }
+// NV097 transform upload/selection: slots hold four dwords, the upload
+// window advances the hardware cursor across packets. Keep prior slots
+// when another program is loaded; a shader can select an existing range.
+inline std::vector<uint32_t> CaptureNv2aVertexProgram(const Nv2aConstantCursor& c,uint32_t instructions){
+    if(!c.execution_mode_seen||c.execution_mode!=2||!c.program_start_seen||c.context_write||
+       !instructions||instructions>136||c.program_start>136-instructions)
+        throw std::logic_error("Unsupported or incomplete NV2A vertex selection");
+    std::vector<uint32_t> result;result.reserve(instructions*4);
+    for(uint32_t i=0;i<instructions*4;++i){
+        auto pos=c.program_start*4+i;
+        if(!c.program_seen.test(pos))throw std::logic_error("Incomplete NV2A vertex program upload");
+        auto v=c.program[pos];result.push_back(v);
+        if(i%4==3&&bool(v&1)!=(i+1==instructions*4))
+            throw std::logic_error("NV2A vertex program termination mismatch");
+    }
+    return result;
+}
 // State-only method subset, based on XboxXBERecomp ApplyConstant/SetSimple.
 // Entire batch validated before committing; do not silently drop a method.
 // Immediate draws, texture commands, reports, and GPU control flow are pending.
@@ -122,6 +143,28 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
     auto constants=state.vsc;
     auto next=cursor;
     for(auto [m,v]:methods){
+        if(capture_combiner){
+            if(m==0x1e94){
+                if(v!=0&&v!=2&&v!=4)throw std::logic_error("Unsupported NV2A transform execution mode");
+                next.execution_mode=v;next.execution_mode_seen=true;simple[m/4]=v;continue;
+            }
+            if(m==0x1e98){
+                if(v)throw std::logic_error("NV2A vertex context writes not integrated");
+                next.context_write=false;simple[m/4]=v;continue;
+            }
+            if(m==0x1e9c||m==0x1ea0){
+                if(v>=136)throw std::invalid_argument("NV2A program slot out of range");
+                if(m==0x1e9c){next.program_word=v*4;next.program_load_seen=true;}
+                else{next.program_start=v;next.program_start_seen=true;}
+                simple[m/4]=v;continue;
+            }
+            if(m>=0xb00&&m<0xb80&&m%4==0){
+                if(!next.program_load_seen||next.program_word>=next.program.size())
+                    throw std::invalid_argument("NV2A program data without valid load cursor");
+                next.program[next.program_word]=v;next.program_seen.set(next.program_word++);
+                continue;
+            }
+        }
         if(m==0x1ea4){
             if(v>=constants.size())throw std::invalid_argument("NV2A constant index out of range");
             next.reg=v;next.component=0;next.loaded=true;continue;
