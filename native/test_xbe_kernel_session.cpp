@@ -29,6 +29,27 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         call(*c,base,cb,258,{42});
         assert(false);
     }
+    const char name[]="D:\\data.bin";
+    memory->Write(0x10900,name,sizeof(name));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    memory->Write32(0x10950,0);memory->Write32(0x10954,0x10940);
+    memory->Write32(0x10958,0);
+    call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,0,0x40});
+    assert(c->eax==0);
+    auto file=memory->Read32(0x10960);
+    call(*c,base,cb,219,{file,0,0,0,0x10968,0x10980,4,0});
+    assert(c->eax==0 && memory->Read32(0x10980)==0x6b6c7548);
+    call(*c,base,cb,211,{file,0x10968,0x10990,24,5});
+    assert(c->eax==0 && memory->Read32(0x10998)==4);
+    call(*c,base,cb,219,{file,0,0,0,0x10968,0x10980,4,0});
+    assert(c->eax==0xc0000011u);
+    call(*c,base,cb,187,{file});
+    assert(c->eax==0);
+    const char escape[]="D:\\..\\outside";
+    memory->Write(0x10900,escape,sizeof(escape));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,202,{0x10960,0x80000000,0x10950,0x10968,0,0x40});
+    assert(c->eax==0xc0000034u);
     call(*c,base,cb,166,{0x1000,0x100000,0x1fffff,0x10000,4});
     auto physical=c->eax;
     assert(physical>=0x80100000 && physical<0x80200000 && physical%0x10000==0);
@@ -117,8 +138,15 @@ int main() {
     X86Context cpu{};
     cpu.esp=0x1fff0; cpu.thread_handle=0x10; cpu.fs_base=0x10600;
     mem.Write32(0x10628,0x10700);
-    XbeKernelSession session(mem,0x09000000,0x01000000,tls);
+    char dir[]="/tmp/hulk-disc-XXXXXX";
+    assert(mkdtemp(dir));
+    std::string path=std::string(dir)+"/DATA.BIN";
+    int fd=open(path.c_str(),O_CREAT|O_WRONLY|O_EXCL,0600);
+    assert(fd>=0 && write(fd,"Hulk",4)==4);
+    close(fd);
+    XbeKernelSession session(mem,0x09000000,0x01000000,tls,nullptr,dir);
     assert(session.Run(entry,cpu,0x1000)==0);
     assert(ran==1);
     assert(mem.Read32(0x0A000404)==1);
+    assert(unlink(path.c_str())==0 && rmdir(dir)==0);
 }

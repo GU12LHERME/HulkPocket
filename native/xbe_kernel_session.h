@@ -7,6 +7,7 @@
 #include "xbe_kernel_rtl.h"
 #include "xbe_kernel_virtual_memory.h"
 #include "xbe_kernel_physical_memory.h"
+#include "xbe_kernel_files.h"
 #include <map>
 #include <chrono>
 #include <array>
@@ -31,6 +32,7 @@ private:
     XbeKernelPool pool_;
     XbeVirtualMemory virtual_;
     XbePhysicalMemory physical_;
+    XbeDiscFiles files_;
     XbeTlsTemplate tls_;
     const HulkKernelClock* clock_;
     std::mutex lock_;
@@ -202,6 +204,23 @@ private:
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case 190: case 202: {
+                unsigned n=ordinal==190?9:6;Check(cpu,n);
+                auto status=files_.Open(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),
+                    ordinal==190?Arg(cpu,7):1,Arg(cpu,n-1));
+                Ret(cpu,n,status);return;
+            }
+            case 219: {
+                Check(cpu,8);
+                if(Arg(cpu,2)) throw std::runtime_error("File APC not implemented");
+                auto event=Arg(cpu,1);
+                if(event && !events_.count(event)){Ret(cpu,8,0xc0000008u);return;}
+                auto status=files_.Read(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
+                if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
+                Ret(cpu,8,status);return;
+            }
+            case 211: Check(cpu,5);Ret(cpu,5,files_.Query(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
+            case 226: Check(cpu,5);Ret(cpu,5,files_.Set(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
             case 184: case 199: {
                 unsigned n=ordinal==184?5:3;Check(cpu,n);
                 auto bp=Arg(cpu,0), sp=Arg(cpu,ordinal==184?2:1);
@@ -291,6 +310,7 @@ private:
             }
             case 187: {
                 Check(cpu,1);auto h=Arg(cpu,0);
+                if(files_.Close(h)){Ret(cpu,1,0);return;}
                 auto it=events_.find(h);
                 // Keep event body alive until session end (in-flight waits may refer to it).
                 if(it!=events_.end()){events_.erase(it);Ret(cpu,1,0);return;}
@@ -342,8 +362,8 @@ private:
     }
 public:
     XbeKernelSession(XboxGuestAddressSpace& mem,uint32_t base,uint32_t size,
-                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr)
-        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),tls_(tls),clock_(clock) {}
+                     XbeTlsTemplate tls={},const HulkKernelClock* clock=nullptr,const std::string& disc_root={})
+        :mem_(mem),pool_(mem,base,size),virtual_(mem),physical_(mem),files_(mem,disc_root),tls_(tls),clock_(clock) {}
     XbeKernelSession(const XbeKernelSession&)=delete;
     XbeKernelSession& operator=(const XbeKernelSession&)=delete;
     ~XbeKernelSession() { Stop(); }

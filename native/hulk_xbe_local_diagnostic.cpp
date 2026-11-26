@@ -27,10 +27,12 @@
 // from your own game and trusted source code.
 int main(int argc,char** argv) {
     std::vector<std::string> paths;
+    std::string disc_root;
     bool imports_requested=false, bootstrap_requested=false, execute_requested=false;
     for (int i=1; i<argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg=="--imports") imports_requested=true;
+        if (arg=="--disc-root" && i+1<argc) disc_root=argv[++i];
+        else if (arg=="--imports") imports_requested=true;
         else if (arg=="--execute-diagnostic") execute_requested=true;
         else if (arg=="--bootstrap") bootstrap_requested=true;
         else if (arg.rfind("--",0)==0) {
@@ -44,6 +46,7 @@ int main(int argc,char** argv) {
         std::cerr << "usage: hulk_xbe_local_diagnostic <original.xbe> [trusted-recompiled-arm64.so] [--imports] [--bootstrap]\n";
         return 2;
     }
+    if(!disc_root.empty() && !execute_requested) { std::cerr << "--disc-root requires execution diagnostic\n"; return 2; }
     if(execute_requested && (paths.size()!=2 || bootstrap_requested)) {
         std::cerr << "Execution requires a module and cannot be combined with --bootstrap\n";
         return 2;
@@ -156,7 +159,7 @@ int main(int argc,char** argv) {
                 if(pid==0) {
                     alarm(15);
                     try {
-                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock);
+                        XbeKernelSession session(guest,0x09000000,0x01000000,boot.tls,&clock,disc_root);
                         int status=session.Run(entry,cpu,loaded.entry);
                         std::cerr << "Guest entry status: " << status << std::endl;
                         _exit(status==0?0:5);
