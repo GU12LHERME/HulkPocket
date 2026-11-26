@@ -1,0 +1,3 @@
+# Missing guest entry checkpoint
+
+RP6 revision 257f08e completed KeSetBasePriorityThread and stopped on an unmapped indirect call to USA VA 003CF9B8. This is not evidence that the target is a function start: it could be an omitted callback, an interior instruction, or invalid data. The runtime captures the caller/guest frame before rejecting missing entries. A local read-only report classifies the original XBE section and file-backed target bytes and checks generated instruction comments and mapping. The current target can be inspected without rebuilding via `python tools/report_missing_guest.py ~/default.xbe ~/hulk-generated --target 003CF9B8`. No guest object changes or fabricated return values. Further action depends on the actual local report.

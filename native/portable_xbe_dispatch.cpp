@@ -62,8 +62,11 @@ void PortableXbeDispatch::Call(
     const auto it = std::lower_bound(
         mappings_.begin(), mappings_.end(), target,
         [](const X86FuncMapping& m, std::uint32_t v) { return m.guest < v; });
-    if (it == mappings_.end() || it->guest != target)
+    if (it == mappings_.end() || it->guest != target) {
+        ctx.last_icall=target;
+        if(graphics_callback)graphics_callback(ctx,base,kMissingGuestEntry);
         throw std::out_of_range("unmapped Xbox guest entry; code was not recompiled");
+    }
     ctx.last_icall = target;
     // The local USA trace and generated source confirmed this is a
     // deliberate self-loop. Capture the checked guest call frame before

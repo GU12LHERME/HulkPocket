@@ -111,6 +111,13 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     memory->Write(0x12700,launch,sizeof(launch));
     call(*c,base,cb,kXapiLaunchImage,{0x12700,0});assert(c->eax==2);
     call(*c,base,cb,kXapiLaunchImage,{0,0});assert(c->eax==2);
+    {
+        auto old=c->esp;c->esp-=4;memory->Write32(c->esp,0x123456);
+        c->last_icall=0x003cf9b8;bool stopped=false;
+        try{cb(*c,base,kMissingGuestEntry);}catch(const std::runtime_error&){stopped=true;}
+        assert(stopped&&c->esp==old-4&&c->last_icall==0x003cf9b8);
+        c->esp=old;
+    }
     // Diagnostic stop must not pretend to allocate or pop the guest stack.
     {
         auto old=c->esp;

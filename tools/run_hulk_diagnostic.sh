@@ -29,6 +29,9 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     status=0
     "$out" "$xbe" "$module" --execute-diagnostic "${args[@]}" >"$execution_log" 2>&1 || status=$?
     cat "$execution_log"
+    if grep -q "MISSING GUEST target=" "$execution_log"; then
+        python tools/report_missing_guest.py "$xbe" "$generated" --log "$execution_log" || true
+    fi
     if grep -q "HULK ALLOC caller=" "$execution_log"; then
         python tools/report_hulk_allocator.py "$generated" "$execution_log" || true
     fi

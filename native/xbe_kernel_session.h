@@ -386,6 +386,18 @@ private:
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
         switch(ordinal) {
+            case kMissingGuestEntry: {
+                Check(cpu,0);
+                std::fprintf(stderr,"MISSING GUEST target=%08X caller=%08X ESP=%08X EAX=%08X EBX=%08X ECX=%08X EDX=%08X ESI=%08X EDI=%08X\n",
+                    cpu.last_icall,mem_.Read32(cpu.esp),cpu.esp,cpu.eax,cpu.ebx,cpu.ecx,cpu.edx,cpu.esi,cpu.edi);
+                for(unsigned i=0;i<12;++i){
+                    uint64_t a=uint64_t(cpu.esp)+i*4;
+                    if(a+4>XboxGuestAddressSpace::kSize||!mem_.IsCommitted(uint32_t(a),4))break;
+                    std::fprintf(stderr,"Missing guest stack +%02X=%08X\n",i*4,mem_.Read32(uint32_t(a)));
+                }
+                DumpRecent();
+                throw std::runtime_error("Unmapped Xbox guest entry; target and caller captured");
+            }
             case kHulkAllocatorStop: {
                 Check(cpu,0);
                 const auto ret=mem_.Read32(cpu.esp);

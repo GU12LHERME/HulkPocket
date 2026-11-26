@@ -12,6 +12,7 @@ on:
       - 'native/test_xbe_graphics_boundary.cpp'
       - 'tools/link_hulk_cached.py'
       - 'tools/report_hulk_allocator.py'
+      - 'tools/report_missing_guest.py'
       - 'native/portable_xbe_dispatch.cpp'
       - 'native/xbe_diagnostic_runtime.cpp'
       - 'native/portable_xbe_cpu_services.*'
@@ -62,6 +63,7 @@ jobs:
           nm /tmp/graphics-boundary | grep ' T sub_00209C04$'
           python3 -m py_compile tools/link_hulk_cached.py tools/report_hulk_allocator.py
           python3 tools/report_hulk_allocator.py --self-test
+          python3 tools/report_missing_guest.py --self-test
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout
