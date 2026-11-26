@@ -46,6 +46,8 @@ private:
     std::map<uint32_t,Event> events_;
     uint32_t next_event_=0x2000;
     std::map<uint32_t,uint32_t> critical_;
+    std::map<uint32_t,uint32_t> shutdown_notifications_;
+    uint32_t cache_pages_=16;
     bool stopping_=false;
     int worker_failure_=0;
     Entry entry_=nullptr;
@@ -251,6 +253,68 @@ private:
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case 47: {
+                // HAL_SHUTDOWN_REGISTRATION: callback, priority, LIST_ENTRY.
+                Check(cpu,2);auto registration=Arg(cpu,0);
+                if(registration%4 || !mem_.IsCommitted(registration,16))
+                    throw std::runtime_error("Invalid shutdown registration");
+                if(Arg(cpu,1)&255u) {
+                    auto callback=mem_.Read32(registration);
+                    if(!callback || !mem_.IsCommitted(callback,1))
+                        throw std::runtime_error("Invalid shutdown notification callback");
+                    if(shutdown_notifications_.size()>=128 && !shutdown_notifications_.count(registration))
+                        throw std::runtime_error("Shutdown notification capacity exhausted");
+                    shutdown_notifications_[registration]=callback;
+                    std::fprintf(stderr,"Registered shutdown notification %08X callback=%08X\n",registration,callback);
+                } else shutdown_notifications_.erase(registration);
+                // Diagnostic process has no firmware shutdown transition yet.
+                Ret(cpu,2,0);return;
+            }
+            case 35: Check(cpu,0);Ret(cpu,0,cache_pages_);return;
+            case 37: {
+                Check(cpu,1);auto pages=Arg(cpu,0);
+                if(pages>16384){Ret(cpu,1,0xc000000du);return;}
+                cache_pages_=pages;Ret(cpu,1,0);return;
+            }
+            case 24: {
+                // Selected DWORD settings for the NTSC-U compatibility profile.
+                Check(cpu,5);uint32_t v=0;
+                switch(Arg(cpu,0)) {
+                    case 7: v=1;break; // English
+                    case 8: v=0x00080000;break; // 480p, 4:3
+                    case 9: v=0;break; // stereo
+                    case 0x12: v=1;break; // DVD region
+                    case 0x103: v=0x00400100;break; // NTSC-M
+                    case 0x104: v=1;break; // North America
+                    default: Ret(cpu,5,0xc0000034u);return;
+                }
+                auto type=Arg(cpu,1),out=Arg(cpu,2),len=Arg(cpu,3),needed=Arg(cpu,4);
+                for(auto p:{type,needed}) if(p&&!mem_.IsCommitted(p,4))
+                    throw std::runtime_error("Invalid setting output pointer");
+                Output(needed,4);
+                if(len<4){Ret(cpu,5,0xc0000023u);return;}
+                if(!out||!mem_.IsCommitted(out,4)){Ret(cpu,5,0xc000000du);return;}
+                Output(type,4);Output(out,v);Ret(cpu,5,0);return;
+            }
+            case 301: {
+                Check(cpu,1);uint32_t result;
+                switch(Arg(cpu,0)) {
+                    case 0: result=0;break;
+                    case 0x102: result=1460;break;
+                    case 0xc0000008u: result=6;break;
+                    case 0xc000000du: result=87;break;
+                    case 0xc0000011u: result=38;break;
+                    case 0xc0000017u: result=8;break;
+                    case 0xc0000022u: result=5;break;
+                    case 0xc0000023u: result=122;break;
+                    case 0xc0000034u: result=2;break;
+                    case 0xc000003au: result=3;break;
+                    case 0xc0000043u: result=32;break;
+                    case 0xc0000185u: result=1117;break;
+                    default: result=317;break;
+                }
+                Ret(cpu,1,result);return;
+            }
             case 190: case 202: {
                 unsigned n=ordinal==190?9:6;Check(cpu,n);
                 auto status=files_.Open(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),

@@ -35,6 +35,17 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         call(*c,base,cb,258,{42});
         assert(false);
     }
+    memory->Write32(0x10e00,0x11000);
+    memory->Write32(0x10e04,1);
+    call(*c,base,cb,47,{0x10e00,1});
+    call(*c,base,cb,47,{0x10e00,0});
+    call(*c,base,cb,35,{});assert(c->eax==16);
+    call(*c,base,cb,37,{64});assert(c->eax==0);
+    call(*c,base,cb,35,{});assert(c->eax==64);
+    call(*c,base,cb,24,{0x104,0x10e20,0x10e24,4,0x10e28});
+    assert(c->eax==0 && memory->Read32(0x10e20)==4 && memory->Read32(0x10e24)==1 && memory->Read32(0x10e28)==4);
+    call(*c,base,cb,24,{7,0,0,0,0x10e28});assert(c->eax==0xc0000023u);
+    call(*c,base,cb,301,{0xc0000034u});assert(c->eax==2);
     const char name[]="D:\\data.bin";
     memory->Write(0x10900,name,sizeof(name));
     call(*c,base,cb,289,{0x10940,0x10900});
