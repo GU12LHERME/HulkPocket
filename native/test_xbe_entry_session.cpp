@@ -1,5 +1,5 @@
 #include "xbe_entry_session.h"
-#include "xbe_kernel_pool_calls.h"
+#include "xbe_kernel_session.h"
 #include <cassert>
 using namespace hulkpocket;
 int main() {
@@ -43,4 +43,25 @@ int main() {
     assert(DispatchPoolCall(14,cpu,m,pool));
     assert(cpu.eax==allocated && cpu.esp==sp+8);
     assert(!DispatchPoolCall(399,cpu,m,pool));
+    XbeKernelSession session(m,0x2100000,static_cast<uint32_t>(m.PageSize()));
+    cpu.esp=sp;
+    m.Write32(sp+4,64);
+    auto entry=+[](X86Context* c,uint8_t* base,uint32_t address,XbeKernelSession::Callback call)->int {
+        assert(address==0x15000);
+        call(*c,base,15);
+        return 42;
+    };
+    assert(session.Run(entry,cpu,0x15000)==42);
+    assert(cpu.eax==0x2100000 && cpu.esp==sp+12);
+    auto bad=+[](X86Context* c,uint8_t* base,uint32_t,XbeKernelSession::Callback call)->int {
+        call(*c,base,399);
+        return 0;
+    };
+    rejected=false;
+    try { session.Run(bad,cpu,0x15000); }
+    catch(const std::runtime_error&) { rejected=true; }
+    assert(rejected);
+    cpu.esp=sp;
+    assert(session.Run(entry,cpu,0x15000)==42);
+    assert(cpu.eax==0x2100040);
 }
