@@ -1,0 +1,48 @@
+#pragma once
+#include "gpu/backend.h"
+#include <EGL/egl.h>
+#include <GLES3/gl3.h>
+#include <array>
+#include <thread>
+
+namespace hulkpocket {
+// First real renderer slice: a single offscreen color/depth/stencil target,
+// pretransformed untextured diffuse vertices. Not a general Xbox renderer.
+// All operations are synchronous on the EGL owner thread.
+class XbeGlesBackend final:public gpu::Backend {
+    EGLDisplay display_=EGL_NO_DISPLAY;
+    EGLContext context_=EGL_NO_CONTEXT;
+    EGLSurface surface_=EGL_NO_SURFACE;
+    GLuint program_=0,vao_=0,vbo_=0;
+    GLint extent_=-1;
+    uint32_t width_=0,height_=0,target_=0;
+    uint32_t fence_=0;
+    std::thread::id owner_{};
+    void Check() const;
+    void Target(const gpu::Surface&);
+    void Destroy() noexcept;
+public:
+    XbeGlesBackend()=default;
+    ~XbeGlesBackend() override;
+    XbeGlesBackend(const XbeGlesBackend&)=delete;
+    XbeGlesBackend& operator=(const XbeGlesBackend&)=delete;
+    bool Init(uint32_t,uint32_t) override;
+    void Clear(const gpu::State&,uint32_t,const uint8_t*,uint32_t,uint32_t,float,uint32_t) override;
+    void Draw(const gpu::State&,uint32_t,uint32_t,uint32_t,const uint8_t*) override;
+    void Present(const gpu::Surface&) override;
+    void Copy(const gpu::Surface&,const gpu::Surface&,uint32_t,uint32_t,uint32_t,float,float) override;
+    void Sync(uint32_t,uint32_t) override;
+    void SyncLate(uint32_t) override;
+    void Flush() override;
+    void SetGamma(const uint8_t*) override;
+    void ClearReport() override;
+    void GetReport(uint32_t) override;
+    uint32_t Fence() override;
+    bool FencePending(uint32_t) override;
+    void WaitFence(uint32_t) override;
+    bool Busy(uint32_t) override;
+    void WaitResource(uint32_t) override;
+    void WaitGpuFrame(uint64_t) override;
+    std::array<uint8_t,4> ReadPixel(uint32_t x,uint32_t y);
+};
+}

@@ -1,0 +1,51 @@
+name: XBE GLES renderer smoke
+on:
+  push:
+    branches: [experiment-xbe-recomp-android]
+    paths:
+      - 'native/*xbe_gles_backend*'
+      - 'native/xbe_d3d8_bridge.h'
+      - 'native/xbox_guest_address_space.*'
+      - 'third_party/xboxxberecomp/gpu/**'
+      - '.github/workflows/xbe-gles-backend.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  host:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Mesa
+        run: sudo apt-get update && sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri
+      - name: Fetch SDK context
+        run: |
+          mkdir -p /tmp/hulk-sdk/cpu
+          curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
+          test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
+      - name: Compile and render with real GLES
+        run: |
+          g++ -std=c++20 -O2 -pthread -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv2 -o /tmp/hulk-gles
+          EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 /tmp/hulk-gles
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Fetch SDK context
+        run: |
+          mkdir -p /tmp/hulk-sdk/cpu
+          curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
+          test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
+      - name: Compile Android ARM64 GLES diagnostic
+        run: |
+          NDK="$ANDROID_HOME/ndk/28.2.13676358"
+          if [ ! -d "$NDK" ]; then sdkmanager "ndk;28.2.13676358"; fi
+          TOOL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p build/gles
+          "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv3 -o build/gles/hulk-gles-smoke
+          "$TOOL/llvm-readelf" -h -d build/gles/hulk-gles-smoke | tee build/gles/elf.txt
+          grep -q AArch64 build/gles/elf.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hulk-gles-android-arm64
+          path: build/gles/
