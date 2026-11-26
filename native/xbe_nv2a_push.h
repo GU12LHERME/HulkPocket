@@ -4,6 +4,8 @@
 #include <bit>
 #include <vector>
 #include <stdexcept>
+#include <cstdio>
+#include <string>
 namespace hulkpocket {
 struct Nv2aMethod {uint32_t method,value;};
 // Decode the XDK scratch buffer method packets, as in upstream Walk.
@@ -26,6 +28,15 @@ inline std::vector<Nv2aMethod> DecodeNv2aMethods(XboxGuestAddressSpace& mem,uint
     return result;
 }
 
+// NV097_SET_TEXGEN_{S,T,R,Q}: stage stride 0x10; zero disables
+// automatic coordinates. NV097_SET_TEXTURE_CONTROL0: stage stride
+// 0x40; zero disables the hardware sampler and its auxiliary modes.
+// Source: XboxDev/nxdk lib/pbkit/nv_regs.h. Nonzero raw values are
+// not yet translated into sampler/coordinate-generation semantics.
+inline bool IsDisabledTextureMethod(uint32_t m){
+    return (m>=0x03c0&&m<=0x03fc&&m%4==0)||
+           m==0x1b0c||m==0x1b4c||m==0x1b8c||m==0x1bcc;
+}
 struct Nv2aConstantCursor {uint32_t reg=0,component=0;bool loaded=false;};
 // State-only method subset, based on XboxXBERecomp ApplyConstant/SetSimple.
 // Entire batch validated before committing; do not silently drop a method.
@@ -47,13 +58,21 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
             if(next.component==4){next.component=0;++next.reg;}
             continue;
         }
+        if(IsDisabledTextureMethod(m)){
+            if(v)throw std::logic_error("Enabled raw NV2A texture control/texgen not integrated");
+            simple[m>>2]=v;continue;
+        }
         switch(m){
             case gpu::kMBlendEnable:case gpu::kMSrcBlend:case gpu::kMDestBlend:
             case gpu::kMBlendOp:case gpu::kMZFunc:case gpu::kMColorWriteEnable:
             case gpu::kMAlphaTestEnable:case gpu::kMAlphaFunc:case gpu::kMAlphaRef:
             case gpu::kMZWriteEnable:
                 simple[m>>2]=v;break;
-            default:throw std::logic_error("NV2A method not integrated");
+            default:{
+                char detail[96];
+                std::snprintf(detail,sizeof(detail),"NV2A method not integrated: %04X=%08X",m,v);
+                throw std::logic_error(detail);
+            }
         }
     }
     state.simple=simple;state.vsc=constants;cursor=next;

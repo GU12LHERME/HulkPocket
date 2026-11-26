@@ -36,6 +36,24 @@ int main(){
         assert(pushed.simple[gpu::kMBlendEnable>>2]==1&&pushed.vsc[8][0]==1&&pushed.vsc[8][1]==2);
         ApplyNv2aState(pushed,cursor,{{0xb88,0x40400000},{0xb8c,0x40800000}});
         assert(cursor.reg==9&&cursor.component==0&&pushed.vsc[8][3]==4);
+        // Exact RP6 post-CreateDevice packet batch from ef17d47.
+        std::vector<Nv2aMethod> disable;
+        for(uint32_t stage=0;stage<4;++stage){
+            disable.push_back({0x1b0c+stage*0x40,0});
+            for(uint32_t coord=0;coord<3;++coord)disable.push_back({0x03c0+stage*0x10+coord*4,0});
+        }
+        assert(disable.size()==16);
+        for(auto m:disable)pushed.simple[m.method>>2]=0x1234;
+        ApplyNv2aState(pushed,cursor,disable);
+        for(auto m:disable)assert(pushed.simple[m.method>>2]==0);
+        bool enabled_rejected=false;
+        try{ApplyNv2aState(pushed,cursor,{{gpu::kMBlendEnable,0},{0x1b0c,0x40000000}});}
+        catch(const std::logic_error&){enabled_rejected=true;}
+        assert(enabled_rejected&&pushed.simple[gpu::kMBlendEnable>>2]==1);
+        enabled_rejected=false;
+        try{ApplyNv2aState(pushed,cursor,{{0x03c0,0x2400}});}
+        catch(const std::logic_error&){enabled_rejected=true;}
+        assert(enabled_rejected&&pushed.simple[0x03c0>>2]==0);
         bool state_rejected=false;
         try{ApplyNv2aState(pushed,cursor,{{gpu::kMBlendEnable,0},{0x17fc,5}});}
         catch(const std::logic_error&){state_rejected=true;}

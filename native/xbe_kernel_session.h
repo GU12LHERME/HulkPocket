@@ -495,7 +495,9 @@ private:
                     throw std::runtime_error("D3D state setter without owned live device");
                 auto& live=*live_d3d_;
                 if(live.setter_calls++>=16384)throw std::runtime_error("D3D live setter diagnostic budget exceeded");
-                std::fprintf(stderr,"D3D LIVE SETTER caller=%08X id=%08X\n",mem_.Read32(cpu.esp),ordinal);
+                std::fprintf(stderr,"D3D LIVE SETTER caller=%08X id=%08X ECX=%08X EDX=%08X stack_args=%u\n",
+                    mem_.Read32(cpu.esp),ordinal,cpu.ecx,cpu.edx,n);
+                for(unsigned i=0;i<n;++i)std::fprintf(stderr,"D3D LIVE ARG %u=%08X\n",i,Arg(cpu,i));
                 // Preserve ordering with direct guest writes. Only supported
                 // state-only packets may be consumed; unknown ones stop.
                 auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
