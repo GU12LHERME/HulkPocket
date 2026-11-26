@@ -4,6 +4,7 @@ on:
     branches: [experiment-xbe-recomp-android]
     paths:
       - 'native/hulk_xbe_local_diagnostic.cpp'
+      - 'tools/run_hulk_diagnostic.sh'
       - 'native/portable_xbe_image.*'
       - 'native/xbe_first_entry_probe.cpp'
       - 'native/xbe_guest_thread_exit.h'
@@ -34,6 +35,8 @@ jobs:
           mkdir -p /tmp/hulk-sdk/cpu
           curl --fail --silent --show-error --location --retry 3 https://raw.githubusercontent.com/TGP482/XboxXBERecomp/767a81837fba2d86913f6af81a10b33661d35518/runtime/cpu/x86_context.h -o /tmp/hulk-sdk/cpu/x86_context.h
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
+      - name: Validate local diagnostic script
+        run: bash -n tools/run_hulk_diagnostic.sh
       - name: Host tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_startup_layout.cpp -o /tmp/layout
