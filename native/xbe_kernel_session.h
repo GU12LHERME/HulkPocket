@@ -1690,6 +1690,17 @@ public:
     static void Dispatch(X86Context& cpu,uint8_t* base,uint32_t ordinal) {
         if(!active_ || active_->mem_.Base()!=base)
             throw std::runtime_error("Invalid kernel session");
+        // Fiber memory accesses are synchronous checked guest operations,
+        // not guest kernel calls. Do not run DPCs or alter the fault trace.
+        if(ordinal==kFiberRead32||ordinal==kFiberWrite32){
+            std::lock_guard<std::mutex> guard(active_->lock_);
+            auto& mem=active_->mem_;
+            if(!mem.IsCommitted(cpu.ecx,4))
+                throw std::runtime_error("Fiber access outside committed guest memory");
+            if(ordinal==kFiberRead32)cpu.eax=mem.Read32(cpu.ecx);
+            else mem.Write32(cpu.ecx,cpu.eax);
+            return;
+        }
         fault_thread=static_cast<sig_atomic_t>(cpu.thread_handle);
         fault_ordinal=static_cast<sig_atomic_t>(ordinal);
         fault_stack=static_cast<sig_atomic_t>(cpu.esp);

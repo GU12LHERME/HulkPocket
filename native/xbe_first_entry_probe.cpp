@@ -3,6 +3,12 @@
 #include "portable_xbe_dispatch.h"
 #include "xbe_guest_thread_exit.h"
 #include "xbe_graphics_boundary.h"
+#if defined(__aarch64__) && __has_include("hulk_verified_fibers.h")
+#include "hulk_verified_fibers.h"
+#if HULK_VERIFIED_FIBERS
+#include "hulk_live_fibers.h"
+#endif
+#endif
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -69,7 +75,14 @@ int hulk_entry_execute_with_kernel(X86Context* cpu, uint8_t* base, uint32_t entr
         hulkpocket::ScopedXbeDispatch scope(dispatch);
         hulkpocket::ScopedGraphicsCallback graphics_scope(kernel);
         std::fprintf(stderr,"Entering guest at %08X ESP=%08X\n",entry,cpu->esp);
+#if defined(HULK_VERIFIED_FIBERS) && HULK_VERIFIED_FIBERS
+        if(kernel && !hulkpocket::HulkLiveFibers::Active()){
+            hulkpocket::HulkLiveFibers fibers(*cpu,base,x86_icall,hulkpocket::kHulkUsaFiberLayout);
+            fibers.Run(entry);
+        }else dispatch.Call(*cpu,base,entry);
+#else
         dispatch.Call(*cpu,base,entry);
+#endif
         std::fprintf(stderr,"Guest entry returned\n");
         return 0;
     } catch(const hulkpocket::GuestThreadExit& e) {

@@ -16,8 +16,10 @@ public:
     using GuestCall = void (*)(X86Context&, std::uint8_t*, std::uint32_t);
     XbeGuestFiberBootstrap(
         XboxFiberScheduler& scheduler, X86Context& context,
-        std::uint8_t* base, GuestCall call)
-        : scheduler_(scheduler), context_(context), base_(base), call_(call) {
+        std::uint8_t* base, GuestCall call,
+        bool trap_on_return=false)
+        : scheduler_(scheduler), context_(context), base_(base), call_(call),
+          trap_on_return_(trap_on_return) {
         if (!base || !call) throw std::invalid_argument("missing guest runtime");
     }
 
@@ -33,6 +35,12 @@ public:
         records_.emplace(id, std::move(item));
     }
 
+    void Delete(std::uint32_t id) {
+        auto it=records_.find(id);
+        if(it==records_.end())throw std::logic_error("unknown guest bootstrap fiber");
+        scheduler_.Delete(id);
+        records_.erase(it);
+    }
     bool UnexpectedReturn(std::uint32_t id) const {
         auto it = records_.find(id);
         return it != records_.end() && it->second->returned;
@@ -55,11 +63,13 @@ private:
         // return normally. Keep this in the test as a recorded failure
         // state; production runtime must raise an Xbox guest trap.
         item.returned = true;
+        if(self.trap_on_return_)throw std::runtime_error("Xbox fiber bootstrap returned unexpectedly");
     }
     XboxFiberScheduler& scheduler_;
     X86Context& context_;
     std::uint8_t* base_;
     GuestCall call_;
+    bool trap_on_return_;
     std::unordered_map<std::uint32_t, std::unique_ptr<Record>> records_;
 };
 }

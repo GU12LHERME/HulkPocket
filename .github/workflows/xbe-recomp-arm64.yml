@@ -119,6 +119,13 @@ jobs:
             native/native_fiber.cpp native/aarch64_context.S \
             -o "$RUNNER_TEMP/hulk-real-guest-memory-fiber-arm64"
           qemu-aarch64 "$RUNNER_TEMP/hulk-real-guest-memory-fiber-arm64"
+          python3 tools/discover_hulk_fibers.py
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread -static \
+            -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
+            native/test_hulk_live_fibers.cpp native/xbox_guest_address_space.cpp \
+            native/xbox_fiber_scheduler.cpp native/native_fiber.cpp native/aarch64_context.S \
+            -o "$RUNNER_TEMP/hulk-live-fibers-arm64"
+          qemu-aarch64 "$RUNNER_TEMP/hulk-live-fibers-arm64"
           aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread -static \
             -I native -I "$RUNNER_TEMP/xbe-sdk/runtime" \
             native/test_xbe_sdk_icall_binding.cpp native/xbox_fiber_scheduler.cpp \

@@ -11,6 +11,7 @@ from supplemental_guest_mapping import generate
 from discover_hulk_viewport_writer import generate_writer
 from discover_hulk_block_on_time import generate_block_on_time
 from discover_hulk_startup_text import generate_startup_text
+from discover_hulk_fibers import generate_fibers
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -49,7 +50,15 @@ def main():
         print(f"Verified local D3D_BlockOnTime adapter: {block_on_time}",flush=True)
         startup_text=generate_startup_text(prepared,work/"hulk_verified_startup_text.h")
         print(f"Verified local startup text observer: {startup_text}",flush=True)
-        for name in ("portable_xbe_dispatch", "xbe_diagnostic_runtime", "xbe_first_entry_probe", "xbe_d3d8_entry_guard"):
+        fibers=generate_fibers(prepared,work/"hulk_verified_fibers.h")
+        print(f"Verified local XDK fiber replacement: {fibers}",flush=True)
+        native_names=["portable_xbe_dispatch","xbe_diagnostic_runtime","xbe_first_entry_probe","xbe_d3d8_entry_guard"]
+        if fibers:
+            native_names+=["hulk_live_fiber_hooks","xbox_fiber_scheduler","native_fiber"]
+            obj=work/"aarch64_context.o"
+            subprocess.run([str(compiler),"-fPIC","-c",str(root/"native/aarch64_context.S"),"-o",str(obj)],check=True)
+            objects.append(obj)
+        for name in native_names:
             obj = work / (name + ".o")
             subprocess.run([str(compiler), "-std=c++20", "-O2", "-fPIC",
                             "-I", str(prepared), "-I", str(work), "-I", str(root / "native"),
@@ -76,6 +85,11 @@ def main():
                 raise RuntimeError("Verified D3D_BlockOnTime override not linked")
             if startup_text and not any(len(fields:=line.split())>=3 and fields[-2:]==["T","sub_0029B330"] for line in symbols.splitlines()):
                 raise RuntimeError("Verified startup text observer not linked")
+            if fibers:
+                for name in ("sub_0035551D","sub_0035550A"):
+                    if not any(len(fields:=line.split())>=3 and fields[-2:]==["T",name] for line in symbols.splitlines()):
+                        raise RuntimeError("Verified fiber override not linked: "+name)
+                    print("Verified guest fiber override:",name,flush=True)
             # Verify strong override, not just a symbol name that could be weak.
             import re
             header_text = (prepared / "image_symbols.h").read_text()

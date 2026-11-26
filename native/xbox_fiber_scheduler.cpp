@@ -66,6 +66,22 @@ void XboxFiberScheduler::SwitchTo(std::uint32_t target_id) {
     requested_ = target_id;
     NativeFiber::Yield();
 }
+void XboxFiberScheduler::AdoptCurrentId(std::uint32_t id) {
+    CheckOwner();
+    if(!dispatching_||!current_||!id||Exists(id))
+        throw std::logic_error("invalid root guest fiber identity");
+    auto item=fibers_.extract(current_);
+    if(item.empty())throw std::logic_error("missing running native fiber");
+    item.key()=id;
+    fibers_.insert(std::move(item));
+    current_=id;
+}
+void XboxFiberScheduler::Delete(std::uint32_t id) {
+    CheckOwner();
+    if(!id||id==current_||id==requested_||!Exists(id))
+        throw std::logic_error("invalid native fiber deletion");
+    fibers_.erase(id);
+}
 void XboxFiberScheduler::YieldToHost() {
     CheckOwner();
     if (!dispatching_ || !current_)

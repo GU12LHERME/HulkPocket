@@ -26,6 +26,9 @@ public:
     // Only callable within an active guest fiber on the creator thread.
     void SwitchTo(std::uint32_t target_id);
     void YieldToHost();
+    // Bind the root native continuation to the guest's actual TLS fiber ID.
+    void AdoptCurrentId(std::uint32_t id);
+    void Delete(std::uint32_t id);
     bool Exists(std::uint32_t id) const;
     bool Finished(std::uint32_t id) const;
     std::uint32_t CurrentId() const noexcept { return current_; }
