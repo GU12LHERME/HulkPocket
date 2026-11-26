@@ -40,6 +40,7 @@ private:
     std::array<Worker,16> workers_{};
     size_t count_=0;
     struct Event { uint32_t body; bool manual; };
+    std::map<uint32_t,uint32_t> semaphore_limits_;
     std::map<uint32_t,Event> events_;
     uint32_t next_event_=0x2000;
     std::map<uint32_t,uint32_t> critical_;
@@ -164,7 +165,9 @@ private:
             Pause(cpu,lock);
         } while(!mem_.Read32(body+4));
         // Synchronization event is consumed by exactly one waiter.
-        if((mem_.Read32(body)&255u)==1) mem_.Write32(body+4,0);
+        const auto type=mem_.Read32(body)&255u;
+        if(type==1) mem_.Write32(body+4,0);
+        else if(type==5) mem_.Write32(body+4,mem_.Read32(body+4)-1);
         return 0;
     }
     void Critical(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
@@ -214,7 +217,7 @@ private:
                 Check(cpu,8);
                 if(Arg(cpu,2)) throw std::runtime_error("File APC not implemented");
                 auto event=Arg(cpu,1);
-                if(event && !events_.count(event)){Ret(cpu,8,0xc0000008u);return;}
+                if(event && (!events_.count(event)||semaphore_limits_.count(events_.at(event).body))){Ret(cpu,8,0xc0000008u);return;}
                 auto status=files_.Read(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7));
                 if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
                 Ret(cpu,8,status);return;
@@ -293,10 +296,75 @@ private:
                 events_.emplace(h,Event{body,type==0});Output(out,h);
                 Ret(cpu,4,0);return;
             }
+            case 193: {
+                Check(cpu,4);auto out=Arg(cpu,0),initial=Arg(cpu,2),limit=Arg(cpu,3);
+                if(!mem_.IsCommitted(out,4)||!limit||limit>0x7fffffffu||initial>limit) {
+                    Ret(cpu,4,0xc000000du);return;
+                }
+                if(Arg(cpu,1))throw std::runtime_error("Named semaphore not implemented");
+                auto body=pool_.Allocate(20);
+                if(!body){Ret(cpu,4,0xc0000017u);return;}
+                auto h=next_event_;next_event_+=4;
+                mem_.Write32(body,0x00050005u);mem_.Write32(body+4,initial);
+                mem_.Write32(body+8,body+8);mem_.Write32(body+12,body+8);
+                mem_.Write32(body+16,limit);
+                events_.emplace(h,Event{body,false});semaphore_limits_.emplace(body,limit);
+                Output(out,h);Ret(cpu,4,0);return;
+            }
+            case 222: {
+                Check(cpu,3);auto h=Arg(cpu,0),add=Arg(cpu,1),out=Arg(cpu,2);
+                auto it=events_.find(h);
+                if(it==events_.end()||!semaphore_limits_.count(it->second.body)) {
+                    Ret(cpu,3,0xc0000008u);return;
+                }
+                auto body=it->second.body,old=mem_.Read32(body+4);
+                if(!add||uint64_t(old)+add>semaphore_limits_.at(body)) {
+                    Ret(cpu,3,0xc0000047u);return;
+                }
+                Output(out,old);mem_.Write32(body+4,old+add);
+                cv_.notify_all();Ret(cpu,3,0);return;
+            }
+            case 235: {
+                Check(cpu,6);auto n=Arg(cpu,0),list=Arg(cpu,1),kind=Arg(cpu,2);
+                if(!n||n>64||kind>1||!mem_.IsCommitted(list,4*n)) {
+                    Ret(cpu,6,0xc000000du);return;
+                }
+                if(Arg(cpu,4)&255u)throw std::runtime_error("Alertable multiwait not implemented");
+                std::vector<uint32_t> bodies;
+                for(uint32_t i=0;i<n;++i) {
+                    auto body=Body(mem_.Read32(list+4*i));
+                    if(!body){Ret(cpu,6,0xc0000008u);return;}
+                    if(std::find(bodies.begin(),bodies.end(),body)!=bodies.end()){
+                        Ret(cpu,6,0xc000000du);return;
+                    }
+                    bodies.push_back(body);
+                }
+                const auto deadline=Deadline(Arg(cpu,5));
+                auto ready=[&]{
+                    if(stopping_)return true;
+                    auto signal=[&](uint32_t b){return mem_.Read32(b+4)!=0;};
+                    return kind?std::any_of(bodies.begin(),bodies.end(),signal):
+                                std::all_of(bodies.begin(),bodies.end(),signal);
+                };
+                do {
+                    if(!cv_.wait_until(lock,deadline,ready)){Ret(cpu,6,0x102);return;}
+                    Pause(cpu,lock);
+                }while(!ready());
+                auto consume=[&](uint32_t body){
+                    auto type=mem_.Read32(body)&255u;
+                    if(type==1)mem_.Write32(body+4,0);
+                    else if(type==5)mem_.Write32(body+4,mem_.Read32(body+4)-1);
+                };
+                if(!kind){for(auto body:bodies)consume(body);Ret(cpu,6,0);return;}
+                for(uint32_t i=0;i<n;++i)if(mem_.Read32(bodies[i]+4)){
+                    consume(bodies[i]);Ret(cpu,6,i);return;
+                }
+                throw std::runtime_error("Multiwait lost signal");
+            }
             case 225: case 186: {
                 const unsigned n=ordinal==225?2:1;Check(cpu,n);
                 auto it=events_.find(Arg(cpu,0));
-                if(it==events_.end()){Ret(cpu,n,0xc0000008u);return;}
+                if(it==events_.end()||semaphore_limits_.count(it->second.body)){Ret(cpu,n,0xc0000008u);return;}
                 auto body=it->second.body;
                 if(ordinal==225) Output(Arg(cpu,1),mem_.Read32(body+4));
                 mem_.Write32(body+4,ordinal==225?1:0);
