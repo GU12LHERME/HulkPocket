@@ -5,6 +5,8 @@ on:
     paths:
       - 'native/xbe_startup_layout.h'
       - 'native/xbe_tls.h'
+      - 'native/xbe_bootstrap.h'
+      - 'native/test_xbe_bootstrap.cpp'
       - 'native/test_xbe_tls.cpp'
       - 'native/xbe_startup_memory.h'
       - 'native/test_xbe_startup_memory.cpp'
@@ -26,6 +28,8 @@ jobs:
           /tmp/startup-memory
           g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_tls.cpp native/xbox_guest_address_space.cpp -o /tmp/tls
           /tmp/tls
+          g++ -std=c++17 -Wall -Wextra -Werror native/test_xbe_bootstrap.cpp native/xbox_guest_address_space.cpp -o /tmp/bootstrap
+          /tmp/bootstrap
       - name: Install ARM64 tools
         run: sudo apt-get update && sudo apt-get install -y g++-aarch64-linux-gnu qemu-user
       - name: ARM64 tests
@@ -36,3 +40,5 @@ jobs:
           qemu-aarch64 /tmp/startup-memory-arm64
           aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_tls.cpp native/xbox_guest_address_space.cpp -o /tmp/tls-arm64
           qemu-aarch64 /tmp/tls-arm64
+          aarch64-linux-gnu-g++ -static -std=c++17 -Wall -Wextra -Werror native/test_xbe_bootstrap.cpp native/xbox_guest_address_space.cpp -o /tmp/bootstrap-arm64
+          qemu-aarch64 /tmp/bootstrap-arm64
