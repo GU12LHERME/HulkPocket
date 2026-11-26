@@ -39,7 +39,8 @@ jobs:
           "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -static-libstdc++ -pthread \
             -Wl,-z,max-page-size=16384 \
             -I third_party/xboxxberecomp -I third_party/scda-vulkan/src \
-            native/vulkan_experiment/test_offscreen.cpp -lvulkan \
+            native/vulkan_experiment/test_offscreen.cpp native/xbox_guest_address_space.cpp \
+            third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lvulkan \
             -o /tmp/hulk-vk/android-probe/hulk-vulkan-probe
           "$ndk/llvm-readelf" -h /tmp/hulk-vk/android-probe/hulk-vulkan-probe | grep AArch64 >/dev/null
           cp /tmp/hulk-vk/spv/*.spv /tmp/hulk-vk/android-probe/spv/

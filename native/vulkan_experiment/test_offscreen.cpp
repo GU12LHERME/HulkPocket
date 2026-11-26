@@ -5,6 +5,7 @@
 #include "android/pass_barrier.h"
 #include "gpu/shaders.h"
 #include "raster_state.h"
+#include "guest_resources.h"
 #include <array>
 #include <cassert>
 #include <cmath>
@@ -31,7 +32,7 @@ struct Fixture{
     VkCommandPool pool{};VkCommandBuffer cmd{};
     gpu::ImageMemory images;
     std::unique_ptr<gpu::FrameFences<1>> fence;
-    Buffer verts,indices,uniform,readback;
+    Buffer verts,indices,uniform,readback,staging;
     Image target,texture,depth;
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
     VkRenderPass pass{};VkFramebuffer fb{};VkSampler sampler{};
@@ -51,7 +52,7 @@ struct Fixture{
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
             Destroy(target);Destroy(texture);Destroy(depth);
-            Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);
+            Destroy(verts);Destroy(indices);Destroy(uniform);Destroy(readback);Destroy(staging);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
             vkDestroyDevice(dev,nullptr);
@@ -152,6 +153,7 @@ struct Fixture{
         std::memcpy(indices.data,idx,sizeof(idx));
         CreateBuffer(uniform,4096,VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         CreateBuffer(readback,W*H*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        CreateBuffer(staging,16,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         CreateImage(target,W,H,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
         for(auto format:{VK_FORMAT_D24_UNORM_S8_UINT,VK_FORMAT_D32_SFLOAT_S8_UINT}){
             VkFormatProperties fp{};vkGetPhysicalDeviceFormatProperties(physical,format,&fp);
@@ -216,6 +218,19 @@ struct Fixture{
         }
         vkUpdateDescriptorSets(dev,writes.size(),writes.data(),0,nullptr);
     }
+    // Reuse the current texture allocation and descriptor. Upload from checked
+    // guest memory after conversion; do not substitute a constant GPU clear.
+    void UploadGuestTexture(uint32_t header){
+        auto pixels=hulkpocket::vkexp::GuestTexture(header);
+        if(pixels.width!=2||pixels.height!=2||pixels.rgba.size()!=16)throw std::invalid_argument("Probe texture extent mismatch");
+        std::memcpy(staging.data,pixels.rgba.data(),16);
+        Begin();
+        Transition(texture.image,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={2,2,1};
+        vkCmdCopyBufferToImage(cmd,staging.b,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        Submit();
+    }
     VkShaderModule Module(const std::filesystem::path& path){
         std::ifstream f(path,std::ios::binary|std::ios::ate);
         if(!f)throw std::runtime_error("Missing shader "+path.string());
@@ -258,11 +273,21 @@ struct Fixture{
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){
         std::array<uint8_t,4> out{};std::memcpy(out.data(),static_cast<uint8_t*>(readback.data)+(y*W+x)*4,4);return out;
     }
-    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false){
+    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr){
         Pipeline(root,packed,textured,blend,multi,state);
         uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
-        std::memcpy(verts.data,v,sizeof(v));
+        if(guest){
+            if(guest->buffer_count!=1||guest->buffers[0].stride!=sizeof(Vertex)||guest->buffers[0].bytes!=sizeof(v)||
+               guest->vertex_count!=3||guest->index_count!=3||!guest->index16||guest->base_vertex||
+               guest->topology!=gpu::Topology::Triangles||guest->strip||!guest->index_src||
+               guest->elements[0].format!=gpu::kVertexR32G32B32_FLOAT||guest->elements[3].format!=gpu::kVertexB8G8R8A8_UNORM||
+               guest->elements[9].format!=gpu::kVertexR32G32_FLOAT||guest->elements[0].offset!=0||
+               guest->elements[3].offset!=12||guest->elements[9].offset!=16)
+                throw std::invalid_argument("Unsupported guest fixture vertex layout");
+            std::memcpy(verts.data,guest->buffers[0].src,sizeof(v));
+            std::memcpy(indices.data,guest->index_src,6);
+        }else std::memcpy(verts.data,v,sizeof(v));
         if(second){for(auto& vert:v){vert.z=.75f;vert.color_or_normal=0xffff0000u;}
             std::memcpy(static_cast<uint8_t*>(verts.data)+sizeof(v),v,sizeof(v));}
         gpu::DrawConstants dc{};
@@ -280,7 +305,7 @@ struct Fixture{
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,0,nullptr);
         VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&verts.b,&offset);
-        if(packed||multi){
+        if(packed||multi||guest){
             vkCmdBindIndexBuffer(cmd,indices.b,0,VK_INDEX_TYPE_UINT16);
             vkCmdDrawIndexed(cmd,3,1,0,0,0);
         }else vkCmdDraw(cmd,3,1,0,0);
@@ -326,6 +351,44 @@ int main(int argc,char** argv){
         state.rs[kRsZEnable]=2;bool rejected=false;
         try{(void)hulkpocket::vkexp::TranslateRaster(state);}catch(const std::invalid_argument&){rejected=true;}
         if(!rejected)throw std::runtime_error("Unsupported W-buffer silently accepted");
-        std::puts("PASS real Vulkan draw, sampled texture, packed lighting, alpha blend, indexed multi-stage modulation, Xbox depth/stencil and color masks, readback");
+        // End-to-end synthetic Xbox resource headers and committed memory.
+        hulkpocket::XboxGuestAddressSpace memory;
+        memory.Commit(0x10000,0x10000);memory.Commit(0x80100000,0x10000);
+        ScopedGuestMemory scope(memory);
+        constexpr uint32_t tex=0x10000,vb=0x10100,ix=0x10200,rt=0x10300;
+        memory.Write32(tex,0x40000);memory.Write32(tex+4,0x100000);memory.Write32(tex+12,0x01110620);
+        const uint32_t pixels[]={0xff4080ff,0xff4080ff,0xff4080ff,0xff4080ff};
+        memory.Write(0x80100000,pixels,sizeof(pixels));
+        memory.Write32(vb+4,0x100100);
+        const Vertex guest_vertices[]={{-.75f,-.75f,.5f,0xffffffff,0,1},{.75f,-.75f,.5f,0xffffffff,1,1},{0,.75f,.5f,0xffffffff,.5f,0}};
+        memory.Write(0x80100100,guest_vertices,sizeof(guest_vertices));
+        const uint16_t guest_indices[]={2,0,1};memory.Write(ix,guest_indices,sizeof(guest_indices));
+        State guest_state{};guest_state.vs_handle=0x142;guest_state.streams[0]={vb,sizeof(Vertex)};
+        guest_state.simple[kMColorWriteEnable/4]=0x01010101;
+        Assembled assembled{};
+        if(!hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,ix,assembled))throw std::runtime_error("Guest assembly failed");
+        f.UploadGuestTexture(tex);
+        f.Draw(argv[1],false,true,false,false,&guest_state,false,&assembled);
+        Expect("guest BGRA texture and indexed geometry",f.Pixel(32,32),{64,128,255,255});
+        // Replace the same resource with a DXT1 red block, exercising
+        // decoding and staging upload again, not a constant GPU clear.
+        memory.Write32(tex+12,0x01110c20);
+        const uint8_t bc[]={0x00,0xf8,0,0,0,0,0,0};memory.Write(0x80100000,bc,sizeof(bc));
+        f.UploadGuestTexture(tex);
+        f.Draw(argv[1],false,true,false,false,&guest_state,false,&assembled);
+        Expect("guest DXT1 sampled texture",f.Pixel(32,32),{255,0,0,255});
+        memory.Write32(rt,0x50000);memory.Write32(rt+4,0x102000);
+        memory.Write32(rt+12,0x00011221);memory.Write32(rt+16,63|(63<<12)|(3<<24));
+        Surface surface{};surface.header=rt;
+        hulkpocket::vkexp::StoreColor(surface,static_cast<const uint8_t*>(f.readback.data),W,H);
+        if(memory.Read32(0x80102000+(32*W+32)*4)!=0xffff0000u||
+           memory.Read32(0x80102000)!=0xff000000u)throw std::runtime_error("Guest BGRA readback mismatch");
+        bool bad=false;
+        try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
+        if(!bad)throw std::runtime_error("Uncommitted index span accepted");
+        memory.Write32(tex+4,0x10ffff);bad=false;
+        try{f.UploadGuestTexture(tex);}catch(const std::out_of_range&){bad=true;}
+        if(!bad)throw std::runtime_error("Uncommitted texture span accepted");
+        std::puts("PASS Vulkan draws, Xbox depth/stencil, checked guest vertex/index assembly, BGRA and DXT1 staging, guest surface readback");
     }catch(const std::exception& e){std::fprintf(stderr,"%s\n",e.what());return 1;}
 }

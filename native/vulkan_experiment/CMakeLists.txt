@@ -31,7 +31,8 @@ enable_testing()
 add_test(NAME reference COMMAND scda_renderer_reference)
 add_test(NAME hulk_shader_compile COMMAND hulk_shader_probe "${CMAKE_CURRENT_BINARY_DIR}/spv")
 
-add_executable(hulk_vulkan_offscreen test_offscreen.cpp)
+add_executable(hulk_vulkan_offscreen test_offscreen.cpp
+    "${HULK}/gpu/texture.cpp" "${HULK}/gpu/vertex.cpp" "${ROOT}/native/xbox_guest_address_space.cpp")
 target_include_directories(hulk_vulkan_offscreen PRIVATE "${HULK}" "${SCDA}/src")
 target_compile_options(hulk_vulkan_offscreen PRIVATE -UNDEBUG)
 target_link_libraries(hulk_vulkan_offscreen PRIVATE Vulkan::Vulkan Threads::Threads)
