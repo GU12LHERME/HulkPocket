@@ -1,5 +1,6 @@
 #pragma once
 #include "xbe_initial_cpu.h"
+#include "xbe_kernel_thread.h"
 #include "xbe_tls_index.h"
 #include "hulk_kernel_data_registry.h"
 namespace hulkpocket {
@@ -13,7 +14,7 @@ inline XbeEntrySession PrepareEntrySession(
     const LoadedXbeImage& image, XboxGuestAddressSpace& memory,
     const HulkKernelDataRegistry& registry,
     uint32_t arena_base,uint32_t arena_end,
-    uint32_t kpcr,uint32_t thread_handle,uint32_t return_address) {
+    uint32_t kpcr,uint32_t thread_handle,uint32_t return_address, uint32_t thread_address=0) {
     auto imports=ScanXbeKernelImports(image,memory);
     auto missing=registry.MissingData(imports);
     if(!missing.empty())
@@ -24,6 +25,8 @@ inline XbeEntrySession PrepareEntrySession(
     auto boot=PrepareXbeBootstrap(image,memory,arena_base,arena_end);
     InitializeDiagnosticTlsIndex(boot,memory);
     auto cpu=PrepareInitialCpu(boot,memory,kpcr,thread_handle,return_address);
+    if(thread_address) InitializeKernelThread(memory,kpcr,thread_address,
+        boot.memory.stack_top,boot.memory.stack_base,cpu.esp,boot.tls_data,thread_handle);
     BindXbeKernelImports(image,memory,[&](uint32_t ordinal){return registry.Resolve(ordinal);});
     return {boot,cpu};
 }
