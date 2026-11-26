@@ -45,6 +45,20 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
         call(*c,base,cb,258,{42});
         assert(false);
     }
+    // Main-thread settings and fastcall object references.
+    const auto main_body=memory->Read32(c->fs_base+0x28);
+    call(*c,base,cb,246,{0xfffffffeu,0,0x10f00});
+    assert(c->eax==0&&memory->Read32(0x10f00)==main_body);
+    call(*c,base,cb,143,{main_body,3});assert(c->eax==0);
+    call(*c,base,cb,124,{main_body});assert(c->eax==3);
+    call(*c,base,cb,143,{main_body,uint32_t(-2)});assert(c->eax==3);
+    call(*c,base,cb,124,{main_body});assert(c->eax==uint32_t(-2));
+    call(*c,base,cb,144,{main_body,1});assert(c->eax==0);
+    call(*c,base,cb,144,{main_body,0});assert(c->eax==1);
+    c->ecx=main_body;call(*c,base,cb,251,{});
+    c->ecx=main_body;call(*c,base,cb,250,{});
+    c->ecx=main_body;call(*c,base,cb,250,{});
+    call(*c,base,cb,238,{});
     memory->Write32(0x10e00,0x11000);
     memory->Write32(0x10e04,1);
     call(*c,base,cb,47,{0x10e00,1});
@@ -294,6 +308,11 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     assert(c->eax==0 && ran==0);
     const auto h=memory->Read32(0x10100);
     assert(h!=memory->Read32(0x10104));
+    call(*c,base,cb,246,{h,0,0x10f04});assert(c->eax==0);
+    auto child_body=memory->Read32(0x10f04);
+    call(*c,base,cb,143,{child_body,5});assert(c->eax==0);
+    call(*c,base,cb,124,{child_body});assert(c->eax==5);
+    c->ecx=child_body;call(*c,base,cb,250,{});
     call(*c,base,cb,231,{h,0x10108});
     assert(memory->Read32(0x10108)==1);
     call(*c,base,cb,224,{h,0x10108});

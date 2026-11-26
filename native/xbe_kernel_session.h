@@ -46,6 +46,11 @@ private:
     std::condition_variable cv_;
     std::array<Worker,16> workers_{};
     size_t count_=0;
+    struct ThreadSettings {int32_t priority=0;bool disable_boost=false;};
+    std::map<uint32_t,ThreadSettings> thread_settings_;
+    std::map<uint32_t,uint32_t> object_references_;
+    // Objects remain owned by the session until shutdown, including bodies
+    // held by in-flight waits. References are tracked independently of handles.
     struct Event { uint32_t body; bool manual; };
     std::map<uint32_t,uint32_t> semaphore_limits_;
     std::map<uint32_t,Event> events_;
@@ -147,6 +152,7 @@ private:
                                tls_bytes?tls:0,id);
         auto& w=workers_[count_++];
         w.pcr=slot; w.handle=handle; w.id=id; w.stack_pages=uint32_t(committed/4096);
+        thread_settings_.emplace(slot+0x400,ThreadSettings{});
         w.suspend=ordinal==255 && (Arg(cpu,7)&255u)?1u:0u;
         const auto target=system?system:start;
         w.host=std::thread([this,&w,child,target]() mutable {
@@ -262,6 +268,8 @@ private:
     bool PointerObject(uint32_t body){
         if(!body||!mem_.IsCommitted(body,16))return false;
         uint32_t header=mem_.Read32(body),type=header&255u;
+        if(thread_settings_.count(body))return true;
+        if(object_references_.count(body)&&object_references_.at(body))return true;
         if(timer_types_.count(body))return type==8+timer_types_.at(body);
         if(pointer_events_.count(body))return type==pointer_events_.at(body);
         for(const auto& item:events_)if(item.second.body==body)return true;
@@ -932,7 +940,45 @@ private:
                     const auto actual=registry_?registry_->Resolve(ordinal_type).guest_data:0;
                     if(!actual || actual!=requested){Ret(cpu,3,0xc0000024u);return;}
                 }
-                Output(Arg(cpu,2),body);Ret(cpu,3,0);return;
+                auto out=Arg(cpu,2);
+                if(!out||!mem_.IsCommitted(out,4)){Ret(cpu,3,0xc000000du);return;}
+                auto& refs=object_references_[body];
+                if(refs==UINT32_MAX)throw std::runtime_error("Object reference count overflow");
+                ++refs;Output(out,body);Ret(cpu,3,0);return;
+            }
+            case 250: case 251: {
+                // Xbox FASTCALL: object pointer in ECX; only return address on stack.
+                Check(cpu,0);auto body=cpu.ecx;
+                if(ordinal==251){
+                    if(!PointerObject(body))throw std::runtime_error("Reference to unknown guest object");
+                    auto& refs=object_references_[body];
+                    if(refs==UINT32_MAX)throw std::runtime_error("Object reference count overflow");
+                    ++refs;
+                }else{
+                    auto it=object_references_.find(body);
+                    if(it==object_references_.end()||!it->second)
+                        throw std::runtime_error("Dereference without a matching guest object reference");
+                    if(!--it->second)object_references_.erase(it);
+                }
+                Ret(cpu,0,0);return;
+            }
+            case 124: case 143: case 144: {
+                unsigned n=ordinal==124?1:2;Check(cpu,n);auto body=Arg(cpu,0);
+                auto it=thread_settings_.find(body);
+                if(it==thread_settings_.end()||!mem_.IsCommitted(body,16))
+                    throw std::runtime_error("Unknown KTHREAD for priority/boost request");
+                auto& state=it->second;
+                uint32_t previous=uint32_t(state.priority);
+                if(ordinal==143){
+                    uint32_t raw=Arg(cpu,1);std::memcpy(&state.priority,&raw,sizeof(raw));
+                    std::fprintf(stderr,"KeSetBasePriorityThread body=%08X old=%d new=%d\n",body,int(state.priority),int(previous));
+                }else if(ordinal==144){
+                    previous=state.disable_boost;
+                    state.disable_boost=(Arg(cpu,1)&255u)!=0;
+                }
+                // Guest scheduling metadata only; no Android thread priority
+                // elevation. Match pinned XboxXBERecomp's old-priority return.
+                Ret(cpu,n,previous);return;
             }
             case 254: case 255: CreateThread(cpu,ordinal); return;
             case 224: case 231: {
@@ -950,7 +996,7 @@ private:
                 cv_.notify_all(); Pause(cpu,lock); return;
             }
             case 104: Check(cpu,0); Ret(cpu,0,mem_.Read32(cpu.fs_base+0x28)); return;
-            case 238: Check(cpu,0); Ret(cpu,0,0); lock.unlock(); std::this_thread::yield(); return;
+            case 238: Check(cpu,0); Ret(cpu,0,0); lock.unlock(); std::this_thread::yield(); lock.lock(); return;
             case 258: Check(cpu,1); throw GuestThreadExit{Arg(cpu,0)};
             default: break;
         }
@@ -1001,6 +1047,10 @@ public:
         struct Reset { XbeKernelSession& s; ~Reset(){s.entry_=nullptr; active_=nullptr;} } reset{*this};
         HulkKernelClockPump clock_pump(mem_,clock_);
         stopping_=false; worker_failure_=0;
+        if(cpu.fs_base&&mem_.IsCommitted(cpu.fs_base+0x28,4)){
+            auto body=mem_.Read32(cpu.fs_base+0x28);
+            if(body&&mem_.IsCommitted(body,16))thread_settings_.emplace(body,ThreadSettings{});
+        }
         if(cpu.fs_base&&mem_.IsCommitted(cpu.fs_base,12)){
             auto top=mem_.Read32(cpu.fs_base+4),bottom=mem_.Read32(cpu.fs_base+8);
             if(top>bottom&&mem_.IsCommitted(bottom,top-bottom))
