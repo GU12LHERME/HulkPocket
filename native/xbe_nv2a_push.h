@@ -37,7 +37,26 @@ inline bool IsDisabledTextureMethod(uint32_t m){
     return (m>=0x03c0&&m<=0x03fc&&m%4==0)||
            m==0x1b0c||m==0x1b4c||m==0x1b8c||m==0x1bcc;
 }
-struct Nv2aConstantCursor {uint32_t reg=0,component=0;bool loaded=false;};
+// NV097 state registers verified against nxdk nv_regs.h. These are
+// configuration writes, not draw/clear/transfer commands. Preserve the
+// hardware words, including zero clip values, without claiming a GLES
+// translation. The bridge must stop before drawing until they are translated.
+inline bool IsPendingRawConfiguration(uint32_t m){
+    if(m>=0x1b28&&m<=0x1bfc&&m%4==0&&(m&0x3f)>=0x28)return true;
+    switch(m){
+        case 0x0200:case 0x0204: // surface clip
+        case 0x02b4:case 0x02c0:case 0x02e0: // window clip type and first rectangle
+        case 0x0394:case 0x0398: // depth clip min/max
+        case 0x0a20:case 0x0a24:case 0x0a28:case 0x0a2c: // viewport offset
+        case 0x1e78: // shader other-stage input
+            return true;
+        default:return false;
+    }
+}
+struct Nv2aConstantCursor {
+    uint32_t reg=0,component=0;
+    bool loaded=false,pending_raw_configuration=false;
+};
 // State-only method subset, based on XboxXBERecomp ApplyConstant/SetSimple.
 // Entire batch validated before committing; do not silently drop a method.
 // Immediate draws, texture commands, reports, and GPU control flow are pending.
@@ -49,7 +68,7 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
     for(auto [m,v]:methods){
         if(m==0x1ea4){
             if(v>=constants.size())throw std::invalid_argument("NV2A constant index out of range");
-            next={v,0,true};continue;
+            next.reg=v;next.component=0;next.loaded=true;continue;
         }
         if(m>=0xb80&&m<0xc00){
             if(!next.loaded||next.reg>=constants.size()||next.component>=4)
@@ -57,6 +76,9 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
             constants[next.reg][next.component++]=std::bit_cast<float>(v);
             if(next.component==4){next.component=0;++next.reg;}
             continue;
+        }
+        if(IsPendingRawConfiguration(m)){
+            simple[m>>2]=v;next.pending_raw_configuration=true;continue;
         }
         if(IsDisabledTextureMethod(m)){
             if(v)throw std::logic_error("Enabled raw NV2A texture control/texgen not integrated");

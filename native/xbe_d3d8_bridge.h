@@ -159,6 +159,8 @@ class XbeD3d8Bridge {
             backend_.Clear(state_,a[0],rects,a[2],a[3],Float(a[4]),a[5]);return 0;
         }
         if(name=="D3DDevice_DrawVertices"||name=="D3DDevice_DrawIndexedVertices") {
+            if(push_constants_.pending_raw_configuration)
+                throw std::logic_error("Raw NV2A clip/viewport/bump/shader state requires draw translation");
             Count(a,3);
             if(!state_.rt.header)throw std::logic_error("No color render target");
             bool indexed=name=="D3DDevice_DrawIndexedVertices";

@@ -54,6 +54,28 @@ int main(){
         try{ApplyNv2aState(pushed,cursor,{{0x03c0,0x2400}});}
         catch(const std::logic_error&){enabled_rejected=true;}
         assert(enabled_rejected&&pushed.simple[0x03c0>>2]==0);
+        // Complete 56-command RP6 batch from b0e67b8, in original order.
+        std::vector<Nv2aMethod> config;
+        for(uint32_t stage=1;stage<4;++stage)
+            for(uint32_t m=0x28;m<=0x3c;m+=4)config.push_back({0x1b00+stage*0x40+m,0});
+        config.insert(config.end(),{{0x1e78,0x00210000},{0x1be8,0x3f800000},
+            {0x1bec,0},{0x1bf4,0},{0x1bf0,0x3f800000}});
+        for(unsigned repeat=0;repeat<3;++repeat)
+            config.insert(config.end(),{{0x0200,0},{0x0204,0},{0x02b4,0},{0x02c0,0},{0x02e0,0},
+                {0x0a20,0x3f080000},{0x0a24,0x3f080000},{0x0a28,0},{0x0a2c,0},{0x0394,0},{0x0398,0x4b7fffff}});
+        assert(config.size()==56);
+        pushed.simple[0x0200>>2]=0x1234;
+        auto before_config=pushed.simple;
+        auto bad_config=config;bad_config.push_back({0x17fc,5});
+        bool config_rejected=false;
+        try{ApplyNv2aState(pushed,cursor,bad_config);}catch(const std::logic_error&){config_rejected=true;}
+        assert(config_rejected&&pushed.simple==before_config&&!cursor.pending_raw_configuration);
+        ApplyNv2aState(pushed,cursor,config);
+        assert(cursor.pending_raw_configuration&&pushed.simple[0x0200>>2]==0);
+        assert(pushed.simple[0x1e78>>2]==0x00210000&&pushed.simple[0x1be8>>2]==0x3f800000);
+        assert(pushed.simple[0x1bf0>>2]==0x3f800000&&pushed.simple[0x0398>>2]==0x4b7fffff);
+        ApplyNv2aState(pushed,cursor,{{0x1ea4,8}});
+        assert(cursor.pending_raw_configuration);
         bool state_rejected=false;
         try{ApplyNv2aState(pushed,cursor,{{gpu::kMBlendEnable,0},{0x17fc,5}});}
         catch(const std::logic_error&){state_rejected=true;}
@@ -153,6 +175,12 @@ int main(){
     uint16_t indices[]={0,1,2};mem.Write(0x10300,indices,sizeof(indices));
     call("D3DDevice_DrawIndexedVertices",{5,3,0x10300});
     assert(bridge.Present(0x10100)==1 && backend.draws==2&&backend.clears==1&&backend.presents==1);
+    mem.Write32(0x10400,0x0200|(1u<<18));mem.Write32(0x10404,0);
+    bridge.ApplyPush(0x10400,0x10408);
+    bool raw_draw_blocked=false;
+    try{call("D3DDevice_DrawVertices",{5,0,3});}
+    catch(const std::logic_error&){raw_draw_blocked=true;}
+    assert(raw_draw_blocked&&backend.draws==2&&c.esp==0x1f000);
     c.esp=0x1f000;c.ecx=0x100;c.edx=0x1234;
     bridge.Call("D3DDevice_SetRenderState_Simple",c,D3dAbi::Mapped({D3dArg::Ecx,D3dArg::Edx}));
     assert(c.esp==0x1f004 && bridge.Snapshot().simple[0x40]==0x1234);
