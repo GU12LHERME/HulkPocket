@@ -31,12 +31,22 @@ layout(location=0) in vec4 a_position;
 layout(location=1) in vec4 a_color;
 layout(location=2) in vec2 a_uv;
 uniform vec2 u_extent;
+uniform int u_transformed;
+uniform mat4 u_world;
+uniform mat4 u_view;
+uniform mat4 u_projection;
 out vec4 v_color;
 out vec2 v_uv;
 void main(){
-    float w=1.0/a_position.w;
-    vec2 ndc=vec2(2.0*a_position.x/u_extent.x-1.0,1.0-2.0*a_position.y/u_extent.y);
-    gl_Position=vec4(ndc*w,(2.0*a_position.z-1.0)*w,w);
+    if(u_transformed!=0){
+        float w=1.0/a_position.w;
+        vec2 ndc=vec2(2.0*a_position.x/u_extent.x-1.0,1.0-2.0*a_position.y/u_extent.y);
+        gl_Position=vec4(ndc*w,(2.0*a_position.z-1.0)*w,w);
+    }else{
+        vec4 p=u_projection*u_view*u_world*a_position;
+        // Xbox D3D clip depth is [0,w], GLES is [-w,w].
+        gl_Position=vec4(p.xy,2.0*p.z-p.w,p.w);
+    }
     v_color=a_color;v_uv=a_uv;
 })";
 constexpr const char* fs=R"(#version 300 es
@@ -73,7 +83,7 @@ void XbeGlesBackend::Destroy() noexcept {
     if(surface_!=EGL_NO_SURFACE)eglDestroySurface(display_,surface_);
     eglTerminate(display_);
     display_=EGL_NO_DISPLAY;context_=EGL_NO_CONTEXT;surface_=EGL_NO_SURFACE;
-    program_=vao_=vbo_=texture_=0;width_=height_=target_=fence_=0;
+    program_=vao_=vbo_=texture_=0;width_=height_=target_=depth_target_=fence_=0;depth_cleared_=false;
 }
 void XbeGlesBackend::Check() const {
     if(context_==EGL_NO_CONTEXT || owner_!=std::this_thread::get_id() ||
@@ -107,7 +117,12 @@ bool XbeGlesBackend::Init(uint32_t w,uint32_t h){
         sampler_=glGetUniformLocation(program_,"u_texture");
         color_op_=glGetUniformLocation(program_,"u_color_op");
         alpha_op_=glGetUniformLocation(program_,"u_alpha_op");
-        if(extent_<0||textured_<0||sampler_<0||color_op_<0||alpha_op_<0)throw std::runtime_error("GLES uniform missing");
+        transformed_=glGetUniformLocation(program_,"u_transformed");
+        world_=glGetUniformLocation(program_,"u_world");
+        view_=glGetUniformLocation(program_,"u_view");
+        projection_=glGetUniformLocation(program_,"u_projection");
+        if(extent_<0||textured_<0||sampler_<0||color_op_<0||alpha_op_<0||
+           transformed_<0||world_<0||view_<0||projection_<0)throw std::runtime_error("GLES uniform missing");
         glGenTextures(1,&texture_);
         glGenVertexArrays(1,&vao_);glGenBuffers(1,&vbo_);
         glBindVertexArray(vao_);glBindBuffer(GL_ARRAY_BUFFER,vbo_);
@@ -126,20 +141,70 @@ void XbeGlesBackend::Target(const gpu::Surface& s){
     if(!gpu::DescribeSurface(s,d)||d.width!=width_||d.height!=height_||d.format!=0x12||!d.linear)
         Unsupported("GLES diagnostic requires one matching linear A8R8G8B8 target");
     if(target_&&target_!=s.header)Unsupported("GLES multiple targets not implemented");
+    gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
     target_=s.header;
+}
+void XbeGlesBackend::DepthTarget(const gpu::Surface& s){
+    if(!s.header)Unsupported("No guest depth target");
+    gpu::TextureDesc d{};
+    if(!gpu::DescribeSurface(s,d)||d.width!=width_||d.height!=height_||
+       d.format!=0x2e||!d.linear||d.pitch<uint64_t(d.width)*4)
+        Unsupported("Only matching linear D24S8 depth surfaces supported");
+    gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
+    if(depth_target_&&depth_target_!=s.header)Unsupported("Multiple depth targets not implemented");
+    depth_target_=s.header;
+}
+void XbeGlesBackend::RasterState(const gpu::State& s){
+    auto simple=[&](unsigned m){return s.simple[m>>2];};
+    for(unsigned i=0;i<s.rs.size();++i)if(s.rs[i]&&i!=gpu::kRsZEnable)
+        Unsupported("Unsupported complex render state");
+    for(unsigned i=0;i<s.simple.size();++i){
+        if(!s.simple[i])continue;
+        switch(i*4){
+            case gpu::kMBlendEnable:case gpu::kMSrcBlend:case gpu::kMDestBlend:case gpu::kMBlendOp:
+            case gpu::kMZFunc:case gpu::kMZWriteEnable:case gpu::kMColorWriteEnable:break;
+            default:Unsupported("Unsupported simple render state");
+        }
+    }
+    if(s.rs[gpu::kRsZEnable]>1)Unsupported("W-buffer not implemented");
+    if(s.rs[gpu::kRsZEnable]){
+        DepthTarget(s.zs);
+        if(!depth_cleared_)Unsupported("Depth surface must be cleared before drawing");
+        auto cmp=simple(gpu::kMZFunc);
+        if(cmp<0x200||cmp>0x207)Unsupported("Unknown depth comparison");
+        glEnable(GL_DEPTH_TEST);glDepthFunc(cmp);glDepthMask(simple(gpu::kMZWriteEnable)!=0);
+    }else{glDisable(GL_DEPTH_TEST);glDepthMask(GL_FALSE);}
+    if(simple(gpu::kMBlendEnable)){
+        auto src=simple(gpu::kMSrcBlend),dst=simple(gpu::kMDestBlend),op=simple(gpu::kMBlendOp);
+        // Xbox NV2A factors and equations use GL enumerants.
+        auto valid=[](uint32_t f){return f<=1||(f>=0x300&&f<=0x307);};
+        if(!valid(src)||!valid(dst))Unsupported("Unsupported blend factor");
+        if(op!=GL_FUNC_ADD&&op!=GL_FUNC_SUBTRACT&&op!=GL_FUNC_REVERSE_SUBTRACT&&op!=GL_MIN&&op!=GL_MAX)
+            Unsupported("Unsupported blend equation");
+        glEnable(GL_BLEND);glBlendFunc(src,dst);glBlendEquation(op);
+    }else glDisable(GL_BLEND);
+    auto cw=simple(gpu::kMColorWriteEnable);
+    if(cw&~0x01010101u)Unsupported("Invalid Xbox color write mask");
+    glColorMask((cw>>16)&1,(cw>>8)&1,cw&1,(cw>>24)&1);
+    glDisable(GL_STENCIL_TEST);glDisable(GL_CULL_FACE);glDisable(GL_SCISSOR_TEST);
 }
 void XbeGlesBackend::Clear(const gpu::State& s,uint32_t count,const uint8_t* rects,uint32_t flags,uint32_t color,float z,uint32_t stencil){
     Check();Target(s.rt);
     if(count||rects)Unsupported("GLES rectangle clear not implemented");
     if(flags&~(gpu::kClearTarget|gpu::kClearZ|gpu::kClearStencil))Unsupported("Unsupported clear flags");
-    if(flags&(gpu::kClearZ|gpu::kClearStencil))Unsupported("Guest depth surface not implemented");
+    if(flags&gpu::kClearStencil)Unsupported("Guest stencil operations not implemented");
+    if(flags&gpu::kClearZ)DepthTarget(s.zs);
     if(!std::isfinite(z))throw std::invalid_argument("Nonfinite clear depth");
     glDisable(GL_SCISSOR_TEST);
     // NV2A D3DCLEAR_TARGET comprises R/G/B/A channel bits 4..7.
     glColorMask((flags&0x10)!=0,(flags&0x20)!=0,(flags&0x40)!=0,(flags&0x80)!=0);
     glClearColor(float((color>>16)&255)/255,float((color>>8)&255)/255,float(color&255)/255,float(color>>24)/255);
     glClearDepthf(z);glClearStencil(GLint(stencil));
-    if(flags&gpu::kClearTarget)glClear(GL_COLOR_BUFFER_BIT);
+    GLbitfield mask=0;
+    if(flags&gpu::kClearTarget)mask|=GL_COLOR_BUFFER_BIT;
+    if(flags&gpu::kClearZ){glDepthMask(GL_TRUE);mask|=GL_DEPTH_BUFFER_BIT;}
+    if(mask)glClear(mask);
+    if(flags&gpu::kClearZ)depth_cleared_=true;
     glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);GlCheck("GLES clear");
 }
 void XbeGlesBackend::UploadTexture(const gpu::State& s){
@@ -181,14 +246,14 @@ void XbeGlesBackend::UploadTexture(const gpu::State& s){
 void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint32_t count,const uint8_t* indices){
     Check();Target(s.rt);
     const bool textured=s.textures[0]!=0;
-    if(s.vs_handle!=(textured?0x144u:0x44u)||s.vs||s.ps||s.scissor_count||s.zs.header||
+    const bool transformed=(s.vs_handle&0xe)==4;
+    const uint32_t expected=(textured?0x140u:0x40u)|(transformed?4u:2u);
+    if(s.vs_handle!=expected||s.vs||s.ps||s.scissor_count||
        s.viewport.x||s.viewport.y||s.viewport.w!=width_||s.viewport.h!=height_||
        s.viewport.min_z!=0||s.viewport.max_z!=1||s.ss_offset_x!=0||s.ss_offset_y!=0||
        std::any_of(s.textures.begin()+1,s.textures.end(),[](auto v){return v!=0;})||
-       std::any_of(s.rs.begin(),s.rs.end(),[](auto v){return v!=0;})||
-       std::any_of(s.simple.begin(),s.simple.end(),[](auto v){return v!=0;})||
        std::any_of(s.tss.begin()+1,s.tss.end(),[](const auto& stage){return std::any_of(stage.begin(),stage.end(),[](auto v){return v!=0;});}))
-        Unsupported("GLES diagnostic requires XYZRHW diffuse and a single optional texture");
+        Unsupported("GLES diagnostic requires XYZ or XYZRHW diffuse and a single optional texture");
     const auto& st=s.tss[0];
     for(unsigned i=0;i<st.size();++i){
         if(!st[i])continue;
@@ -211,7 +276,8 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
     if(prim!=5)Unsupported("GLES diagnostic only accepts triangle lists");
     gpu::Assembled a;
     if(!gpu::Assemble(s,prim,start,count,indices,a))throw std::runtime_error("Vertex assembly failed");
-    if(a.regs!=(textured?0x209u:9u)||!a.pretransformed||a.elements[0].format!=gpu::kVertexR32G32B32A32_FLOAT||
+    if(a.regs!=(textured?0x209u:9u)||a.pretransformed!=transformed||
+       a.elements[0].format!=(transformed?gpu::kVertexR32G32B32A32_FLOAT:gpu::kVertexR32G32B32_FLOAT)||
        a.elements[3].format!=gpu::kVertexB8G8R8A8_UNORM||
        (textured&&a.elements[9].format!=gpu::kVertexR32G32_FLOAT))Unsupported("Unsupported GLES vertex layout");
     uint32_t n=a.index_count?a.index_count:a.draw_count;
@@ -230,17 +296,24 @@ void XbeGlesBackend::Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint3
             if(off>b.bytes||bytes>b.bytes-off)throw std::out_of_range("Invalid assembled vertex");
             std::memcpy(dest,b.src+off,bytes);
         };
-        auto& v=vertices[i];read(0,v.p,16);
+        auto& v=vertices[i];v.p[3]=1;read(0,v.p,transformed?16:12);
         uint8_t bgra[4];read(3,bgra,4);
         if(textured){read(9,v.uv,8);if(!std::isfinite(v.uv[0])||!std::isfinite(v.uv[1]))throw std::invalid_argument("Invalid texture coordinates");}
         if(!std::all_of(v.p,v.p+4,[](float x){return std::isfinite(x);})||v.p[3]<=0)
             throw std::invalid_argument("Invalid XYZRHW position");
         v.c[0]=bgra[2]/255.0f;v.c[1]=bgra[1]/255.0f;v.c[2]=bgra[0]/255.0f;v.c[3]=bgra[3]/255.0f;
     }
-    glViewport(0,0,width_,height_);glDisable(GL_BLEND);glDisable(GL_DEPTH_TEST);glDisable(GL_STENCIL_TEST);
-    glDisable(GL_CULL_FACE);glDisable(GL_SCISSOR_TEST);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
+    glViewport(0,0,width_,height_);RasterState(s);
     if(textured)UploadTexture(s);
     glUseProgram(program_);glUniform2f(extent_,float(width_),float(height_));
+    glUniform1i(transformed_,transformed);
+    // The Xbox matrices are row-major, row-vector transforms; GLES reads
+    // this byte order as the transposed column-vector matrix.
+    for(auto slot:{2,3,256})for(auto v:s.transforms[slot])
+        if(!std::isfinite(v))throw std::invalid_argument("Invalid transform matrix");
+    glUniformMatrix4fv(world_,1,GL_FALSE,s.transforms[256].data());
+    glUniformMatrix4fv(view_,1,GL_FALSE,s.transforms[2].data());
+    glUniformMatrix4fv(projection_,1,GL_FALSE,s.transforms[3].data());
     glUniform1i(textured_,textured);glUniform1i(sampler_,0);glUniform1i(color_op_,op);glUniform1i(alpha_op_,alpha);
     glBindVertexArray(vao_);glBindBuffer(GL_ARRAY_BUFFER,vbo_);
     glBufferData(GL_ARRAY_BUFFER,GLsizeiptr(vertices.size()*sizeof(Vertex)),vertices.data(),GL_STREAM_DRAW);

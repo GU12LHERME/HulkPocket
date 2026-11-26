@@ -96,6 +96,11 @@ class XbeD3d8Bridge {
         if(name=="D3DDevice_SetRenderState_Simple") {
             Count(a,2);state_.simple[(a[0]&0x1ffc)>>2]=a[1];return 0;
         }
+        if(name=="D3DDevice_SetRenderState_ZEnable") {
+            Count(a,1);
+            if(a[0]>1)throw std::invalid_argument("W-buffer not integrated");
+            state_.rs[gpu::kRsZEnable]=a[0];return 0;
+        }
         if(name=="D3DDevice_SetTextureStageStateNotInline") {
             Count(a,3);
             if(a[1]>=gpu::kTssCount)throw std::invalid_argument("Unknown texture stage state");
@@ -173,7 +178,12 @@ public:
         if(!w||!h||w>4096||h>4096)throw std::invalid_argument("Invalid framebuffer size");
         gpu::ScopedGuestMemory scope(mem_);
         if(!backend_.Init(w,h))throw std::runtime_error("D3D backend initialization failed");
-        state_.viewport={0,0,w,h,0,1};ViewportConstants();initialized_=true;
+        state_.viewport={0,0,w,h,0,1};
+        // Initial identity transforms and ARGB write mask for this standalone bridge.
+        // The actual game's XDK default state must replace these on device creation.
+        for(auto slot:{2,3,256})for(unsigned i=0;i<4;++i)state_.transforms[slot][i*5]=1.0f;
+        state_.simple[gpu::kMColorWriteEnable>>2]=0x01010101;
+        ViewportConstants();initialized_=true;
     }
     uint32_t Call(std::string_view name,X86Context& cpu,const D3dAbi& abi) {
         std::lock_guard guard(lock_);

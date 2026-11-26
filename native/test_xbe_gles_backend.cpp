@@ -71,7 +71,53 @@ int main(){
     assert(decoded.size()==36&&decoded[0]==255&&decoded[3]==136&&decoded[35]==136);
     std::vector<uint8_t> bc3(16,0);bc3[0]=200;bc3[1]=100;std::copy(bc1.begin(),bc1.end(),bc3.begin()+8);
     decoded=DecodeXboxBc(4,4,gpu::Host::BC3,bc3);assert(decoded[0]==255&&decoded[3]==200);
+    // Disable the texture combiner and bind a matching 64x64 D24S8 surface.
+    call("D3DDevice_SetTexture",{0,0});ts(gpu::kTssColorOp,0);ts(gpu::kTssAlphaOp,0);
+    mem.Write32(0x10500,0x50000);mem.Write32(0x10504,0x108000);
+    mem.Write32(0x1050c,0x00012e21);mem.Write32(0x10510,63|(63<<12)|(3<<24));
+    call("D3DDevice_SetRenderTarget",{0x10100,0x10500});
+    call("D3DDevice_SetVertexShader",{0x44});
+    call("D3DDevice_SetStreamSource",{0,0x10200,sizeof(V)});
+    auto rs=[&](uint32_t method,uint32_t value){call("D3DDevice_SetRenderState_Simple",{method,value});};
+    call("D3DDevice_SetRenderState_ZEnable",{1});rs(gpu::kMZFunc,0x201);rs(gpu::kMZWriteEnable,1);
+    call("D3DDevice_Clear",{0,0,0xf1,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+    auto tri=[&](float z,uint32_t color){
+        const V p[]={{8,8,z,1,color},{56,8,z,1,color},{32,56,z,1,color}};
+        mem.Write(0x80105000,p,sizeof(p));call("D3DDevice_DrawVertices",{5,0,3});
+    };
+    tri(.2f,0xffff0000);tri(.8f,0xff0000ff);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{255,0,0,255}));
+    tri(.1f,0xff00ff00);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{0,255,0,255}));
+    // Depth writes off: a closer draw does not prevent a later middle-depth draw.
+    rs(gpu::kMZWriteEnable,0);tri(.02f,0xff0000ff);tri(.05f,0xffff0000);
+    assert((backend.ReadPixel(32,24)==std::array<uint8_t,4>{255,0,0,255}));
+    // Source alpha / inverse source alpha, 50% red on blue.
+    call("D3DDevice_SetRenderState_ZEnable",{0});
+    call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.0f),0});
+    rs(gpu::kMBlendEnable,1);rs(gpu::kMSrcBlend,0x302);rs(gpu::kMDestBlend,0x303);rs(gpu::kMBlendOp,0x8006);
+    tri(.5f,0x80ff0000);
+    auto mixed=backend.ReadPixel(32,24);assert(mixed[0]>=127&&mixed[0]<=129&&mixed[1]==0&&mixed[2]>=126&&mixed[2]<=128);
+    rs(gpu::kMBlendEnable,0);
+    // ARGB channel mask: write only green; preserve previous red/blue/alpha.
+    rs(gpu::kMColorWriteEnable,0x00000100);
+    tri(.5f,0xff00ff00);
+    auto masked=backend.ReadPixel(32,24);assert(masked[0]==mixed[0]&&masked[1]==255&&masked[2]==mixed[2]&&masked[3]==mixed[3]);
+    rs(gpu::kMColorWriteEnable,0x01010101);
+    // World-space XYZ with nonidentity world translation and view scaling.
+    call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.0f),0});
+    struct WV{float x,y,z;uint32_t color;};
+    const WV wv[]={{-.9f,-.5f,.5f,0xffffff00},{-.1f,-.5f,.5f,0xffffff00},{-.5f,.5f,.5f,0xffffff00}};
+    mem.Write(0x80105000,wv,sizeof(wv));call("D3DDevice_SetStreamSource",{0,0x10200,sizeof(WV)});
+    call("D3DDevice_SetVertexShader",{0x42});
+    const float world[]={1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,1};
+    const float view[]={.8f,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    mem.Write(0x10600,world,sizeof(world));mem.Write(0x10640,view,sizeof(view));
+    call("D3DDevice_SetTransform",{6,0x10600});call("D3DDevice_SetTransform",{0,0x10640});
+    call("D3DDevice_DrawVertices",{5,0,3});
+    assert((backend.ReadPixel(44,32)==std::array<uint8_t,4>{255,255,0,255}));
+    assert((backend.ReadPixel(16,32)==std::array<uint8_t,4>{0,0,0,255}));
     auto fence=backend.Fence();assert(!backend.FencePending(fence));backend.WaitFence(fence);
     assert(bridge.Present(0x10100)==1);
-    std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, fence and pbuffer present passed");
+    std::puts("GLES real clear, triangle, indexed triangle, pixel readback, Xbox texture upload, filtering, DXT fallback, depth, alpha blending, channel mask, 3D transforms, fence and pbuffer present passed");
 }
