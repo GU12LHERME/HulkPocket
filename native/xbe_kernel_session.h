@@ -4,6 +4,9 @@
 #include "xbe_tls.h"
 #include "hulk_kernel_clock.h"
 #include "xbe_guest_thread_exit.h"
+#include "xbe_kernel_rtl.h"
+#include <map>
+#include <chrono>
 #include <array>
 #include <condition_variable>
 #include <cstdio>
@@ -20,7 +23,7 @@ private:
     struct Worker {
         std::thread host;
         uint32_t suspend=0, pcr=0, handle=0, id=0;
-        bool finished=false;
+        bool finished=false, closed=false;
     };
     XboxGuestAddressSpace& mem_;
     XbeKernelPool pool_;
@@ -30,17 +33,22 @@ private:
     std::condition_variable cv_;
     std::array<Worker,16> workers_{};
     size_t count_=0;
+    struct Event { uint32_t body; bool manual; };
+    std::map<uint32_t,Event> events_;
+    uint32_t next_event_=0x2000;
+    std::map<uint32_t,uint32_t> critical_;
     bool stopping_=false;
     int worker_failure_=0;
     Entry entry_=nullptr;
     inline static thread_local XbeKernelSession* active_=nullptr;
     Worker* Find(uint32_t handle) {
         for(size_t i=0;i<count_;++i)
-            if(workers_[i].handle==handle) return &workers_[i];
+            if(workers_[i].handle==handle && !workers_[i].closed) return &workers_[i];
         return nullptr;
     }
     void Pause(X86Context& cpu,std::unique_lock<std::mutex>& lock) {
-        auto* w=Find(cpu.thread_handle);
+        Worker* w=nullptr;
+        for(size_t i=0;i<count_;++i) if(workers_[i].handle==cpu.thread_handle) w=&workers_[i];
         cv_.wait(lock,[&]{return stopping_ || !w || !w->suspend;});
         if(stopping_) throw std::runtime_error("Diagnostic session stopping");
     }
@@ -118,10 +126,138 @@ private:
         std::fprintf(stderr,"Created diagnostic guest thread %X (id %X) at %08X\n",handle,id,target);
         Ret(cpu,n,0);
     }
+    // Xbox LARGE_INTEGER relative time is negative in 100 ns units.
+    using Steady=std::chrono::steady_clock;
+    static int64_t Now100ns() {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count()/100
+            +116444736000000000LL;
+    }
+    Steady::time_point Deadline(uint32_t addr) {
+        if(!addr) return Steady::time_point::max();
+        int64_t ticks=0; mem_.Read(addr,&ticks,8);
+        // Bound diagnostic waits to 15 seconds; the outer process has its own watchdog.
+        uint64_t delta=ticks<0?uint64_t(-(ticks+1))+1:
+            ticks>Now100ns()?uint64_t(ticks-Now100ns()):0;
+        return Steady::now()+std::chrono::nanoseconds(std::min<uint64_t>(delta,150000000)*100);
+    }
+    uint32_t Body(uint32_t h) {
+        auto it=events_.find(h);
+        if(it!=events_.end()) return it->second.body;
+        auto* w=Find(h);
+        if(w) return w->pcr+0x400;
+        return 0;
+    }
+    uint32_t WaitBody(X86Context& cpu,uint32_t body,uint32_t timeout,
+                      std::unique_lock<std::mutex>& lock) {
+        if(!body) return 0xc0000008u;
+        const auto deadline=Deadline(timeout);
+        const auto ready=[&]{return stopping_ || mem_.Read32(body+4)!=0;};
+        do {
+            if(!cv_.wait_until(lock,deadline,ready)) return 0x102;
+            Pause(cpu,lock);
+        } while(!mem_.Read32(body+4));
+        // Synchronization event is consumed by exactly one waiter.
+        if((mem_.Read32(body)&255u)==1) mem_.Write32(body+4,0);
+        return 0;
+    }
+    void Critical(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
+        Check(cpu,1); const auto addr=Arg(cpu,0);
+        if(!mem_.IsCommitted(addr,28)) throw std::runtime_error("Invalid critical section");
+        if(ordinal==291) {
+            if(critical_.count(addr) && mem_.Read32(addr+0x18))
+                throw std::runtime_error("Reinitializing held critical section");
+            mem_.Write32(addr,0x00040001);
+            mem_.Write32(addr+4,0); mem_.Write32(addr+8,addr+8); mem_.Write32(addr+12,addr+8);
+            mem_.Write32(addr+16,0xffffffff); mem_.Write32(addr+20,0); mem_.Write32(addr+24,0);
+            critical_[addr]=0; Ret(cpu,1,0); return;
+        }
+        if(!critical_.count(addr)) throw std::runtime_error("Uninitialized critical section");
+        auto me=mem_.Read32(cpu.fs_base+0x28);
+        if(!me) throw std::runtime_error("Missing current thread");
+        if(ordinal==277) {
+            ++critical_[addr];
+            cv_.wait(lock,[&]{auto owner=mem_.Read32(addr+24);return stopping_ || !owner || owner==me;});
+            --critical_[addr]; Pause(cpu,lock);
+            mem_.Write32(addr+24,me);
+            mem_.Write32(addr+20,mem_.Read32(addr+20)+1);
+        } else {
+            if(mem_.Read32(addr+24)!=me || !mem_.Read32(addr+20))
+                throw std::runtime_error("Critical section not owned by current thread");
+            auto depth=mem_.Read32(addr+20)-1;
+            mem_.Write32(addr+20,depth);
+            if(!depth) {mem_.Write32(addr+24,0);cv_.notify_all();}
+        }
+        mem_.Write32(addr+16,mem_.Read32(addr+20)-1);
+        Ret(cpu,1,0);
+    }
     void Call(X86Context& cpu,uint32_t ordinal,std::unique_lock<std::mutex>& lock) {
         Pause(cpu,lock);
         if(clock_) clock_->Update(mem_);
         switch(ordinal) {
+            case 291: case 277: case 294: Critical(cpu,ordinal,lock); return;
+            case 289: Check(cpu,2); InitGuestAnsiString(mem_,Arg(cpu,0),Arg(cpu,1)); Ret(cpu,2,0); return;
+            case 270: case 279: {
+                Check(cpu,3);
+                auto v=CompareGuestAnsiStrings(mem_,Arg(cpu,0),Arg(cpu,1),(Arg(cpu,2)&255u)!=0);
+                Ret(cpu,3,ordinal==279?uint32_t(v==0):uint32_t(v)); return;
+            }
+            case 128: {
+                Check(cpu,1); const auto now=Now100ns(); mem_.Write(Arg(cpu,0),&now,8);
+                Ret(cpu,1,0); return;
+            }
+            case 99: {
+                Check(cpu,3);
+                if((Arg(cpu,1)&255u)||!Arg(cpu,2)) throw std::runtime_error("Unsupported alertable delay or missing interval");
+                auto deadline=Deadline(Arg(cpu,2));
+                cv_.wait_until(lock,deadline,[&]{return stopping_;});
+                Pause(cpu,lock); Ret(cpu,3,0); return;
+            }
+            case 189: {
+                Check(cpu,4);
+                auto out=Arg(cpu,0), attrs=Arg(cpu,1), type=Arg(cpu,2);
+                if(!mem_.IsCommitted(out,4) || type>1) {Ret(cpu,4,0xc000000du);return;}
+                // Only unnamed events; reject name/attribute semantics explicitly.
+                if(attrs) throw std::runtime_error("Named/attributed event not implemented");
+                auto body=pool_.Allocate(16);
+                if(!body) {Ret(cpu,4,0xc0000017u);return;}
+                auto h=next_event_;next_event_+=4;
+                mem_.Write32(body,type|0x00040000u);
+                mem_.Write32(body+4,(Arg(cpu,3)&255u)?1:0);
+                mem_.Write32(body+8,body+8);mem_.Write32(body+12,body+8);
+                events_.emplace(h,Event{body,type==0});Output(out,h);
+                Ret(cpu,4,0);return;
+            }
+            case 225: case 186: {
+                const unsigned n=ordinal==225?2:1;Check(cpu,n);
+                auto it=events_.find(Arg(cpu,0));
+                if(it==events_.end()){Ret(cpu,n,0xc0000008u);return;}
+                auto body=it->second.body;
+                if(ordinal==225) Output(Arg(cpu,1),mem_.Read32(body+4));
+                mem_.Write32(body+4,ordinal==225?1:0);
+                cv_.notify_all();Ret(cpu,n,0);return;
+            }
+            case 233: case 234: {
+                unsigned n=ordinal==233?3:4;Check(cpu,n);
+                if(Arg(cpu,n-2)&255u) throw std::runtime_error("Alertable wait not implemented");
+                auto status=WaitBody(cpu,Body(Arg(cpu,0)),Arg(cpu,n-1),lock);
+                Ret(cpu,n,status);return;
+            }
+            case 187: {
+                Check(cpu,1);auto h=Arg(cpu,0);
+                auto it=events_.find(h);
+                // Keep event body alive until session end (in-flight waits may refer to it).
+                if(it!=events_.end()){events_.erase(it);Ret(cpu,1,0);return;}
+                if(auto* w=Find(h)){w->closed=true;Ret(cpu,1,0);return;}
+                Ret(cpu,1,0xc0000008u);return;
+            }
+            case 246: {
+                Check(cpu,3);auto h=Arg(cpu,0);
+                auto body=h==0xfffffffeu?mem_.Read32(cpu.fs_base+0x28):Body(h);
+                if(!body){Ret(cpu,3,0xc0000008u);return;}
+                if(Arg(cpu,1)) throw std::runtime_error("Typed object reference not implemented");
+                Output(Arg(cpu,2),body);Ret(cpu,3,0);return;
+            }
             case 254: case 255: CreateThread(cpu,ordinal); return;
             case 224: case 231: {
                 Check(cpu,2);
