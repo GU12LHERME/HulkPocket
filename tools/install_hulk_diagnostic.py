@@ -79,6 +79,11 @@ def main():
         env.update(HULK_PARTITION1_ROOT=str(partition),HULK_DISC_ROOT=str(disc),
             HULK_CONTINUE_CREATE="1",HULK_CONTINUE_DRAW="1",HULK_CONTINUE_SWAP="1",
             HULK_DIAGNOSTIC_BIN=str(home/"hulk-live-diagnostic"))
+        # Longer bounded diagnostic by default for the device test; callers
+        # can still request the old limits or full per-draw pixel capture.
+        env.setdefault("HULK_FRAME_LIMIT","600")
+        env.setdefault("HULK_DRAW_LIMIT","128")
+        env.setdefault("HULK_WATCHDOG_SECONDS","45")
         return subprocess.call(["bash","tools/run_hulk_next.sh"],cwd=repo,env=env)
     return 0
 if __name__=="__main__":

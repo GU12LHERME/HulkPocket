@@ -114,7 +114,11 @@ private:
         unsigned diagnostic_texture_returns=0;
         uint64_t last_frame_hash=0;
         unsigned identical_frames=0;
-        static constexpr unsigned diagnostic_draw_limit=kDiagnosticDrawsPerFrame;
+        const unsigned diagnostic_draw_limit=DiagnosticBudget("HULK_DRAW_LIMIT",kDiagnosticDrawsPerFrame,512);
+        const unsigned frame_limit=DiagnosticBudget("HULK_FRAME_LIMIT",kDiagnosticFrameLimit,1800);
+        const bool detailed_draws=std::getenv("HULK_FULL_DRAW_CAPTURE")&&
+            std::strcmp(std::getenv("HULK_FULL_DRAW_CAPTURE"),"1")==0;
+        uint32_t last_capture_format=0xffffffffu,last_capture_primitive=0xffffffffu;
         std::array<uint32_t,6> last_viewport{};
         uint32_t last_viewport_call=0,last_viewport_caller=0;
         LiveD3dDevice(XboxGuestAddressSpace& mem,XbeKernelPool& pool,XbePhysicalMemory& physical,uint32_t thread)
@@ -1082,7 +1086,7 @@ private:
                 const auto caller=mem_.Read32(cpu.esp),start=Arg(cpu,1),count=Arg(cpu,2);
                 if(!indexed&&caller==0x0031c10f&&fvf==0x142&&
                    ((Arg(cpu,0)==5&&count&&count%3==0)||(Arg(cpu,0)==6&&count>=3))){
-                    if(frame_draws>=LiveD3dDevice::diagnostic_draw_limit)
+                    if(frame_draws>=live.diagnostic_draw_limit)
                         throw std::runtime_error("Textured diagnostic draw budget reached");
                     // Validate each current texture/combiner/primitive independently
                     // instead of requiring every screen to match the copyright raster profile.
@@ -1090,19 +1094,33 @@ private:
                     gpu::TextureDesc desc{};
                     if(!gpu::DescribeSurface(synced.rt,desc))
                         throw std::runtime_error("Textured quad target description failed");
-                    live.backend.ReadbackColor(synced.rt);
+                    gpu::TextureDesc tex{};
+                    if(!gpu::Describe(synced.textures[0],tex))throw std::runtime_error("Invalid capture texture");
+                    const bool capture=live.detailed_draws||!live.diagnostic_texture_returns||
+                        live.last_capture_format!=tex.format||live.last_capture_primitive!=Arg(cpu,0);
+                    // Keep first-draw pixel proof and capture each new texture
+                    // format/primitive. Normal repeated draws are read back at swap.
+                    std::vector<uint8_t> before;
                     auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
-                    std::vector<uint8_t> before(pixels,pixels+size_t(desc.pitch)*desc.height);
-                    live.bridge.ReplayTexturedDiffuseDiagnostic(Arg(cpu,0),start,count);
-                    live.backend.ReadbackColor(synced.rt);
-                    unsigned changed=0;
-                    for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width;++x){
-                        size_t at=size_t(y)*desc.pitch+4*x;
-                        if(std::memcmp(before.data()+at,pixels+at,4))++changed;
+                    if(capture){
+                        live.backend.ReadbackColor(synced.rt);
+                        before.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
                     }
-                    std::fprintf(stderr,"D3D ORIGINAL TEXTURED QUAD REPLAY: vertices=%u changed_pixels=%u (reduced state; not presented)\n",vertices,changed);
-                    if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path)
-                        WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
+                    live.bridge.ReplayTexturedDiffuseDiagnostic(Arg(cpu,0),start,count);
+                    unsigned changed=0;
+                    if(capture){
+                        live.backend.ReadbackColor(synced.rt);
+                        for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width;++x){
+                            size_t at=size_t(y)*desc.pitch+4*x;
+                            if(std::memcmp(before.data()+at,pixels+at,4))++changed;
+                        }
+                        live.last_capture_format=tex.format;live.last_capture_primitive=Arg(cpu,0);
+                        std::fprintf(stderr,"D3D ORIGINAL TEXTURED QUAD REPLAY: vertices=%u changed_pixels=%u (reduced state; not presented)\n",vertices,changed);
+                        if(const char* path=std::getenv("HULK_REPLAY_BITMAP");path&&*path)
+                            WriteDiagnosticBitmap(path,pixels,desc.width,desc.height,desc.pitch);
+                    }else{
+                        std::fprintf(stderr,"D3D TEXTURED DRAW PASS vertices=%u (pixel readback at swap)\n",vertices);
+                    }
                     // b4edddb on RP6 produced recognizable copyright text
                     // (7335 changed pixels). Permit only this checked reduced
                     // profile, with opt-in and the existing frame budgets.
@@ -1112,9 +1130,9 @@ private:
                         ++live.diagnostic_texture_returns;
                         ++live.diagnostic_draw_returns;
                         live.diagnostic_vertices+=vertices;
-                        std::fprintf(stderr,"D3D DIAGNOSTIC TEXTURED DRAW RETURN: frame=%u batch=%u/%u total_textured=%u changed_pixels=%u (reduced profile)\n",
-                            live.diagnostic_swap_returns+1,frame_draws+1,LiveD3dDevice::diagnostic_draw_limit,
-                            live.diagnostic_texture_returns,changed);
+                        std::fprintf(stderr,"D3D DIAGNOSTIC TEXTURED DRAW RETURN: frame=%u batch=%u/%u total_textured=%u changed_pixels=%u measured=%u (reduced profile)\n",
+                            live.diagnostic_swap_returns+1,frame_draws+1,live.diagnostic_draw_limit,
+                            live.diagnostic_texture_returns,changed,unsigned(capture));
                         Ret(cpu,3,0);return;
                     }
                     throw std::runtime_error("D3D original textured quad replay completed; inspect bitmap");
@@ -1127,7 +1145,7 @@ private:
                 // Preserve the original single diagnostic replay by default;
                 // continuing multiple draws requires the explicit opt-in,
                 // same observed raster/transform profile and bounded count.
-                if(!indexed&&Arg(cpu,0)==2&&frame_draws<LiveD3dDevice::diagnostic_draw_limit&&
+                if(!indexed&&Arg(cpu,0)==2&&frame_draws<live.diagnostic_draw_limit&&
                     (first||(opted_in&&!zero_viewport&&same_caller&&matching))){
                         gpu::ScopedGuestMemory scope(mem_);
                         gpu::TextureDesc desc{};
@@ -1157,11 +1175,11 @@ private:
                     // the color buffer. The BMP is cumulative, not a frame.
                     if(opted_in&&!zero_viewport&&(!first||changed)&&same_caller&&matching&&
                         synced.viewport.w==desc.width&&synced.viewport.h==desc.height&&
-                        frame_draws<LiveD3dDevice::diagnostic_draw_limit){
+                        frame_draws<live.diagnostic_draw_limit){
                         if(first)live.diagnostic_line_profile=std::make_unique<gpu::State>(synced);
                         ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
                         std::fprintf(stderr,"D3D DIAGNOSTIC DRAW RETURN: frame=%u batch=%u/%u total_draws=%u vertices=%u cumulative_vertices=%u changed_pixels=%u (reduced profile)\n",
-                            live.diagnostic_swap_returns+1,frame_draws+1,LiveD3dDevice::diagnostic_draw_limit,live.diagnostic_draw_returns,vertices,live.diagnostic_vertices,changed);
+                            live.diagnostic_swap_returns+1,frame_draws+1,live.diagnostic_draw_limit,live.diagnostic_draw_returns,vertices,live.diagnostic_vertices,changed);
                         Ret(cpu,3,0);return;
                     }
                 }
@@ -1181,7 +1199,7 @@ private:
                     throw std::runtime_error("D3D vertical wait without owned live device");
                 auto& live=*live_d3d_;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_vblanks>=4*kDiagnosticFrameLimit)
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_vblanks>=4*live.frame_limit)
                     throw std::runtime_error("D3D vertical wait diagnostic continuation not enabled");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1215,7 +1233,7 @@ private:
                 std::fprintf(stderr,"D3D LIVE WAIT caller=%08X target=%08X current=%08X flags=%08X callback=%08X\n",
                     mem_.Read32(cpu.esp),target,current,flags,callback);
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_gpu_waits>=4*kDiagnosticFrameLimit)
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_gpu_waits>=4*live.frame_limit)
                     throw std::runtime_error("D3D initial wait diagnostic continuation not enabled");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1272,12 +1290,12 @@ private:
                 std::fprintf(stderr,"D3D ORIGINAL SWAP OFFSCREEN PASS: presents=%u draws=%u vertices=%u waits=%u (reduced diagnostic)\n",
                     presented,live.diagnostic_draw_returns,live.diagnostic_vertices,live.diagnostic_gpu_waits);
                 std::fprintf(stderr,"D3D FRAME CHECKSUM frame=%u/%u hash=%016llX identical_to_previous_total=%u draws_in_frame=%u\n",
-                    presented,kDiagnosticFrameLimit,static_cast<unsigned long long>(hash),live.identical_frames,live.diagnostic_draw_returns-live.draws_at_swap);
+                    presented,live.frame_limit,static_cast<unsigned long long>(hash),live.identical_frames,live.diagnostic_draw_returns-live.draws_at_swap);
                 const char* swap_opt=std::getenv("HULK_CONTINUE_SWAP");
                 if(!swap_opt||std::strcmp(swap_opt,"1")||
                     presented!=live.diagnostic_swap_returns+1||mem_.Read32(cpu.esp)!=0x0031b1d4||live.buffers.BufferCount()!=2)
                     throw std::runtime_error("D3D original swap reached; guest continuation not enabled or outside verified swap profile");
-                if(presented>=kDiagnosticFrameLimit)
+                if(presented>=live.frame_limit)
                     throw std::runtime_error("D3D diagnostic frame budget reached (offscreen; no gameplay claim)");
                 // Pinned XDK bridge semantics: stable surface headers,
                 // physical data and lock words rotate, return swap count.

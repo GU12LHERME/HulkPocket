@@ -1,6 +1,7 @@
 #pragma once
 #include "cpu/x86_context.h"
 #include <cstdint>
+#include <cstdlib>
 namespace hulkpocket {
 // Internal host callback IDs, never guest kernel ordinals.
 constexpr uint32_t kGraphicsCreate=0x10000,kGraphicsDraw=0x10001,
@@ -75,6 +76,19 @@ constexpr uint32_t kDefaultSimple=0x10100,kDefaultRender=0x10101,kDefaultTexture
 // but deliberately does not return to guest code.
 constexpr unsigned kDiagnosticFrameLimit=60;
 constexpr unsigned kDiagnosticDrawsPerFrame=8;
+// Explicitly bounded longer diagnostic sessions. Reject malformed values
+// by falling back to the previous conservative defaults.
+inline unsigned DiagnosticBudget(const char* name,unsigned fallback,unsigned maximum){
+    const char* p=std::getenv(name);
+    if(!p||!*p)return fallback;
+    unsigned n=0;
+    for(;*p;++p){
+        if(*p<'0'||*p>'9'||n>maximum/10)return fallback;
+        n=n*10+unsigned(*p-'0');
+        if(n>maximum)return fallback;
+    }
+    return n?n:fallback;
+}
 using GraphicsCallback=void(*)(X86Context&,uint8_t*,uint32_t);
 inline thread_local GraphicsCallback graphics_callback=nullptr;
 class ScopedGraphicsCallback {
