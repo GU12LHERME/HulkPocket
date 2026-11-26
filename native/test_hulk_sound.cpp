@@ -37,6 +37,27 @@ int main(){
     assert(s.Buffer(v,kSoundBufferPlay,{v,0,0,0})==0);
     got=s.Render(64);for(auto x:got)assert(x==0x1234);
     assert(s.Buffer(v,kSoundBufferRelease,{v})==0);
+    // XDK 5849 synthetic image with one real state segment and three
+    // reserved DSP regions. Verify offset arithmetic and actual bytes.
+    constexpr uint32_t img=0x12000,table=0x824;
+    mem.Write32(img+0x804,1);mem.Write32(img+0x80c,2);
+    mem.Write32(img+table,1);mem.Write32(img+table+4,0x1234);
+    mem.Write32(img+table+16,0x900);mem.Write32(img+table+20,4);
+    mem.Write32(img+0x900,0x89abcdef);
+    auto before=pool.Outstanding();
+    assert(s.DownloadEffects(ds,img,0x820,0,0x10010)==0x88780032u);
+    assert(pool.Outstanding()==before);
+    mem.Write32(img+table+4,0x1234);
+    mem.Write32(img+table+12,0xffffffff);
+    assert(s.DownloadEffects(ds,img,0x1000,0,0x10010)==0x88780032u);
+    assert(pool.Outstanding()==before);
+    mem.Write32(img+table+12,16);
+    assert(s.DownloadEffects(ds,img,0x1000,0,0x10010)==0);
+    auto effect=mem.Read32(0x10010);
+    assert(mem.Read32(effect)==1&&mem.Read32(effect+4)==0x1234);
+    assert(mem.Read32(mem.Read32(effect+16))==0x89abcdef);
+    assert(s.GetEffectData(ds,0,0,0x10014,4)==0&&mem.Read32(0x10014)==0x89abcdef);
+    assert(s.GetEffectData(ds,0,1,0x10014,4)==0x88780032u);
     assert(s.ReleaseDevice(ds)==0&&pool.Outstanding()==0);
     std::puts("Software DirectSound device, PCM/ADPCM, looping, volume and bounds passed");
 }

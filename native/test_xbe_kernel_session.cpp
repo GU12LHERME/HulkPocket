@@ -425,6 +425,16 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,190,{0x10960,0x40100000,0x10950,0x10968,0,0,0,3,0x22});
     assert(c->eax==0&&memory->Read32(0x1096c)==1);
     call(*c,base,cb,187,{memory->Read32(0x10960)});assert(c->eax==0);
+    const char title_image[]="\\Device\\Harddisk0\\partition1\\UDATA\\56550039\\TitleImage.xbx";
+    memory->Write(0x10900,title_image,sizeof(title_image));
+    call(*c,base,cb,289,{0x10940,0x10900});
+    call(*c,base,cb,190,{0x10960,0x40100000,0x10950,0x10968,0,0,0,3,0x22});
+    assert(c->eax==0&&memory->Read32(0x1096c)==2);
+    auto image_handle=memory->Read32(0x10960);
+    memory->Write32(0x10980,0x76543210);
+    call(*c,base,cb,236,{image_handle,0,0,0,0x10968,0x10980,4,0});
+    assert(c->eax==0&&memory->Read32(0x1096c)==4);
+    call(*c,base,cb,187,{image_handle});assert(c->eax==0);
     // Guest-created DOS aliases map only to selected Xbox device roots.
     const char link_name[]="\\??\\Q:";
     const char link_target[]="\\Device\\CdRom0";
@@ -703,6 +713,10 @@ int main() {
     fd=open(metadata.c_str(),O_RDONLY);assert(fd>=0);
     uint32_t value=0;assert(read(fd,&value,4)==4&&value==0x12345678);
     close(fd);assert(unlink(metadata.c_str())==0);
+    const std::string image=fake_title+"/TitleImage.xbx";
+    fd=open(image.c_str(),O_RDONLY);assert(fd>=0);
+    assert(read(fd,&value,4)==4&&value==0x76543210);
+    close(fd);assert(unlink(image.c_str())==0);
     // Direct negative controls on the exact writable path.
     XbeDiscFiles files(mem,dir,partition_dir);
     const char name[]="\\Device\\Harddisk0\\partition1\\UDATA\\56550039\\TitleMeta.xbx";

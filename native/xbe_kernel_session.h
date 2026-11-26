@@ -563,6 +563,8 @@ private:
             case kSoundCreate:Check(cpu,3);Ret(cpu,3,sound_.Create(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2)));return;
             case kSoundReleaseDevice:Check(cpu,1);Ret(cpu,1,sound_.ReleaseDevice(Arg(cpu,0)));return;
             case kSoundSpeaker:Check(cpu,2);Ret(cpu,2,sound_.Speaker(Arg(cpu,0),Arg(cpu,1)));return;
+            case kSoundDownloadEffects:Check(cpu,5);Ret(cpu,5,sound_.DownloadEffects(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
+            case kSoundGetEffectData:Check(cpu,5);Ret(cpu,5,sound_.GetEffectData(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
             case kSoundPump:Check(cpu,0);sound_.Pump();Ret(cpu,0,0);return;
             case kSoundNewBuffer:Check(cpu,2);Ret(cpu,2,sound_.NewBuffer(Arg(cpu,0),Arg(cpu,1)));return;
             case kSoundNewDeviceBuffer:Check(cpu,4);Ret(cpu,4,sound_.Device(Arg(cpu,0))&&!Arg(cpu,3)?sound_.NewBuffer(Arg(cpu,1),Arg(cpu,2)):0x88780032u);return;

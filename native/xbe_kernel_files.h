@@ -219,7 +219,7 @@ class XbeDiscFiles {
     // or write a host file. Never resolve a writable path through a DOS
     // alias, guest directory handle, symlink, or hardlink.
     static constexpr uint64_t kMetadataLimit=65536;
-    uint32_t OpenTitleMetadata(uint32_t out,uint32_t iosb){
+    uint32_t OpenTitleMetadata(uint32_t out,uint32_t iosb,const char* filename){
         bool hdd=false;
         int dir=Resolve("\\Device\\Harddisk0\\partition1\\UDATA\\56550039",0,&hdd);
         if(dir<0)return Finish(iosb,missing);
@@ -230,10 +230,10 @@ class XbeDiscFiles {
            faccessat(dir,".",W_OK|X_OK,0)!=0){
             close(dir);return Finish(iosb,denied);
         }
-        auto name=Match(dir,"TitleMeta.xbx");
+        auto name=Match(dir,filename);
         bool created=false;int fd=-1;
         if(name.empty()){
-            fd=openat(dir,"TitleMeta.xbx",O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,0600);
+            fd=openat(dir,filename,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK,0600);
             created=fd>=0;
         }else{
             // Opening without O_TRUNC cannot damage an unsafe existing file.
@@ -253,7 +253,7 @@ class XbeDiscFiles {
         file->metadata_write=true;
         const auto h=next_;next_+=4;
         files_.emplace(h,std::move(file));mem_.Write32(out,h);
-        std::fprintf(stderr,"XBOX TITLE METADATA OPEN PASS created=%u (private file, max 64 KiB)\n",unsigned(created));
+        std::fprintf(stderr,"XBOX TITLE METADATA OPEN PASS created=%u file=%s (private file, max 64 KiB)\n",unsigned(created),filename);
         return Finish(iosb,0,created?2u:1u);
     }
     uint32_t Finish(uint32_t iosb,uint32_t status,uint32_t info=0) {
@@ -361,9 +361,10 @@ public:
         std::replace(canonical.begin(),canonical.end(),'/','\\');
         if(!canonical.empty()&&canonical.back()=='\\')canonical.pop_back();
         if(root==0&&access==0x40100000u&&disposition==3&&options==0x22u&&
-           canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEMETA.XBX"){
+           (canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEMETA.XBX"||
+            canonical=="\\DEVICE\\HARDDISK0\\PARTITION1\\UDATA\\56550039\\TITLEIMAGE.XBX")){
             if(files_.size()+link_handles_.size()>=256)return Finish(iosb,0xc000011fu);
-            return OpenTitleMetadata(out,iosb);
+            return OpenTitleMetadata(out,iosb,canonical.back()=='X'&&canonical.find("TITLEIMAGE.XBX")!=std::string::npos?"TitleImage.xbx":"TitleMeta.xbx");
         }
         const bool title_directory_intent=root==0&&access==0x00120117u&&
             disposition==3&&options==0x00004021u&&

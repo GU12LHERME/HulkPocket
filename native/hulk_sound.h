@@ -34,6 +34,13 @@ class HulkSound {
     };
     std::map<uint32_t,Voice> voices_;
     uint32_t device_=0,refs_=0;
+    struct EffectSegment {uint32_t address=0,size=0;};
+    std::vector<uint32_t> effect_allocations_;
+    std::vector<EffectSegment> effect_states_;
+    void FreeEffects(){
+        for(auto a:effect_allocations_)pool_.Free(a);
+        effect_allocations_.clear();effect_states_.clear();
+    }
     uint64_t rendered_=0,nonzero_=0;
     std::chrono::steady_clock::time_point last_{};
     int capture_=-1;
@@ -94,12 +101,68 @@ public:
         if(!id||id!=device_||!refs_)return bad;
         if(--refs_)return refs_;
         if(!voices_.empty()){++refs_;throw std::runtime_error("DirectSound release with live buffers");}
-        pool_.Free(device_);device_=0;return 0;
+        FreeEffects();pool_.Free(device_);device_=0;return 0;
     }
     bool Device(uint32_t id)const{return id&&id==device_;}
     uint32_t Speaker(uint32_t id,uint32_t out){
         if(!Device(id)||!Range(out,4))return bad;
         mem_.Write32(out,0);return 0; // Xbox DSSPEAKER_STEREO
+    }
+    // XDK 5849 layout.toml, pinned XboxXBERecomp 767a818:
+    // descriptor at 0x818 + 4*(u32[0x804]+u32[0x80c]).
+    // Each effect contains four address/size pairs. As in the upstream
+    // descriptor adapter, reserve host-owned segments and copy plain
+    // state when present; DSP code is not executed by this mixer.
+    uint32_t DownloadEffects(uint32_t id,uint32_t image,uint32_t size,uint32_t loc,uint32_t out){
+        if(!Device(id)||size<0x820||size>kMaxBytes||!Range(image,size)||
+           (loc&&!Range(loc,4))||(out&&!Range(out,4)))return bad;
+        if(!effect_allocations_.empty())throw std::runtime_error("Replacement DSP image not yet supported");
+        auto read=[&](uint64_t off){return mem_.Read32(image+uint32_t(off));};
+        const uint64_t table=0x818ull+4ull*(uint64_t(read(0x804))+read(0x80c));
+        if(table+8>size)return bad;
+        const uint32_t count=read(table);
+        if(!count||count>64||table+8ull+32ull*count>size)return bad;
+        uint64_t total=8+32ull*count;
+        for(unsigned i=0;i<count;++i)for(unsigned j=0;j<4;++j){
+            uint64_t off=table+8+32ull*i+8*j;
+            total+=std::max(0x40u,read(off+4));
+            if(total>kMaxBytes)return bad;
+        }
+        std::vector<uint32_t> alloc;
+        std::vector<EffectSegment> states;
+        alloc.reserve(1+4*count);states.reserve(count);
+        auto rollback=[&]{for(auto a:alloc)pool_.Free(a);};
+        auto allocate=[&](uint32_t n){auto a=pool_.Allocate(n);if(a)alloc.push_back(a);return a;};
+        auto desc=allocate(8+32*count);
+        if(!desc)return oom;
+        mem_.Write32(desc,count);mem_.Write32(desc+4,read(table+4));
+        unsigned copied=0,zero_states=0;
+        for(unsigned i=0;i<count;++i)for(unsigned j=0;j<4;++j){
+            uint64_t off=table+8+32ull*i+8*j;
+            uint32_t src=read(off),n=read(off+4);
+            auto dst=allocate(std::max(0x40u,n));
+            if(!dst){rollback();return oom;}
+            if(j==1){
+                if(n&&src<=size&&n<=size-src){
+                    mem_.Write(dst,mem_.Base()+image+src,n);++copied;
+                }else if(n){++zero_states;}
+                states.push_back({dst,n});
+            }
+            mem_.Write32(desc+8+32*i+8*j,dst);
+            mem_.Write32(desc+12+32*i+8*j,n);
+        }
+        effect_allocations_=std::move(alloc);effect_states_=std::move(states);
+        if(out)mem_.Write32(out,desc);
+        std::fprintf(stderr,"HULK DSOUND DSP DESCRIPTOR PASS bytes=%u effects=%u table=%08X copied_states=%u zero_states=%u location=%08X (DSP processing not implemented)\n",
+            size,count,uint32_t(table),copied,zero_states,loc?mem_.Read32(loc):0xffffffffu);
+        return 0;
+    }
+    uint32_t GetEffectData(uint32_t id,uint32_t effect,uint32_t offset,uint32_t dest,uint32_t size){
+        if(!Device(id)||effect>=effect_states_.size()||!Range(dest,size))return bad;
+        auto seg=effect_states_[effect];
+        if(offset>seg.size||size>seg.size-offset)return bad;
+        std::memmove(mem_.Base()+dest,mem_.Base()+seg.address+offset,size);
+        return 0;
     }
     uint32_t NewBuffer(uint32_t desc,uint32_t out){
         if(!device_||!Range(desc,20)||!Range(out,4)||voices_.size()>=192)return bad;

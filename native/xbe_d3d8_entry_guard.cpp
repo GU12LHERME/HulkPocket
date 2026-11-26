@@ -468,13 +468,13 @@ SOUND_STOP(IDirectSound_CommitDeferredSettings)
 SOUND_STOP(IDirectSound_CommitEffectData)
 #endif
 #if HAS_IDirectSound_DownloadEffectsImage
-SOUND_STOP(IDirectSound_DownloadEffectsImage)
+SOUND_HOOK(IDirectSound_DownloadEffectsImage,kSoundDownloadEffects,5)
 #endif
 #if HAS_IDirectSound_EnableHeadphones
 SOUND_STOP(IDirectSound_EnableHeadphones)
 #endif
 #if HAS_IDirectSound_GetEffectData
-SOUND_STOP(IDirectSound_GetEffectData)
+SOUND_HOOK(IDirectSound_GetEffectData,kSoundGetEffectData,5)
 #endif
 #if HAS_IDirectSound_GetOutputLevels
 SOUND_STOP(IDirectSound_GetOutputLevels)
