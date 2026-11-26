@@ -196,6 +196,10 @@ jobs:
           put(0x248, 0x1000)
           put(0x24c, 0x600)
           put(0x250, 0x100)
+          put(0x620, 0x80000011)
+          put(0x624, 0x8000002A)
+          put(0x628, 0x80000011)
+          put(0x62c, 0)
           put(0x650, 0x87654321)
           with open(sys.argv[1], "wb") as file:
               file.write(data)
@@ -204,6 +208,10 @@ jobs:
             "$RUNNER_TEMP/synthetic-private-xbe.bin" \
             "$RUNNER_TEMP/libsynthetic-xbe-memory-host.so" |
             grep -q 'Module match: PASS'
+          "$RUNNER_TEMP/hulk-xbe-local-diagnostic" \
+            "$RUNNER_TEMP/synthetic-private-xbe.bin" --imports > "$RUNNER_TEMP/kernel-imports-report.txt"
+          grep -q 'Kernel imports: 3 entries, 2 unique kernel ordinals' "$RUNNER_TEMP/kernel-imports-report.txt"
+          grep -q 'Ordinals: 17 42' "$RUNNER_TEMP/kernel-imports-report.txt"
           # Change the XBE's guest entry while keeping a valid retail
           # encoding: a mismatched function map must fail preflight.
           python3 - "$RUNNER_TEMP/synthetic-private-xbe.bin" \
