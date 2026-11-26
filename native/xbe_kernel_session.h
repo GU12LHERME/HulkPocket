@@ -1220,6 +1220,19 @@ private:
                     ordinal,mem_.Read32(cpu.esp),Arg(cpu,1),Arg(cpu,2),ordinal==190?Arg(cpu,7):1,Arg(cpu,n-1),status);
                 Ret(cpu,n,status);return;
             }
+            case 207: {
+                Check(cpu,10);
+                if(Arg(cpu,2))throw std::runtime_error("Directory APC not implemented");
+                auto event=Arg(cpu,1);
+                if(event&&(!events_.count(event)||semaphore_limits_.count(events_.at(event).body)||timer_types_.count(events_.at(event).body))){
+                    Ret(cpu,10,0xc0000008u);return;
+                }
+                auto status=files_.QueryDirectory(Arg(cpu,0),Arg(cpu,4),Arg(cpu,5),Arg(cpu,6),Arg(cpu,7),Arg(cpu,8),(Arg(cpu,9)&255u)!=0);
+                if(event){mem_.Write32(events_.at(event).body+4,1);cv_.notify_all();}
+                std::fprintf(stderr,"DISC DIRECTORY caller=%08X handle=%08X class=%u status=%08X\n",
+                    mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,7),status);
+                Ret(cpu,10,status);return;
+            }
             case 218: {
                 Check(cpu,5);
                 auto status=files_.QueryVolume(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4));

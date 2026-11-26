@@ -11,6 +11,10 @@ on:
       - 'native/xbe_nv2a_push.h'
       - 'native/xbe_d3d8_default_trace.h'
       - 'native/xbe_kernel_session.h'
+      - 'native/xbe_kernel_files.h'
+      - 'native/hulk_live_fibers.h'
+      - 'native/hulk_xdk_fiber_hook.h'
+      - 'tools/install_hulk_diagnostic.py'
       - 'tools/run_hulk_diagnostic.sh'
       - 'native/xbox_guest_address_space.*'
       - 'third_party/xboxxberecomp/gpu/**'
@@ -23,6 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - name: Test matching artifact installer
+        run: python3 tools/test_install_hulk_diagnostic.py
       - name: Install Mesa
         run: sudo apt-get update && sudo apt-get install -y libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri
       - name: Fetch SDK context

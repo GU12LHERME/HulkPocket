@@ -312,7 +312,29 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     memory->Write32(0x10950,dos_root);
     call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x00800021});
     assert(c->eax==0);
-    call(*c,base,cb,187,{memory->Read32(0x10960)});assert(c->eax==0);
+    auto optical=memory->Read32(0x10960);
+    call(*c,base,cb,218,{optical,0x10968,0x12c00,24,3});
+    assert(c->eax==0&&memory->Read32(0x12c00)==2&&memory->Read32(0x12c08)==0);
+    assert(memory->Read32(0x12c10)==1&&memory->Read32(0x12c14)==2048);
+    call(*c,base,cb,218,{optical,0x10968,0x12c00,32,7});
+    assert(c->eax==0&&memory->Read32(0x12c10)==0&&memory->Read32(0x12c18)==1&&memory->Read32(0x12c1c)==2048);
+    const char pattern[]="*.txt";
+    memory->Write(0x12d00,pattern,sizeof(pattern));
+    call(*c,base,cb,289,{0x12d40,0x12d00});
+    call(*c,base,cb,207,{optical,0,0,0,0x10968,0x12c00,64,1,0x12d40,1});
+    assert(c->eax==0xc0000023u); // retry must not lose the entry
+    call(*c,base,cb,207,{optical,0,0,0,0x10968,0x12c00,256,1,0,0});
+    assert(c->eax==0&&memory->Read32(0x12c3c)==8&&memory->Read32(0x12c28)==4);
+    assert(std::memcmp(base+0x12c40,"RCFS.TXT",8)==0);
+    call(*c,base,cb,207,{optical,0,0,0,0x10968,0x12c00,256,1,0,0});
+    assert(c->eax==0x80000006u);
+    call(*c,base,cb,207,{optical,0,0,0,0x10968,0x12c00,256,1,0,1});
+    assert(c->eax==0&&std::memcmp(base+0x12c40,"DATA.BIN",8)==0);
+    call(*c,base,cb,207,{optical,0,0,0,0x10968,0x12c00,256,1,0,0});
+    assert(c->eax==0&&std::memcmp(base+0x12c40,"RCFS.TXT",8)==0);
+    call(*c,base,cb,207,{optical,0,0,0,0x10968,0x12c00,256,1,0,0});
+    assert(c->eax==0x80000006u); // symlink not listed
+    call(*c,base,cb,187,{optical});assert(c->eax==0);
     const char dos_file[]="D:\\rcfs.txt";
     memory->Write(0x10900,dos_file,sizeof(dos_file));
     call(*c,base,cb,289,{0x10940,0x10900});
@@ -619,6 +641,8 @@ int main() {
     std::string manifest_path=std::string(dir)+"/RCFS.TXT";
     fd=open(manifest_path.c_str(),O_CREAT|O_WRONLY|O_EXCL,0600);
     assert(fd>=0&&write(fd,"TEST",4)==4);close(fd);
+    std::string symlink_path=std::string(dir)+"/OUTSIDE.TXT";
+    assert(symlink("/etc/passwd",symlink_path.c_str())==0);
     char partition_dir[]="/tmp/hulk-partition1-XXXXXX";
     assert(mkdtemp(partition_dir));
     HulkKernelDataRegistry registry;
@@ -627,5 +651,5 @@ int main() {
     assert(session.Run(entry,cpu,0x1000)==0);
     assert(ran==1);
     assert(mem.Read32(0x0A000404)==1);
-    assert(unlink(path.c_str())==0&&unlink(manifest_path.c_str())==0&&rmdir(dir)==0&&rmdir(partition_dir)==0);
+    assert(unlink(path.c_str())==0&&unlink(manifest_path.c_str())==0&&unlink(symlink_path.c_str())==0&&rmdir(dir)==0&&rmdir(partition_dir)==0);
 }

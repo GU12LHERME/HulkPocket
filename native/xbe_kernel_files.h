@@ -14,6 +14,8 @@
 #include <sys/statvfs.h>
 #include <limits>
 #include <unistd.h>
+#include <vector>
+#include <optional>
 namespace hulkpocket {
 // Read-only disc directory. Every guest component is opened relative to a
 // directory descriptor with O_NOFOLLOW; guest paths never become host paths.
@@ -21,8 +23,13 @@ class XbeDiscFiles {
     XboxGuestAddressSpace& mem_;
     int root_=-1, partition1_=-1;
     static constexpr uint32_t kDosDevicesDirectory=0xfffffffdu; // Xbox ObDosDevicesDirectory() == (HANDLE)-3
+    struct DirEntry {std::string name;struct stat metadata;};
+    std::optional<uint64_t> disc_units_;
     struct File {
         int fd; bool directory,partition1; uint64_t pos=0;
+        bool listed=false;
+        size_t next_entry=0;
+        std::vector<DirEntry> entries;
         explicit File(int value,bool dir,bool hdd):fd(value),directory(dir),partition1(hdd){}
         ~File(){if(fd>=0)close(fd);}
         File(const File&)=delete;
@@ -88,6 +95,66 @@ class XbeDiscFiles {
             }
         }
         closedir(d);return ambiguous?std::string{}:result;
+    }
+    // Enumerate descriptors, never follow symlinks or special files.
+    // Bounded for malformed or accidentally oversized selected directories.
+    static bool List(int dir,std::vector<DirEntry>& entries,size_t limit){
+        int copy=openat(dir,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+        if(copy<0)return false;
+        DIR* d=fdopendir(copy);
+        if(!d){close(copy);return false;}
+        bool ok=true;
+        size_t seen=0;
+        while(true){
+            errno=0;auto* e=readdir(d);
+            if(!e){if(errno)ok=false;break;}
+            if(++seen>limit+2){ok=false;break;}
+            std::string name=e->d_name;
+            if(name=="."||name=="..")continue;
+            struct stat st{};
+            if(fstatat(dir,name.c_str(),&st,AT_SYMLINK_NOFOLLOW)){ok=false;break;}
+            if(!S_ISREG(st.st_mode)&&!S_ISDIR(st.st_mode))continue;
+            if(entries.size()>=limit||st.st_size<0){ok=false;break;}
+            entries.push_back({std::move(name),st});
+        }
+        closedir(d);
+        if(ok)std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b){
+            const auto x=Upper(a.name),y=Upper(b.name);
+            return x==y?a.name<b.name:x<y;
+        });
+        return ok;
+    }
+    static bool WildMatch(std::string pattern,std::string name){
+        pattern=Upper(std::move(pattern));name=Upper(std::move(name));
+        if(pattern=="*.*")pattern="*";
+        size_t p=0,n=0,star=std::string::npos,retry=0;
+        while(n<name.size()){
+            if(p<pattern.size()&&(pattern[p]=='?'||pattern[p]==name[n])){++p;++n;}
+            else if(p<pattern.size()&&pattern[p]=='*'){star=p++;retry=n;}
+            else if(star!=std::string::npos){p=star+1;n=++retry;}
+            else return false;
+        }
+        while(p<pattern.size()&&pattern[p]=='*')++p;
+        return p==pattern.size();
+    }
+    static bool MeasureDisc(int dir,unsigned depth,size_t& remaining,uint64_t& sectors){
+        if(depth>32||!remaining)return false;
+        std::vector<DirEntry> entries;
+        if(!List(dir,entries,std::min<size_t>(remaining,65536)))return false;
+        remaining-=entries.size();
+        for(const auto& entry:entries){
+            if(S_ISDIR(entry.metadata.st_mode)){
+                int child=openat(dir,entry.name.c_str(),O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
+                if(child<0)return false;
+                const bool ok=MeasureDisc(child,depth+1,remaining,sectors);
+                close(child);if(!ok)return false;
+            }else{
+                const auto count=(uint64_t(entry.metadata.st_size)+2047)/2048;
+                if(count>uint64_t(INT64_MAX)-sectors)return false;
+                sectors+=count;
+            }
+        }
+        return true;
     }
     int Resolve(std::string path,uint32_t root=0,bool* on_partition1=nullptr) {
         std::replace(path.begin(),path.end(),'/','\\');
@@ -317,6 +384,45 @@ public:
         f.pos=uint64_t(pos)+uint64_t(n);
         return Finish(iosb,n?0:0xc0000011u,static_cast<uint32_t>(n));
     }
+    // Xbox FILE_DIRECTORY_INFORMATION (ANSI/OCHAR name, offset 0x40).
+    // One entry per call, as in the pinned XboxXBERecomp implementation.
+    uint32_t QueryDirectory(uint32_t h,uint32_t iosb,uint32_t out,uint32_t len,
+                            uint32_t cls,uint32_t mask,bool restart){
+        if(!mem_.IsCommitted(iosb,8))return invalid;
+        auto it=files_.find(h);
+        if(it==files_.end()||!it->second->directory)return Finish(iosb,bad_handle);
+        if(cls!=1)return Finish(iosb,0xc0000003u);
+        auto& file=*it->second;
+        if(!file.listed||restart){
+            std::string pattern="*";
+            if(mask&&(!Ansi(mask,pattern)||pattern.find_first_of("\\/:")!=std::string::npos))
+                return Finish(iosb,invalid);
+            std::vector<DirEntry> found;
+            if(!List(file.fd,found,65536))return Finish(iosb,0xc0000185u);
+            found.erase(std::remove_if(found.begin(),found.end(),[&](const auto& e){
+                return !WildMatch(pattern,e.name);
+            }),found.end());
+            file.entries=std::move(found);file.next_entry=0;file.listed=true;
+        }
+        if(file.next_entry>=file.entries.size())
+            return Finish(iosb,file.next_entry?0x80000006u:0xc000000fu);
+        const auto& entry=file.entries[file.next_entry];
+        const auto need=uint32_t(64+entry.name.size());
+        if(len<need)return Finish(iosb,small);
+        if(!mem_.IsCommitted(out,need))return Finish(iosb,invalid);
+        std::array<uint32_t,16> data{};
+        auto put64=[&](unsigned i,uint64_t v){data[i]=uint32_t(v);data[i+1]=uint32_t(v>>32);};
+        auto ticks=[](int64_t seconds){return seconds < -11644473600LL?0ull:uint64_t(seconds+11644473600LL)*10000000ull;};
+        const auto& st=entry.metadata;
+        put64(2,ticks(st.st_mtime));put64(4,ticks(st.st_atime));
+        put64(6,ticks(st.st_mtime));put64(8,ticks(st.st_ctime));
+        const bool directory=S_ISDIR(st.st_mode);
+        const auto size=directory?0ull:uint64_t(st.st_size);
+        put64(10,size);put64(12,(size+4095)&~uint64_t(4095));
+        data[14]=directory?0x11:1;data[15]=uint32_t(entry.name.size());
+        mem_.Write(out,data.data(),64);mem_.Write(out+64,entry.name.data(),entry.name.size());
+        ++file.next_entry;return Finish(iosb,0,need);
+    }
     // Xbox FS_INFORMATION_CLASS layout from nxdk xboxkrnl.h.
     // The directory-backed partition exposes backing filesystem capacity
     // in Xbox-style 16 KiB units. It does not claim a mounted FATX image.
@@ -330,9 +436,24 @@ public:
         switch(cls){
             case 3: // FileFsSizeInformation
             case 7: { // FileFsFullSizeInformation
-                if(!hdd)return Finish(iosb,0xc00000bbu); // optical size not modeled
                 need=cls==3?24:32;
                 if(len<need)return Finish(iosb,small);
+                if(!hdd){
+                    // Extracted data only: logical payload sectors, not the
+                    // physical DVD image layout or host free storage.
+                    if(!disc_units_){
+                        size_t remaining=262144;uint64_t sectors=0;
+                        if(root_<0||!MeasureDisc(root_,0,remaining,sectors))
+                            return Finish(iosb,0xc0000185u);
+                        disc_units_=sectors;
+                        std::fprintf(stderr,"XBOX VOLUME SIZE disc logical_payload_sectors=%llu sector_bytes=2048 (read-only extracted files)\n",
+                            static_cast<unsigned long long>(sectors));
+                    }
+                    put64(0,*disc_units_);
+                    if(cls==7){data[6]=1;data[7]=2048;}
+                    else {data[4]=1;data[5]=2048;}
+                    break;
+                }
                 struct statvfs st{};
                 if(fstatvfs(it->second->fd,&st))return Finish(iosb,0xc0000185u);
                 const uint64_t block=st.f_frsize?st.f_frsize:st.f_bsize;
