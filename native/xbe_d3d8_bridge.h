@@ -632,13 +632,14 @@ public:
         const bool program=state_.vs&&!state_.vs->program.empty();
         if(!initialized_||(!state_.ps&&!program)||(!program&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42)))||
            !count||count>262144||!((prim==5&&count%3==0)||(prim==6&&count>=3))||
-           state_.scissor_count||state_.viewport.x||state_.viewport.y||state_.viewport.min_z!=0||state_.viewport.max_z!=1||
-           state_.ss_offset_x||state_.ss_offset_y||state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
+           state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
+           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsStencilEnable]||state_.rs[gpu::kRsTwoSidedLighting])
             throw std::logic_error("Unsupported captured pixel replay profile");
         gpu::TextureDesc desc{};
-        if(!gpu::DescribeSurface(state_.rt,desc)||state_.viewport.w!=desc.width||state_.viewport.h!=desc.height)
-            throw std::logic_error("Captured pixel replay requires full viewport");
+        if(!gpu::DescribeSurface(state_.rt,desc)||!state_.viewport.w||!state_.viewport.h||
+           uint64_t(state_.viewport.x)+state_.viewport.w>desc.width||uint64_t(state_.viewport.y)+state_.viewport.h>desc.height)
+            throw std::logic_error("Captured shader viewport outside target");
         auto replay=state_;replay.rs.fill(0);replay.simple.fill(0);
         if(!program){
             for(unsigned st=0;st<4;++st)if(state_.textures[st]&&

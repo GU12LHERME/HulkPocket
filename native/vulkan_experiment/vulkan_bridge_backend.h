@@ -35,8 +35,17 @@ class VulkanBridgeBackend final:public gpu::Backend {
     }
 public:
     bool Init(uint32_t w,uint32_t h)override{core_.Init(w,h);return true;}
-    void Clear(const gpu::State& s,uint32_t count,const uint8_t*,uint32_t flags,uint32_t color,float z,uint32_t stencil)override{
-        if(count)throw std::logic_error("Vulkan rectangle clear not integrated");
+    void Clear(const gpu::State& s,uint32_t count,const uint8_t* rects,uint32_t flags,uint32_t color,float z,uint32_t stencil)override{
+        if(count>4096||(count&&!rects))throw std::invalid_argument("Invalid Vulkan clear rectangles");
+        std::vector<VkClearRect> regions;
+        for(unsigned i=0;i<count;++i){
+            int32_t r[4];std::memcpy(r,rects+size_t(i)*16,16);
+            if(r[0]<0||r[1]<0||r[2]<r[0]||r[3]<r[1]||uint32_t(r[2])>core_.W||uint32_t(r[3])>core_.H)
+                throw std::invalid_argument("Vulkan clear rectangle outside target");
+            if(r[2]!=r[0]&&r[3]!=r[1])regions.push_back({{{r[0],r[1]},{uint32_t(r[2]-r[0]),uint32_t(r[3]-r[1])}},0,1});
+        }
+        if(count&&regions.empty())return;
+        if(count&&!core_.frame_valid)throw std::logic_error("Partial Vulkan clear before full initialization");
         Target(s.rt);
         if(flags&3)Depth(s.zs);
         const auto requested=flags;
@@ -46,16 +55,16 @@ public:
             if(!(flags&2))stencil=0;
             flags|=3; // initialize internal attachments, do not mark guest depth/stencil valid unless requested
         }
-        core_.ClearFrame(flags,color,z,stencil);rotated_=false;
-        if(requested&1)depth_valid_=true;
-        if(requested&2)stencil_valid_=true;
+        core_.ClearFrame(flags,color,z,stencil,regions);rotated_=false;
+        // A partial clear cannot prove the untouched attachment initialized.
+        if(!count&&(requested&1))depth_valid_=true;
+        if(!count&&(requested&2))stencil_valid_=true;
     }
     void Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint32_t count,const uint8_t* indices)override{
         Target(s.rt);
         if(!core_.frame_valid)throw std::logic_error("Vulkan draw before clear");
-        if(s.viewport.x||s.viewport.y||s.viewport.w!=core_.W||s.viewport.h!=core_.H||
-           s.viewport.min_z!=0||s.viewport.max_z!=1||s.scissor_count||s.ss_offset_x||s.ss_offset_y)
-            throw std::logic_error("Vulkan viewport/scissor variation not integrated");
+        const bool screen=(s.vs&&!s.vs->program.empty())||(!(s.vs_handle&1)&&(s.vs_handle&0xe)==4);
+        (void)GuestViewRegion(s,core_.W,core_.H,screen);
         if(s.rs[gpu::kRsZEnable]||s.rs[gpu::kRsStencilEnable])Depth(s.zs);
         if(s.rs[gpu::kRsZEnable]&&!depth_valid_)throw std::logic_error("Vulkan depth requires clear");
         if(s.rs[gpu::kRsStencilEnable]&&!stencil_valid_)throw std::logic_error("Vulkan stencil requires clear");
@@ -72,7 +81,7 @@ public:
             core_.UploadGuestTexture(s.textures[i],i,palette);
             core_.SetSampler(i,s);
         }
-        core_.Draw({},false,false,false,false,&s,false,&a,true,true);
+        core_.Draw({},false,false,false,false,&s,false,&a,true,true,true);
     }
     void Copy(const gpu::Surface&,const gpu::Surface&,uint32_t,uint32_t,uint32_t,float,float)override{
         throw std::logic_error("Vulkan surface copy not integrated");

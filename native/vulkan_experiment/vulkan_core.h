@@ -29,6 +29,32 @@ struct Buffer{VkBuffer b{};VkDeviceMemory m{};void* data{};VkDeviceSize capacity
 struct Image{VkImage image{};VkImageView view{};gpu::ImageMemory::Allocation alloc{};};
 struct Vertex{float x,y,z;uint32_t color_or_normal;float u,v;};
 static_assert(sizeof(Vertex)==24);
+// Shared checked viewport/scissor translation. Fixed XYZ emits clip
+// coordinates; programmable and XYZRHW emit target-wide clip positions.
+struct ViewRegion {
+    VkViewport viewport{};
+    VkRect2D scissor{};
+};
+inline ViewRegion GuestViewRegion(const gpu::State& s,uint32_t w,uint32_t h,bool screen_space){
+    const auto& v=s.viewport;
+    if(!v.w||!v.h||uint64_t(v.x)+v.w>w||uint64_t(v.y)+v.h>h||
+       !std::isfinite(v.min_z)||!std::isfinite(v.max_z)||v.min_z<0||v.max_z>1||v.min_z>v.max_z||
+       s.scissor_count>1||!std::isfinite(s.ss_offset_x)||!std::isfinite(s.ss_offset_y)||
+       (!screen_space&&(s.ss_offset_x||s.ss_offset_y)))
+        throw std::invalid_argument("Unsupported Vulkan viewport/scissor");
+    ViewRegion out{};
+    out.viewport=screen_space?VkViewport{0,float(h),float(w),-float(h),0,1}:
+        VkViewport{float(v.x),float(v.y+v.h),float(v.w),-float(v.h),v.min_z,v.max_z};
+    int32_t x0=int32_t(v.x),y0=int32_t(v.y),x1=int32_t(v.x+v.w),y1=int32_t(v.y+v.h);
+    if(s.scissor_count){
+        int32_t r[4];for(unsigned i=0;i<4;++i)r[i]=std::bit_cast<int32_t>(s.scissors[i]);
+        if(r[2]<r[0]||r[3]<r[1])throw std::invalid_argument("Inverted Vulkan scissor");
+        x0=std::clamp(r[0],x0,x1);y0=std::clamp(r[1],y0,y1);
+        x1=std::clamp(r[2],x0,x1);y1=std::clamp(r[3],y0,y1);
+    }
+    out.scissor={{x0,y0},{uint32_t(x1-x0),uint32_t(y1-y0)}};
+    return out;
+}
 struct VulkanCore{
     uint32_t W=64,H=64;
     VkInstance instance{};VkPhysicalDevice physical{};VkDevice dev{};VkQueue queue{};uint32_t family{};
@@ -323,7 +349,7 @@ struct VulkanCore{
         VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=data.size()*4;ci.pCode=data.data();
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
-    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan,bool dynamic){
+    void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan,bool dynamic,const ViewRegion* region=nullptr){
         if(pipeline){vkDestroyPipeline(dev,pipeline,nullptr);pipeline={};}
         if(vs){vkDestroyShaderModule(dev,vs,nullptr);vs={};}
         if(fs){vkDestroyShaderModule(dev,fs,nullptr);fs={};}
@@ -350,6 +376,7 @@ struct VulkanCore{
         }
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=guest?hulkpocket::vkexp::Topology(*guest):VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         VkViewport vp{0,float(H),float(W),-float(H),0,1};VkRect2D sc{{0,0},{W,H}};
+        if(region){vp=region->viewport;sc=region->scissor;}
         VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.pViewports=&vp;vps.scissorCount=1;vps.pScissors=&sc;
         VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
@@ -375,11 +402,11 @@ struct VulkanCore{
         b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.buffer=readback.b;b.size=VK_WHOLE_SIZE;
         vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&b,0,nullptr);
     }
-    void ClearFrame(uint32_t flags,uint32_t argb,float z,uint32_t stencil){
+    void ClearFrame(uint32_t flags,uint32_t argb,float z,uint32_t stencil,const std::vector<VkClearRect>& rects={}){
         if((flags&~0xf3u)||((flags&0xf0u)!=0&&(flags&0xf0u)!=0xf0u)||!flags||
            !std::isfinite(z)||z<0||z>1||stencil>255)
             throw std::invalid_argument("Unsupported Vulkan clear flags or value");
-        if(!frame_valid&&(flags&0xf3u)!=0xf3u)throw std::logic_error("First clear must initialize color and depth/stencil");
+        if(!frame_valid&&((flags&0xf3u)!=0xf3u||!rects.empty()))throw std::logic_error("First clear must initialize color and depth/stencil");
         VkClearValue values[2]{};
         values[0].color={{float((argb>>16)&255)/255,float((argb>>8)&255)/255,float(argb&255)/255,float(argb>>24)/255}};
         values[1].depthStencil={z,stencil};
@@ -392,7 +419,7 @@ struct VulkanCore{
             if(flags&0xf0){ca[n].aspectMask=VK_IMAGE_ASPECT_COLOR_BIT;ca[n++].clearValue=values[0];}
             if(flags&3){ca[n].aspectMask=((flags&1)?VK_IMAGE_ASPECT_DEPTH_BIT:0)|((flags&2)?VK_IMAGE_ASPECT_STENCIL_BIT:0);ca[n++].clearValue=values[1];}
             VkClearRect rect{{{0,0},{W,H}},0,1};
-            vkCmdClearAttachments(cmd,n,ca,1,&rect);
+            vkCmdClearAttachments(cmd,n,ca,rects.empty()?1u:uint32_t(rects.size()),rects.empty()?&rect:rects.data());
         }
         vkCmdEndRenderPass(cmd);ReadbackCommands();Submit();frame_valid=true;
     }
@@ -415,7 +442,7 @@ struct VulkanCore{
         Submit();
         std::memcpy(readback.data,staging.data,size_t(W)*H*4);
     }
-    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false,bool preserve=false){
+    void Draw(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi=false,const gpu::State* state=nullptr,bool second=false,const gpu::Assembled* guest=nullptr,bool dynamic=false,bool preserve=false,bool guest_viewport=false){
         if(preserve&&!frame_valid)throw std::logic_error("Cannot preserve an uninitialized framebuffer");
         hulkpocket::vkexp::VertexPlan plan;
         if(guest){
@@ -439,7 +466,17 @@ struct VulkanCore{
                 EnsureBuffer(indices,bytes,VK_BUFFER_USAGE_INDEX_BUFFER_BIT);std::memcpy(indices.data,guest->index_src,bytes);
             }
         }
-        Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr,dynamic);
+        ViewRegion region{};
+        if(guest_viewport){
+            if(!state||!guest||!dynamic)throw std::invalid_argument("Missing guest viewport state");
+            region=GuestViewRegion(*state,W,H,guest->pretransformed||(state->vs&&!state->vs->program.empty()));
+            // Empty intersection is a successful draw with no coverage.
+            if(!region.scissor.extent.width||!region.scissor.extent.height){
+                if(!preserve)throw std::logic_error("Empty viewport requires initialized frame");
+                return;
+            }
+        }
+        Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr,dynamic,guest_viewport?&region:nullptr);
         uint32_t word=packed?(511u<<22):(multi?0xffffffffu:blend?0x80ff0000u:0xff00ff00u);
         Vertex v[]={{-.75f,-.75f,.5f,word,0,1},{.75f,-.75f,.5f,word,1,1},{0,.75f,.5f,word,.5f,0}};
         if(!guest){std::memcpy(verts.data,v,sizeof(v));const uint16_t idx[]={2,0,1};std::memcpy(indices.data,idx,sizeof(idx));}

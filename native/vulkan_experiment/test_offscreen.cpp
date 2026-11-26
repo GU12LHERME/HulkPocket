@@ -349,6 +349,26 @@ int main(int argc,char** argv){
                 bool mismatched=false;
                 try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){mismatched=true;}
                 if(!mismatched)throw std::runtime_error("Mismatched stage one NV2A texture accepted");
+                bridge_mem.Write32(tex1+4,0x115100);
+                // Move the same geometry into the right half, using actual
+                // XDK viewport words. Then restrict it with an API scissor.
+                call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});
+                bridge_mem.Write32(device+0xee0,32);bridge_mem.Write32(device+0xee8,32);
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("partial viewport center",backend.ReadPixel(48,32),{128,128,64,255});
+                Expect("partial viewport outside",backend.ReadPixel(16,32),{0,0,255,255});
+                call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});
+                constexpr uint32_t rect=0x27300;
+                uint32_t sc[4]={48,0,64,64};bridge_mem.Write(rect,sc,sizeof(sc));
+                call("D3DDevice_SetScissors",{1,0,rect});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("scissor inside",backend.ReadPixel(50,32),{128,128,64,255});
+                Expect("scissor excludes covered pixel",backend.ReadPixel(44,32),{0,0,255,255});
+                uint32_t clear_rect[4]={48,28,54,36};bridge_mem.Write(rect,clear_rect,sizeof(clear_rect));
+                call("D3DDevice_Clear",{1,rect,0xf0,0xff00ff00,std::bit_cast<uint32_t>(1.f),0});
+                Expect("rectangle clear inside",backend.ReadPixel(50,32),{0,255,0,255});
+                Expect("rectangle clear preserves outside",backend.ReadPixel(44,32),{0,0,255,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
