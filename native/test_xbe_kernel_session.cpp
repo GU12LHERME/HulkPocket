@@ -341,6 +341,23 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,202,{0x10960,0x00100001,0x10950,0x10968,1,0x00800021});
     assert(c->eax==0);
     auto hdd=memory->Read32(0x10960);
+    // Query actual backing filesystem capacity via the original Xbox ABI.
+    call(*c,base,cb,218,{hdd,0x10968,0x12c00,24,3});
+    assert(c->eax==0&&memory->Read32(0x1096c)==24);
+    uint64_t total_units=0,available_units=0;
+    memory->Read(0x12c00,&total_units,8);memory->Read(0x12c08,&available_units,8);
+    assert(total_units>0&&available_units<=total_units);
+    assert(memory->Read32(0x12c10)==32&&memory->Read32(0x12c14)==512);
+    call(*c,base,cb,218,{hdd,0x10968,0x12c00,32,7});
+    assert(c->eax==0&&memory->Read32(0x1096c)==32&&memory->Read32(0x12c18)==32&&memory->Read32(0x12c1c)==512);
+    call(*c,base,cb,218,{hdd,0x10968,0x12c00,8,4});
+    assert(c->eax==0&&memory->Read32(0x12c00)==7&&memory->Read32(0x12c04)==2);
+    call(*c,base,cb,218,{hdd,0x10968,0x12c00,23,3});
+    assert(c->eax==0xc0000023u&&memory->Read32(0x1096c)==0);
+    call(*c,base,cb,218,{hdd,0x10968,0x12c00,24,99});
+    assert(c->eax==0xc0000003u);
+    call(*c,base,cb,218,{0xffffffffu,0x10968,0x12c00,24,3});
+    assert(c->eax==0xc0000008u);
     memory->Write32(0x10950,hdd);
     memory->Write(0x10900,relative,sizeof(relative));
     call(*c,base,cb,289,{0x10940,0x10900});

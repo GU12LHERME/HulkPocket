@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <string>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
+#include <limits>
 #include <unistd.h>
 namespace hulkpocket {
 // Read-only disc directory. Every guest component is opened relative to a
@@ -20,8 +22,8 @@ class XbeDiscFiles {
     int root_=-1, partition1_=-1;
     static constexpr uint32_t kDosDevicesDirectory=0xfffffffdu; // Xbox ObDosDevicesDirectory() == (HANDLE)-3
     struct File {
-        int fd; bool directory; uint64_t pos=0;
-        explicit File(int value,bool dir):fd(value),directory(dir){}
+        int fd; bool directory,partition1; uint64_t pos=0;
+        explicit File(int value,bool dir,bool hdd):fd(value),directory(dir),partition1(hdd){}
         ~File(){if(fd>=0)close(fd);}
         File(const File&)=delete;
         File& operator=(const File&)=delete;
@@ -51,16 +53,17 @@ class XbeDiscFiles {
         }
         closedir(d);return ambiguous?std::string{}:result;
     }
-    int Resolve(std::string path,uint32_t root=0) {
+    int Resolve(std::string path,uint32_t root=0,bool* on_partition1=nullptr) {
         std::replace(path.begin(),path.end(),'/','\\');
         const auto upper=Upper(path);
         size_t start=0;
         int parent=root_;
+        bool hdd=false;
         if(root&&root!=kDosDevicesDirectory){
             auto it=files_.find(root);
             if(it==files_.end()||!it->second->directory)return -1;
             if(!path.empty()&&(path.front()=='\\'||path.find(':')!=std::string::npos))return -1;
-            parent=it->second->fd;
+            parent=it->second->fd;hdd=it->second->partition1;
         }else{
             start=std::string::npos;
             // The special DOS directory is a namespace, not a file handle.
@@ -71,11 +74,12 @@ class XbeDiscFiles {
                 if(upper==prefix)start=prefix.size();
                 else if(upper.rfind(prefix+"\\",0)==0)start=prefix.size()+1;
                 else continue;
-                if(prefix=="\\DEVICE\\HARDDISK0\\PARTITION1")parent=partition1_;
+                if(prefix=="\\DEVICE\\HARDDISK0\\PARTITION1"){parent=partition1_;hdd=true;}
                 break;
             }
             if(start==std::string::npos||parent<0)return -1;
         }
+        if(on_partition1)*on_partition1=hdd;
         int dir=openat(parent,".",O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW);
         if(dir<0)return -1;
         if(start==path.size())return dir;
@@ -165,7 +169,8 @@ public:
         if((options&0x41u)==0x41u)return Finish(iosb,invalid);
         if(!ValidRoot(root))return Finish(iosb,bad_handle);
         if(files_.size()>=256)return Finish(iosb,0xc000011fu);
-        int fd=Resolve(name,root);
+        bool hdd=false;
+        int fd=Resolve(name,root,&hdd);
         if(fd<0)return Finish(iosb,missing);
         struct stat st{};
         if(fstat(fd,&st)){close(fd);return Finish(iosb,0xc0000185u);}
@@ -173,7 +178,7 @@ public:
         if(directory&&(options&0x40u)){close(fd);return Finish(iosb,0xc00000bau);}
         if(!directory&&(options&1u)){close(fd);return Finish(iosb,0xc0000103u);}
         std::shared_ptr<File> file;
-        try{file=std::make_shared<File>(fd,directory);}catch(...){close(fd);throw;}
+        try{file=std::make_shared<File>(fd,directory,hdd);}catch(...){close(fd);throw;}
         std::fprintf(stderr,"DISC OPEN PASS type=%s name=%s\n",directory?"directory":"file",LogName(name).c_str());
         auto h=next_;next_+=4;
         files_.emplace(h,std::move(file));mem_.Write32(out,h);
@@ -231,6 +236,50 @@ public:
         if(n<0)return Finish(iosb,0xc0000185u);
         f.pos=uint64_t(pos)+uint64_t(n);
         return Finish(iosb,n?0:0xc0000011u,static_cast<uint32_t>(n));
+    }
+    // Xbox FS_INFORMATION_CLASS layout from nxdk xboxkrnl.h.
+    // The directory-backed partition exposes backing filesystem capacity
+    // in Xbox-style 16 KiB units. It does not claim a mounted FATX image.
+    uint32_t QueryVolume(uint32_t h,uint32_t iosb,uint32_t out,uint32_t len,uint32_t cls){
+        if(!mem_.IsCommitted(iosb,8))return invalid;
+        auto it=files_.find(h);if(it==files_.end())return Finish(iosb,bad_handle);
+        const bool hdd=it->second->partition1;
+        std::array<uint32_t,8> data{};
+        auto put64=[&](unsigned i,uint64_t v){data[i]=uint32_t(v);data[i+1]=uint32_t(v>>32);};
+        uint32_t need=0;
+        switch(cls){
+            case 3: // FileFsSizeInformation
+            case 7: { // FileFsFullSizeInformation
+                if(!hdd)return Finish(iosb,0xc00000bbu); // optical size not modeled
+                need=cls==3?24:32;
+                if(len<need)return Finish(iosb,small);
+                struct statvfs st{};
+                if(fstatvfs(it->second->fd,&st))return Finish(iosb,0xc0000185u);
+                const uint64_t block=st.f_frsize?st.f_frsize:st.f_bsize;
+                if(!block)return Finish(iosb,invalid);
+                auto units=[&](uint64_t n){
+                    // Avoid overflow, including on unusually large host volumes.
+                    if(n>std::numeric_limits<uint64_t>::max()/block)
+                        return std::numeric_limits<uint64_t>::max()/16384;
+                    return n*block/16384;
+                };
+                const auto total=units(st.f_blocks);
+                const auto available=std::min(total,units(st.f_bavail));
+                const auto actual=std::min(total,units(st.f_bfree));
+                put64(0,total);put64(2,available);
+                if(cls==7){put64(4,actual);data[6]=32;data[7]=512;}
+                else {data[4]=32;data[5]=512;}
+                std::fprintf(stderr,"XBOX VOLUME SIZE partition1 total_units=%llu available_units=%llu unit_bytes=16384 (host backed; writes disabled)\n",
+                    static_cast<unsigned long long>(total),static_cast<unsigned long long>(available));
+                break;
+            }
+            case 4: // FileFsDeviceInformation: virtual device, read-only
+                need=8;data[0]=hdd?7u:2u;data[1]=hdd?2u:3u;break;
+            default:return Finish(iosb,0xc0000003u); // STATUS_INVALID_INFO_CLASS
+        }
+        if(len<need)return Finish(iosb,small);
+        if(!mem_.IsCommitted(out,need))return Finish(iosb,invalid);
+        mem_.Write(out,data.data(),need);return Finish(iosb,0,need);
     }
     uint32_t Query(uint32_t h,uint32_t iosb,uint32_t out,uint32_t len,uint32_t cls) {
         if(!mem_.IsCommitted(iosb,8))return invalid;

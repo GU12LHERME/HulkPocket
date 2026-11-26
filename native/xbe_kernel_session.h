@@ -1216,6 +1216,13 @@ private:
                     ordinal,mem_.Read32(cpu.esp),Arg(cpu,1),Arg(cpu,2),ordinal==190?Arg(cpu,7):1,Arg(cpu,n-1),status);
                 Ret(cpu,n,status);return;
             }
+            case 218: {
+                Check(cpu,5);
+                auto status=files_.QueryVolume(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4));
+                std::fprintf(stderr,"XBOX VOLUME QUERY caller=%08X handle=%08X length=%u class=%u status=%08X\n",
+                    mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,3),Arg(cpu,4),status);
+                Ret(cpu,5,status);return;
+            }
             case 219: {
                 Check(cpu,8);
                 if(Arg(cpu,2)) throw std::runtime_error("File APC not implemented");
