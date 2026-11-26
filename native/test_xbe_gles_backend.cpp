@@ -1,10 +1,21 @@
 #include "xbe_gles_backend.h"
 #include "xbe_d3d8_bridge.h"
+#include "xbe_d3d8_create_probe.h"
 #include "xbe_bc_decode.h"
 #include <cassert>
 #include <cstdio>
 using namespace hulkpocket;
 int main(){
+    {
+        XboxGuestAddressSpace guest;guest.Commit(0x20000,0x10000);
+        XbeKernelPool pool(guest,0x09000000,0x10000);
+        XbePhysicalMemory phys(guest);
+        constexpr uint32_t dev=0x20000,slot=0x23000,pp=0x23100;
+        guest.Write32(pp,64);guest.Write32(pp+4,64);guest.Write32(pp+8,6);
+        guest.Write32(pp+12,1);guest.Write32(pp+0x20,1);guest.Write32(pp+0x24,0x2a);
+        RunD3dCreateProbe(guest,pool,phys,dev,slot,pp);
+        assert(pool.Outstanding()==0&&phys.AllocatedPages()==0&&guest.Read32(slot)==0);
+    }
     XboxGuestAddressSpace mem;mem.Commit(0x10000,0x10000);mem.Commit(0x80100000,0x10000);
     XbeGlesBackend backend;XbeD3d8Bridge bridge(mem,backend);bridge.Initialize(64,64);
     X86Context cpu{};

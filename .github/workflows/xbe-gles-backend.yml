@@ -6,6 +6,10 @@ on:
       - 'native/*xbe_gles_backend*'
       - 'native/xbe_bc_decode.h'
       - 'native/xbe_d3d8_bridge.h'
+      - 'native/xbe_d3d8_create_probe.h'
+      - 'native/xbe_d3d8_device_memory.h'
+      - 'native/xbe_kernel_session.h'
+      - 'tools/run_hulk_diagnostic.sh'
       - 'native/xbox_guest_address_space.*'
       - 'third_party/xboxxberecomp/gpu/**'
       - '.github/workflows/xbe-gles-backend.yml'
@@ -28,6 +32,7 @@ jobs:
         run: |
           g++ -std=c++20 -O2 -pthread -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv2 -o /tmp/hulk-gles
           EGL_PLATFORM=surfaceless LIBGL_ALWAYS_SOFTWARE=1 /tmp/hulk-gles
+          g++ -std=c++20 -O2 -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp third_party/xboxxberecomp/kernel/crypto.cpp native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -ldl -lEGL -lGLESv2 -o /tmp/hulk-live-diagnostic
   android:
     runs-on: ubuntu-24.04
     steps:
@@ -47,6 +52,7 @@ jobs:
           TOOL="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p build/gles
           "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/test_xbe_gles_backend.cpp native/xbe_gles_backend.cpp native/xbox_guest_address_space.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -lEGL -lGLESv3 -o build/gles/hulk-gles-smoke
+          "$TOOL/aarch64-linux-android24-clang++" -std=c++20 -O2 -pthread -static-libstdc++ -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE -I/tmp/hulk-sdk -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp third_party/xboxxberecomp/kernel/crypto.cpp native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp third_party/xboxxberecomp/gpu/vertex.cpp -ldl -lEGL -lGLESv3 -o build/gles/hulk-live-diagnostic
           "$TOOL/llvm-readelf" -h -d build/gles/hulk-gles-smoke | tee build/gles/elf.txt
           grep -q AArch64 build/gles/elf.txt
       - uses: actions/upload-artifact@v4

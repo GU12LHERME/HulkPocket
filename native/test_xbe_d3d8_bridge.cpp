@@ -1,5 +1,6 @@
 #include "xbe_d3d8_bridge.h"
 #include "xbe_d3d8_device_memory.h"
+#include "xbe_nv2a_push.h"
 #include <cassert>
 using namespace hulkpocket;
 class RecordingBackend final:public gpu::Backend {
@@ -24,6 +25,18 @@ public:
 int main(){
     {
         XboxGuestAddressSpace guest;guest.Commit(0x20000,0x10000);
+        const uint32_t packets[]={0x400|(2u<<18),7,8,0x40000420|(2u<<18),9,10};
+        guest.Write(0x24000,packets,sizeof(packets));
+        auto methods=DecodeNv2aMethods(guest,0x24000,0x24000+sizeof(packets));
+        assert(methods.size()==4&&methods[0].method==0x400&&methods[1].method==0x404);
+        assert(methods[2].method==0x420&&methods[3].method==0x420&&methods[3].value==10);
+        bool invalid_packet=false;
+        try{DecodeNv2aMethods(guest,0x24000,0x24000+sizeof(packets)-4);}catch(const std::invalid_argument&){invalid_packet=true;}
+        assert(invalid_packet);
+        guest.Write32(0x24000,0x20000000);
+        invalid_packet=false;
+        try{DecodeNv2aMethods(guest,0x24000,0x24004);}catch(const std::invalid_argument&){invalid_packet=true;}
+        assert(invalid_packet);
         XbeKernelPool pool(guest,0x09000000,0x10000);
         XbePhysicalMemory physical(guest);
         constexpr uint32_t dev=0x20000,slot=0x23000,pp=0x23100;

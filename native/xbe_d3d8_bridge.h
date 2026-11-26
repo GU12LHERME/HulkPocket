@@ -185,6 +185,14 @@ public:
         state_.simple[gpu::kMColorWriteEnable>>2]=0x01010101;
         ViewportConstants();initialized_=true;
     }
+    // Bind actual allocated device surfaces before any guest draw.
+    // Does not change guest registers or invoke unimplemented default states.
+    void BindInitialTargets(uint32_t color,uint32_t depth){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!initialized_||!color)throw std::logic_error("Invalid initial render targets");
+        auto rt=Surface(color),zs=Surface(depth);
+        state_.rt=rt;state_.zs=zs;ViewportConstants();
+    }
     uint32_t Call(std::string_view name,X86Context& cpu,const D3dAbi& abi) {
         std::lock_guard guard(lock_);
         gpu::ScopedGuestMemory scope(mem_);

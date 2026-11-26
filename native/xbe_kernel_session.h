@@ -12,6 +12,9 @@
 #include "xbe_kernel_files.h"
 #include "xbe_fault_diagnostic.h"
 #include "xbe_graphics_boundary.h"
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+#include "xbe_d3d8_create_probe.h"
+#endif
 #include "xbe_kernel_calendar.h"
 #include <map>
 #include <deque>
@@ -646,7 +649,17 @@ private:
                 std::fprintf(stderr,"D3D8 REQUEST: width=%u height=%u format=%X buffers=%u multisample=%X depth=%u depth_format=%X interval=%X\n",
                     mem_.Read32(pp),mem_.Read32(pp+4),mem_.Read32(pp+8),mem_.Read32(pp+12),mem_.Read32(pp+16),
                     mem_.Read32(pp+0x20),mem_.Read32(pp+0x24),mem_.Read32(pp+0x30));
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(!cpu.ecx||!cpu.edx)throw std::runtime_error("Missing generated D3D device symbols");
+                auto out=Arg(cpu,5);
+                if(out&&!mem_.IsCommitted(out,4))throw std::runtime_error("Invalid D3D device output");
+                RunD3dCreateProbe(mem_,pool_,physical_,cpu.ecx,cpu.edx,pp);
+                // Do not return a device that lacks guest default-state and
+                // push-buffer execution. All probe allocations were released.
+                throw std::runtime_error("D3D8 live device probe passed; guest defaults/push execution pending");
+#else
                 throw std::runtime_error("D3D8 CreateDevice reached; guest device initialization pending");
+#endif
             }
             case kGraphicsDraw: case kGraphicsDrawIndexed: case kGraphicsSwap: {
                 Check(cpu,ordinal==kGraphicsSwap?1:3);

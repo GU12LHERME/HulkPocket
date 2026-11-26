@@ -30,6 +30,8 @@ constexpr bool Stdcall(std::string_view name){
 }
 #define CAT_(a,b) a##b
 #define CAT(a,b) CAT_(a,b)
+#define GUEST_VA_(x) 0x##x##u
+#define GUEST_VA(x) GUEST_VA_(x)
 #ifdef IMAGE_NAMED
 #define GUEST(name) CAT(sub_,name)
 #else
@@ -38,7 +40,16 @@ constexpr bool Stdcall(std::string_view name){
 #define HOOK(name,id) extern "C" __attribute__((visibility("default"))) \
     void GUEST(name)(X86Context& ctx,uint8_t* base){Boundary(ctx,base,id,#name,Stdcall(#name));}
 #if HAS_Direct3D_CreateDevice
-HOOK(Direct3D_CreateDevice,hulkpocket::kGraphicsCreate)
+extern "C" __attribute__((visibility("default")))
+void GUEST(Direct3D_CreateDevice)(X86Context& ctx,uint8_t* base){
+#if HAS_D3D_Device && HAS_D3D_pDevice
+    ctx.ecx=GUEST_VA(SYM_D3D_Device);
+    ctx.edx=GUEST_VA(SYM_D3D_pDevice);
+#else
+    ctx.ecx=ctx.edx=0;
+#endif
+    Boundary(ctx,base,hulkpocket::kGraphicsCreate,"Direct3D_CreateDevice",Stdcall("Direct3D_CreateDevice"));
+}
 #else
 #error "Game has no generated Direct3D_CreateDevice symbol"
 #endif
@@ -72,8 +83,6 @@ void GUEST(XLaunchNewImageA)(X86Context& ctx,uint8_t* base){
             throw std::runtime_error("XAPI requires a checked host adapter: " #name); \
         hulkpocket::graphics_callback(ctx,base,id); \
     }
-#define GUEST_VA_(x) 0x##x##u
-#define GUEST_VA(x) GUEST_VA_(x)
 #if HAS_XInitDevices && HAS_XPP_GamepadType
 extern "C" __attribute__((visibility("default")))
 void GUEST(XInitDevices)(X86Context& ctx,uint8_t* base){

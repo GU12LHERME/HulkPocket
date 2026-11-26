@@ -15,13 +15,15 @@ if [[ ! -d "$(dirname "$log")" ]]; then log="$HOME/hulk-diagnostic-current.txt";
     echo "HulkPocket diagnostic revision: $(git rev-parse --short HEAD)"
     python tools/link_hulk_cached.py --sdk "$sdk" --generated "$generated" \
         --cache "$cache" --ndk-bin "$PREFIX/bin" --output "$module"
-    clang++ -std=c++17 -O2 -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC \
+    clang++ -std=c++20 -O2 -pthread -DHULK_ENABLE_ENTRY_DIAGNOSTIC -DHULK_ENABLE_GLES_DEVICE_PROBE \
         -I"$sdk/runtime" -Ithird_party/xboxxberecomp native/hulk_xbe_local_diagnostic.cpp \
         native/hulk_xbe_preflight.cpp native/xbox_guest_address_space.cpp \
         native/xbe_image_memory_loader.cpp native/xbe_kernel_imports.cpp \
         native/portable_xbe_image.cpp native/portable_xbe_dispatch.cpp \
         third_party/xboxxberecomp/kernel/crypto.cpp \
-        -ldl -o "$out"
+        native/xbe_gles_backend.cpp third_party/xboxxberecomp/gpu/texture.cpp \
+        third_party/xboxxberecomp/gpu/vertex.cpp \
+        -ldl -lEGL -lGLESv3 -o "$out"
     args=()
     if [[ -n "$disc" ]]; then args+=(--disc-root "$disc"); fi
     execution_log=$(mktemp)
