@@ -89,12 +89,26 @@ def create_call_case(directory: Path) -> tuple[Path, Path]:
     return xbe_path,config_path
 
 
+def create_kernel_case(directory: Path) -> tuple[Path, Path]:
+    """Exercise a genuine recompiled x86 indirect call into an Xbox kernel thunk."""
+    xbe_path, config_path = create(directory)
+    data = bytearray(xbe_path.read_bytes())
+    # mov eax,0xFE000044; call eax; ret -> guest kernel ordinal 17.
+    code = bytes.fromhex("B8 44 00 00 FE FF D0 C3")
+    data[0x600:0x600 + len(code)] = code
+    # Original XBE on-disk kernel import descriptor list, not relocated.
+    struct.pack_into("<I", data, 0x158, 0x200080 ^ 0x5B6D40B6)
+    struct.pack_into("<II", data, 0x680, 0x80000011, 0)
+    xbe_path.write_bytes(data)
+    return xbe_path, config_path
+
+
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument("--output-dir",type=Path,required=True)
-    p.add_argument("--profile",choices=("simple","memory","calls"),default="simple")
+    p.add_argument("--profile",choices=("simple","memory","calls","kernel"),default="simple")
     args=p.parse_args()
-    selected={"simple":create,"memory":create_memory_case,"calls":create_call_case}
+    selected={"simple":create,"memory":create_memory_case,"calls":create_call_case,"kernel":create_kernel_case}
     xbe,cfg=selected[args.profile](args.output_dir)
     print(f"Generated original test XBE: {xbe}")
     print(f"Generated recompiler config: {cfg}")
