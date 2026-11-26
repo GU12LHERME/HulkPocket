@@ -46,6 +46,13 @@ PortableXbeImage::PortableXbeImage(const std::string& elf_path) {
         throw;
     }
 }
+PortableXbeImage::KernelEntry PortableXbeImage::ResolveKernelEntry() const {
+    dlerror();
+    void* symbol=dlsym(handle_,"hulk_entry_execute_with_kernel");
+    if(dlerror() || !symbol)
+        throw std::runtime_error("ELF lacks kernel-enabled entry; relink cached module");
+    return reinterpret_cast<KernelEntry>(symbol);
+}
 PortableXbeImage::~PortableXbeImage() {
     if (handle_) dlclose(handle_);
 }
