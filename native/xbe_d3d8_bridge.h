@@ -634,8 +634,8 @@ public:
            !count||count>262144||!((prim==5&&count%3==0)||(prim==6&&count>=3))||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
            state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
-           state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsStencilEnable]||state_.rs[gpu::kRsTwoSidedLighting])
-            throw std::logic_error("Unsupported captured pixel replay profile");
+           state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
+            throw std::logic_error("Unsupported captured shader replay profile");
         gpu::TextureDesc desc{};
         if(!gpu::DescribeSurface(state_.rt,desc)||!state_.viewport.w||!state_.viewport.h||
            uint64_t(state_.viewport.x)+state_.viewport.w>desc.width||uint64_t(state_.viewport.y)+state_.viewport.h>desc.height)
@@ -646,10 +646,13 @@ public:
                 (state_.tss[st][gpu::kTssTexCoordIndex]||state_.tss[st][gpu::kTssTextureTransformFlags]))
                 throw std::logic_error("Captured fixed vertex path requires UV set zero without transform");
         }
-        for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable})replay.rs[r]=state_.rs[r];
+        for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
+                    gpu::kRsStencilEnable,gpu::kRsStencilFail,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode})
+            replay.rs[r]=state_.rs[r];
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
                     gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
-                    gpu::kMShadeMode})
+                    gpu::kMShadeMode,gpu::kMStencilWriteMask,gpu::kMStencilFunc,gpu::kMStencilRef,
+                    gpu::kMStencilMask,gpu::kMStencilZFail,gpu::kMStencilPass})
             replay.simple[m/4]=state_.simple[m/4];
         for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;

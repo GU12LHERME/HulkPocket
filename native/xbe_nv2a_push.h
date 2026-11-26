@@ -183,6 +183,10 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
             if(v)throw std::logic_error("Unsupported vertex cache break argument");
             continue;
         }
+        if(capture_combiner&&(m==gpu::kMStencilWriteMask||m==gpu::kMStencilFunc||m==gpu::kMStencilRef||
+           m==gpu::kMStencilMask||m==gpu::kMStencilZFail||m==gpu::kMStencilPass)){
+            simple[m/4]=v;continue;
+        }
         if(capture_combiner&&IsCombinerMethod(m)){
             simple[m/4]=v;next.combiner_seen.set(m/4);next.pending_raw_configuration=true;continue;
         }

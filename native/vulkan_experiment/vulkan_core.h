@@ -378,7 +378,8 @@ struct VulkanCore{
         VkViewport vp{0,float(H),float(W),-float(H),0,1};VkRect2D sc{{0,0},{W,H}};
         if(region){vp=region->viewport;sc=region->scissor;}
         VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.pViewports=&vp;vps.scissorCount=1;vps.pScissors=&sc;
-        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;
+        auto rs=hulkpocket::vkexp::TranslateWinding(override_state?*override_state:gpu::State{},
+            ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         gpu::State state{};
         state.simple[gpu::kMColorWriteEnable/4]=0x01010101;

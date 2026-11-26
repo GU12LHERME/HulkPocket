@@ -47,6 +47,22 @@ inline VkBlendOp BlendOp(uint32_t v) {
     default:throw std::invalid_argument("Unknown Xbox blend operation");
     }
 }
+// Xbox D3DCULL values describe the winding to discard, not the
+// winding to keep. Matches the pinned SCDA Vulkan backend mapping.
+inline VkPipelineRasterizationStateCreateInfo TranslateWinding(const gpu::State& s,bool triangles){
+    VkPipelineRasterizationStateCreateInfo r{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    r.polygonMode=VK_POLYGON_MODE_FILL;r.lineWidth=1;r.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    auto fill=s.rs[gpu::kRsFillMode],back=s.rs[gpu::kRsBackFillMode],cull=s.rs[gpu::kRsCullMode];
+    if((fill&&fill!=0x1b02)||(back&&back!=0x1b02))
+        throw std::invalid_argument("Unsupported non-solid Xbox polygon mode");
+    if(cull!=0&&cull!=0x900&&cull!=0x901)
+        throw std::invalid_argument("Unknown Xbox culling mode");
+    if(triangles&&cull){
+        r.cullMode=VK_CULL_MODE_BACK_BIT;
+        r.frontFace=cull==0x900?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
+    }
+    return r;
+}
 struct RasterState {
     VkPipelineDepthStencilStateCreateInfo depth{};
     VkPipelineColorBlendAttachmentState color{};

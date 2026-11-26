@@ -35,6 +35,15 @@ int main(int argc,char** argv){
         state.rs[kRsZEnable]=2;bool rejected=false;
         try{(void)hulkpocket::vkexp::TranslateRaster(state);}catch(const std::invalid_argument&){rejected=true;}
         if(!rejected)throw std::runtime_error("Unsupported W-buffer silently accepted");
+        state.rs[kRsZEnable]=0;state.simple[kMColorWriteEnable/4]=0x01010101;
+        state.rs[kRsCullMode]=0x900;f.Draw(argv[1],false,false,false,false,&state);
+        auto cw=f.Pixel(32,32);
+        state.rs[kRsCullMode]=0x901;f.Draw(argv[1],false,false,false,false,&state);
+        auto ccw=f.Pixel(32,32);
+        const std::array<uint8_t,4> drawn{0,255,0,255},culled{0,0,0,255};
+        if(!((cw==drawn&&ccw==culled)||(cw==culled&&ccw==drawn)))
+            throw std::runtime_error("Opposite Xbox windings did not cull complementary faces");
+        state.rs[kRsCullMode]=0;
         // End-to-end synthetic Xbox resource headers and committed memory.
         hulkpocket::XboxGuestAddressSpace memory;
         memory.Commit(0x10000,0x10000);memory.Commit(0x80100000,0x10000);
@@ -369,6 +378,39 @@ int main(int argc,char** argv){
                 call("D3DDevice_Clear",{1,rect,0xf0,0xff00ff00,std::bit_cast<uint32_t>(1.f),0});
                 Expect("rectangle clear inside",backend.ReadPixel(50,32),{0,255,0,255});
                 Expect("rectangle clear preserves outside",backend.ReadPixel(44,32),{0,0,255,255});
+                // Stencil-only mark followed by a color pass through the
+                // marked region, as used in a shadow volume pipeline.
+                constexpr uint32_t depth_surface=0x20500;
+                bridge_mem.Write32(depth_surface,0x50000);bridge_mem.Write32(depth_surface+4,0x11c000);
+                bridge_mem.Write32(depth_surface+12,0x00012e21);bridge_mem.Write32(depth_surface+16,63|(63<<12)|(3<<24));
+                call("D3DDevice_SetRenderTarget",{surface,depth_surface});
+                call("D3DDevice_SetScissors",{0,0,0});
+                bridge_mem.Write32(device+0xee0,0);bridge_mem.Write32(device+0xee8,64);
+                bridge.SyncFixedDiffuseShader(device,true);
+                call("D3DDevice_Clear",{0,0,0xf3,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});
+                auto mask_state=bridge.Snapshot();mask_state.rs[kRsStencilEnable]=1;
+                mask_state.rs[kRsStencilFail]=0x1e00;
+                mask_state.simple[kMColorWriteEnable/4]=0;
+                bridge.AdoptLiveSetters(mask_state);
+                std::vector<hulkpocket::Nv2aMethod> stencil_words={{kMStencilFunc,0x207},{kMStencilRef,1},
+                    {kMStencilMask,255},{kMStencilWriteMask,255},{kMStencilPass,0x1e01},{kMStencilZFail,0x1e00}};
+                auto write_packet=[&](const std::vector<hulkpocket::Nv2aMethod>& p){
+                    for(unsigned k=0;k<p.size();++k){
+                        bridge_mem.Write32(scratch+8*k,(1u<<18)|p[k].method);bridge_mem.Write32(scratch+8*k+4,p[k].value);
+                    }
+                    bridge.ApplyPush(scratch,scratch+8*p.size(),true);
+                };
+                write_packet(stencil_words);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("stencil mark preserves color",backend.ReadPixel(32,32),{0,0,255,255});
+                // Larger fullscreen triangle makes the stencil, rather than
+                // geometry coverage, responsible for rejecting corner pixels.
+                const Vertex large[]={{-1,-1,.5f,0xffffffff,0,1},{3,-1,.5f,0xffffffff,1,1},{-1,3,.5f,0xffffffff,0,0}};
+                bridge_mem.Write(0x80114000,large,sizeof(large));
+                write_packet({{kMColorWriteEnable,0x01010101},{kMStencilFunc,0x202},{kMStencilWriteMask,0},{kMStencilPass,0x1e00}});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("stencil masked color inside",backend.ReadPixel(32,32),{128,128,64,255});
+                Expect("stencil masked color outside",backend.ReadPixel(4,4),{0,0,255,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
