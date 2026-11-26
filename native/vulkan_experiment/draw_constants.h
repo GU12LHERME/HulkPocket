@@ -3,6 +3,7 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
+#include <bit>
 #include <stdexcept>
 namespace hulkpocket::vkexp {
 using Matrix=std::array<float,16>;
@@ -34,6 +35,39 @@ inline void FixedTransforms(const gpu::State& s,gpu::DrawConstants& dc){
         std::fill_n(dc.wvn,16,0.f);dc.wvn[15]=1;
         for(unsigned row=0;row<3;++row)for(unsigned col=0;col<3;++col)
             dc.wvn[row*4+col]=cof[row*3+col]/det;
+    }
+}
+// Constant layout follows the shared fixed-function shader and the verified GLES lighting model.
+inline void FixedLighting(const gpu::State& s,gpu::DrawConstants& dc){
+    if(!s.rs[gpu::kRsLighting])return;
+    if(s.rs[gpu::kRsLighting]!=1||s.rs[gpu::kRsTwoSidedLighting]||s.rs[gpu::kRsVertexBlend]||
+       s.rs[gpu::kRsFogEnable]||(s.light_enable&~255u))throw std::logic_error("Unsupported Vulkan lighting state");
+    for(float x:s.material)if(!std::isfinite(x))throw std::invalid_argument("Invalid Vulkan material");
+    if(s.material[16]<0)throw std::invalid_argument("Invalid Vulkan material power");
+    for(unsigned n=0;n<4;++n)for(unsigned j=0;j<4;++j)dc.mat[n][j]=s.material[n*4+j];
+    dc.mat[4][0]=s.material[16];
+    auto amb=s.rs[gpu::kRsAmbient];
+    dc.amb[0]=float((amb>>16)&255)/255;dc.amb[1]=float((amb>>8)&255)/255;
+    dc.amb[2]=float(amb&255)/255;dc.amb[3]=float(amb>>24)/255;
+    dc.misc[3]=s.rs[gpu::kRsSpecularEnable]?1.f:0.f;
+    const auto& view=s.transforms[2];
+    for(unsigned n=0;n<8;++n)if(s.light_enable&(1u<<n)){
+        const auto& l=s.lights[n];if(l[0]<1||l[0]>3)throw std::invalid_argument("Missing enabled Vulkan light");
+        float x[26]{};for(unsigned j=1;j<26;++j){x[j]=std::bit_cast<float>(l[j]);if(!std::isfinite(x[j]))throw std::invalid_argument("Nonfinite Vulkan light");}
+        auto& o=dc.lt[n];for(unsigned k=0;k<3;++k)for(unsigned j=0;j<4;++j)o[k][j]=x[1+4*k+j];
+        for(unsigned j=0;j<3;++j){
+            o[3][j]=x[13]*view[j]+x[14]*view[4+j]+x[15]*view[8+j]+view[12+j];
+            o[4][j]=x[16]*view[j]+x[17]*view[4+j]+x[18]*view[8+j];
+        }
+        if(l[0]!=1){
+            const float len=std::sqrt(o[4][0]*o[4][0]+o[4][1]*o[4][1]+o[4][2]*o[4][2]);
+            if(!std::isfinite(len)||len<=1e-6f)throw std::invalid_argument("Invalid Vulkan light direction");
+            for(unsigned j=0;j<3;++j)o[4][j]/=len;
+        }
+        if(l[0]!=3&&(x[19]<0||x[21]<0||x[22]<0||x[23]<0))throw std::invalid_argument("Invalid Vulkan light attenuation");
+        if(l[0]==2&&(x[24]<0||x[25]<x[24]||x[25]>3.141593f||x[20]<0))throw std::invalid_argument("Invalid Vulkan spot cone");
+        o[3][3]=x[19];o[4][3]=x[20];for(unsigned j=0;j<3;++j)o[5][j]=x[21+j];
+        o[6][0]=std::cos(x[24]*.5f);o[6][1]=std::cos(x[25]*.5f);
     }
 }
 }

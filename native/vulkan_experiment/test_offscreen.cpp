@@ -153,6 +153,36 @@ int main(int argc,char** argv){
         memory.Write(0x80200000,movie.data(),movie.size()*4);
         f.UploadGuestTexture(tex);f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("updated movie same address",f.Pixel(16,32),{0,0,255,255});
+        // Guest swizzled 16x16 chain, each lower level red, base green.
+        memory.Write32(tex+4,0x200000);memory.Write32(tex+12,0x04450620);memory.Write32(tex+16,0);
+        std::vector<uint32_t> mips(256+64+16+4+1,0xffff0000);
+        std::fill_n(mips.begin(),256,0xff00ff00);memory.Write(0x80200000,mips.data(),mips.size()*4);
+        const Vertex repeat[]={{-.75f,-.75f,.5f,0xffffffff,0,32},{.75f,-.75f,.5f,0xffffffff,32,32},
+                               {.75f,.75f,.5f,0xffffffff,32,0},{-.75f,.75f,.5f,0xffffffff,0,0}};
+        memory.Write(0x80100100,repeat,sizeof(repeat));
+        if(!GuestDraw(guest_state,8,0,4,0,assembled))throw std::runtime_error("Mip geometry failed");
+        f.UploadGuestTexture(tex);stage[kTssMipFilter]=0;f.SetSampler(0,guest_state);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("guest mip disabled",f.Pixel(32,32),{0,255,0,255});
+        stage[kTssMipFilter]=1;f.SetSampler(0,guest_state);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("guest mip minification",f.Pixel(32,32),{255,0,0,255});
+        // Fixed-function packed Xbox normal declaration, actual guest material and light.
+        guest_state.textures[0]=0;stage[kTssColorOp]=stage[kTssAlphaOp]=1;
+        guest_state.vs_handle=1;guest_state.vs=std::make_shared<gpu::VertexShader>();
+        guest_state.vs->inputs[0]={0,0,0x32};guest_state.vs->inputs[2]={0,12,0x16};
+        guest_state.vs->inputs[9]={0,16,0x22};guest_state.vs->stream_stride[0]=sizeof(Vertex);
+        const Vertex lit[]={{-.75f,-.75f,.5f,511u<<22,0,1},{.75f,-.75f,.5f,511u<<22,1,1},{0,.75f,.5f,511u<<22,.5f,0}};
+        memory.Write(0x80100100,lit,sizeof(lit));
+        guest_state.rs[kRsLighting]=1;guest_state.light_enable=1;
+        guest_state.material[0]=guest_state.material[3]=1;
+        auto& light=guest_state.lights[0];light[0]=3;light[1]=std::bit_cast<uint32_t>(1.f);light[18]=std::bit_cast<uint32_t>(-1.f);
+        if(!GuestDraw(guest_state,5,0,3,0,assembled))throw std::runtime_error("Packed lighting assembly failed");
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("guest directional light",f.Pixel(32,32),{255,0,0,255});
+        light[18]=std::bit_cast<uint32_t>(1.f);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("guest reversed light",f.Pixel(32,32),{0,0,0,255});
         bool bad=false;
         try{hulkpocket::vkexp::GuestDraw(guest_state,5,0,3,0x1ffff,assembled);}catch(const std::out_of_range&){bad=true;}
         if(!bad)throw std::runtime_error("Uncommitted index span accepted");

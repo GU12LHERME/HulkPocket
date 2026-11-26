@@ -39,11 +39,11 @@ struct VulkanCore{
     Buffer verts,indices,uniform,readback,staging;
     Image target,depth;
     std::array<Image,4> textures{};
-    std::array<uint32_t,4> tex_width{},tex_height{};
+    std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1};
     std::array<bool,4> tex_rect{};
     std::array<std::vector<uint8_t>,4> last_pixels{};
     std::array<VkSampler,4> stage_samplers{};
-    std::array<std::array<uint32_t,4>,4> stage_sampler_keys{};
+    std::array<std::array<uint32_t,6>,4> stage_sampler_keys{};
     VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
@@ -100,9 +100,9 @@ struct VulkanCore{
         if(!size||size>64ull*1024*1024)throw std::invalid_argument("Invalid Vulkan upload size");
         if(b.capacity<size){Destroy(b);CreateBuffer(b,size,usage);}
     }
-    void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage,VkFormat format=Format,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT){
+    void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage,VkFormat format=Format,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT,uint32_t levels=1){
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};ci.imageType=VK_IMAGE_TYPE_2D;
-        ci.format=format;ci.extent={width,height,1};ci.mipLevels=ci.arrayLayers=1;
+        ci.format=format;ci.extent={width,height,1};ci.mipLevels=levels;ci.arrayLayers=1;
         ci.samples=VK_SAMPLE_COUNT_1_BIT;ci.tiling=VK_IMAGE_TILING_OPTIMAL;ci.usage=usage;
         Check(vkCreateImage(dev,&ci,nullptr,&out.image),"vkCreateImage");
         VkImageMemoryRequirementsInfo2 ri{VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2};ri.image=out.image;
@@ -114,7 +114,7 @@ struct VulkanCore{
             throw std::runtime_error("SCDA image pool allocation failed");
         Check(vkBindImageMemory(dev,out.image,out.alloc.memory,out.alloc.offset),"bind image");
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=out.image;
-        vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=format;vi.subresourceRange={aspect,0,1,0,1};
+        vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=format;vi.subresourceRange={aspect,0,levels,0,1};
         Check(vkCreateImageView(dev,&vi,nullptr,&out.view),"image view");
     }
     void Destroy(Image& x){
@@ -134,10 +134,10 @@ struct VulkanCore{
         if(!fence->Submit(queue,0,si)||!fence->Begin(0))throw std::runtime_error("Vulkan submit/wait failed");
     }
     void Transition(VkImage im,VkImageLayout old,VkImageLayout next,VkAccessFlags src,VkAccessFlags dst,
-                    VkPipelineStageFlags before,VkPipelineStageFlags after){
+                    VkPipelineStageFlags before,VkPipelineStageFlags after,uint32_t levels=1){
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=im;b.oldLayout=old;b.newLayout=next;
         b.srcAccessMask=src;b.dstAccessMask=dst;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,levels,0,1};
         vkCmdPipelineBarrier(cmd,before,after,0,0,nullptr,0,nullptr,1,&b);
     }
     void Init(uint32_t width=64,uint32_t height=64){
@@ -255,13 +255,14 @@ struct VulkanCore{
     void SetSampler(unsigned stage,const gpu::State& s){
         if(stage>=4)throw std::invalid_argument("Invalid sampler stage");
         const auto& t=s.tss[stage];
-        std::array<uint32_t,4> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter]};
+        std::array<uint32_t,6> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage]};
+        if(key[4]>2||t[gpu::kTssMipLodBias]||t[gpu::kTssMaxMipLevel])throw std::invalid_argument("Unsupported Vulkan mip sampler state");
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
         auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
         auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
         VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         ci.addressModeU=address(key[0]);ci.addressModeV=address(key[1]);ci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;ci.maxLod=0;
+        ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=key[4]==2?VK_SAMPLER_MIPMAP_MODE_LINEAR:VK_SAMPLER_MIPMAP_MODE_NEAREST;ci.maxLod=key[4]?float(key[5]-1):0.f;
         VkSampler next{};Check(vkCreateSampler(dev,&ci,nullptr,&next),"guest sampler");
         VkDescriptorImageInfo im{next,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=6+stage;
@@ -273,34 +274,40 @@ struct VulkanCore{
     void UploadGuestTexture(uint32_t header,unsigned stage=0,uint32_t palette=0){
         if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
         gpu::TextureDesc desc{};if(!gpu::Describe(header,desc))throw std::invalid_argument("Invalid Xbox texture header");
-        auto pixels=hulkpocket::vkexp::GuestTexture(header,palette);
-        if(pixels.width>limits.maxImageDimension2D||pixels.height>limits.maxImageDimension2D||
-           pixels.rgba.size()!=size_t(pixels.width)*pixels.height*4)
-            throw std::invalid_argument("Invalid Vulkan texture extent");
+        unsigned max_levels=1;for(unsigned n=std::max(desc.width,desc.height);n>1;n>>=1)++max_levels;
+        if(!desc.levels||desc.levels>max_levels||desc.width>limits.maxImageDimension2D||desc.height>limits.maxImageDimension2D)
+            throw std::invalid_argument("Invalid Vulkan mip extent");
+        std::vector<uint8_t> pixels;std::vector<VkBufferImageCopy> copies;
+        for(unsigned level=0;level<desc.levels;++level){
+            auto p=hulkpocket::vkexp::GuestTexture(header,palette,level);
+            if(p.rgba.size()!=size_t(p.width)*p.height*4||p.rgba.size()>64ull*1024*1024-pixels.size())
+                throw std::invalid_argument("Decoded Vulkan mip chain exceeds bound");
+            VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,0,1};copy.imageExtent={p.width,p.height,1};
+            copies.push_back(copy);pixels.insert(pixels.end(),p.rgba.begin(),p.rgba.end());
+        }
         tex_rect[stage]=desc.linear;
-        if(tex_width[stage]==pixels.width&&tex_height[stage]==pixels.height&&last_pixels[stage]==pixels.rgba)return;
-        EnsureBuffer(staging,pixels.rgba.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        std::memcpy(staging.data,pixels.rgba.data(),pixels.rgba.size());
+        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels;
+        if(!resize&&last_pixels[stage]==pixels)return;
+        EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        std::memcpy(staging.data,pixels.data(),pixels.size());
         auto& texture=textures[stage];
-        bool resize=tex_width[stage]!=pixels.width||tex_height[stage]!=pixels.height;
         if(resize){
             Destroy(texture);
-            CreateImage(texture,pixels.width,pixels.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-            tex_width[stage]=pixels.width;tex_height[stage]=pixels.height;
+            CreateImage(texture,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,desc.levels);
+            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;
         }
         Begin();
         Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
-                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
-        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};copy.imageExtent={pixels.width,pixels.height,1};
-        vkCmdCopyBufferToImage(cmd,staging.b,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
-        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,desc.levels);
+        vkCmdCopyBufferToImage(cmd,staging.b,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,uint32_t(copies.size()),copies.data());
+        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,desc.levels);
         Submit();
         VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
         wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
-        last_pixels[stage]=std::move(pixels.rgba);
+        last_pixels[stage]=std::move(pixels);
     }
     VkShaderModule Module(const std::filesystem::path& path){
         std::ifstream f(path,std::ios::binary|std::ios::ate);
@@ -445,8 +452,10 @@ struct VulkanCore{
         dc.mat[0][2]=dc.mat[0][3]=1; // blue diffuse
         dc.mat[4][0]=8;dc.lt[0][0][2]=1;dc.lt[0][4][2]=-1; // directional -Z
         if(dynamic){
-            if(!state||state->rs[gpu::kRsLighting])throw std::invalid_argument("Dynamic lighting constants not integrated");
+            if(!state)throw std::invalid_argument("Missing dynamic state");
+            std::memset(dc.mat,0,sizeof(dc.mat));std::memset(dc.lt,0,sizeof(dc.lt));
             hulkpocket::vkexp::FixedTransforms(*state,dc);
+            hulkpocket::vkexp::FixedLighting(*state,dc);
             if(state->simple[gpu::kMAlphaTestEnable/4]){
                 auto fn=state->simple[gpu::kMAlphaFunc/4];
                 if(fn<0x200||fn>0x207)throw std::invalid_argument("Invalid Xbox alpha function");
