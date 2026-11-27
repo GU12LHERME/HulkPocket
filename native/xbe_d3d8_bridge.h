@@ -640,7 +640,7 @@ public:
         if(!initialized_||(!state_.ps&&!program)||(!program&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42)))||
            !count||count>262144||!((prim==5&&count%3==0)||(prim==6&&count>=3))||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
-           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]||
+           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]>1||
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
             throw std::logic_error("Unsupported captured shader replay profile");
         gpu::TextureDesc desc{};
@@ -654,12 +654,14 @@ public:
                 throw std::logic_error("Captured fixed vertex path requires UV set zero without transform");
         }
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
-                    gpu::kRsStencilEnable,gpu::kRsStencilFail,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode})
+                    gpu::kRsStencilEnable,gpu::kRsStencilFail,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode,
+                    gpu::kRsFogEnable,gpu::kRsFogTableMode,gpu::kRsFogStart,gpu::kRsFogEnd,gpu::kRsFogDensity,gpu::kRsFogColor})
             replay.rs[r]=state_.rs[r];
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
                     gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
                     gpu::kMShadeMode,gpu::kMStencilWriteMask,gpu::kMStencilFunc,gpu::kMStencilRef,
-                    gpu::kMStencilMask,gpu::kMStencilZFail,gpu::kMStencilPass})
+                    gpu::kMStencilMask,gpu::kMStencilZFail,gpu::kMStencilPass,
+                    gpu::kMSolidOffsetEnable,gpu::kMSlopeScale,gpu::kMDepthOffset})
             replay.simple[m/4]=state_.simple[m/4];
         for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;

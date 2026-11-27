@@ -4,6 +4,8 @@
 #include "gpu/state.h"
 #include <vulkan/vulkan.h>
 #include <stdexcept>
+#include <bit>
+#include <cmath>
 namespace hulkpocket::vkexp {
 inline VkCompareOp Compare(uint32_t v) {
     if(v<0x200||v>0x207)throw std::invalid_argument("Unknown Xbox comparison");
@@ -49,7 +51,7 @@ inline VkBlendOp BlendOp(uint32_t v) {
 }
 // Xbox D3DCULL values describe the winding to discard, not the
 // winding to keep. Matches the pinned SCDA Vulkan backend mapping.
-inline VkPipelineRasterizationStateCreateInfo TranslateWinding(const gpu::State& s,bool triangles){
+inline VkPipelineRasterizationStateCreateInfo TranslateWinding(const gpu::State& s,bool triangles,VkFormat depth_format=VK_FORMAT_D24_UNORM_S8_UINT){
     VkPipelineRasterizationStateCreateInfo r{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     r.polygonMode=VK_POLYGON_MODE_FILL;r.lineWidth=1;r.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;
     auto fill=s.rs[gpu::kRsFillMode],back=s.rs[gpu::kRsBackFillMode],cull=s.rs[gpu::kRsCullMode];
@@ -60,6 +62,24 @@ inline VkPipelineRasterizationStateCreateInfo TranslateWinding(const gpu::State&
     if(triangles&&cull){
         r.cullMode=VK_CULL_MODE_BACK_BIT;
         r.frontFace=cull==0x900?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
+    }
+    auto offset=s.simple[gpu::kMSolidOffsetEnable/4];
+    if(offset>1)throw std::invalid_argument("Invalid Xbox polygon offset enable");
+    if(offset&&triangles&&s.rs[gpu::kRsZEnable]){
+        float slope=std::bit_cast<float>(s.simple[gpu::kMSlopeScale/4]);
+        float units=std::bit_cast<float>(s.simple[gpu::kMDepthOffset/4]);
+        if(!std::isfinite(slope)||!std::isfinite(units)||!std::isfinite(s.zscale)||s.zscale<=0)
+            throw std::invalid_argument("Invalid Xbox polygon offset");
+        // The constant term is expressed in guest depth-buffer units.
+        // D32 floating point does not have a fixed 24-bit quantization step.
+        if(units&&depth_format!=VK_FORMAT_D24_UNORM_S8_UINT)
+            throw std::invalid_argument("Constant Xbox depth offset needs D24 target");
+        double factor=double(units)*16777215.0/double(s.zscale);
+        if(!std::isfinite(factor)||std::abs(factor)>16777215.0)
+            throw std::invalid_argument("Xbox depth offset exceeds supported range");
+        r.depthBiasConstantFactor=float(std::round(factor));
+        r.depthBiasSlopeFactor=slope;
+        r.depthBiasEnable=r.depthBiasConstantFactor!=0||slope!=0;
     }
     return r;
 }

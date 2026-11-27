@@ -184,7 +184,8 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
             continue;
         }
         if(capture_combiner&&(m==gpu::kMStencilWriteMask||m==gpu::kMStencilFunc||m==gpu::kMStencilRef||
-           m==gpu::kMStencilMask||m==gpu::kMStencilZFail||m==gpu::kMStencilPass)){
+           m==gpu::kMStencilMask||m==gpu::kMStencilZFail||m==gpu::kMStencilPass||
+           m==gpu::kMSolidOffsetEnable||m==gpu::kMSlopeScale||m==gpu::kMDepthOffset)){
             simple[m/4]=v;continue;
         }
         if(capture_combiner&&IsCombinerMethod(m)){

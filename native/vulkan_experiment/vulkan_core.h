@@ -476,7 +476,7 @@ struct VulkanCore{
         const VkDynamicState dynamic_states[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
         VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dyn.dynamicStateCount=2;dyn.pDynamicStates=dynamic_states;
         auto rs=hulkpocket::vkexp::TranslateWinding(override_state?*override_state:gpu::State{},
-            ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN);
+            ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN,depth_format);
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
         gpu::State state{};
         state.simple[gpu::kMColorWriteEnable/4]=0x01010101;

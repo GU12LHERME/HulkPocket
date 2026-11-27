@@ -44,6 +44,24 @@ int main(int argc,char** argv){
         if(!((cw==drawn&&ccw==culled)||(cw==culled&&ccw==drawn)))
             throw std::runtime_error("Opposite Xbox windings did not cull complementary faces");
         state.rs[kRsCullMode]=0;
+        // Equal-depth overlay is rejected by LESS until a negative Xbox
+        // polygon offset moves it slightly toward the camera.
+        State bias{};bias.rs[kRsZEnable]=1;
+        bias.simple[kMColorWriteEnable/4]=0x01010101;
+        bias.simple[kMZWriteEnable/4]=1;bias.simple[kMZFunc/4]=0x201;
+        f.Draw(argv[1],false,false,false,false,&bias);
+        f.Draw(argv[1],false,false,true,false,&bias,false,nullptr,false,true);
+        Expect("equal depth overlay rejected",f.Pixel(32,32),{0,255,0,255});
+        bias.simple[kMSolidOffsetEnable/4]=1;
+        bias.simple[kMDepthOffset/4]=std::bit_cast<uint32_t>(-1024.f);
+        if(f.depth_format==VK_FORMAT_D24_UNORM_S8_UINT){
+            f.Draw(argv[1],false,false,true,false,&bias,false,nullptr,false,true);
+            Expect("negative polygon offset draws overlay",f.Pixel(32,32),{255,0,0,128});
+        }else{
+            bool unsupported=false;
+            try{(void)TranslateWinding(bias,true,f.depth_format);}catch(const std::invalid_argument&){unsupported=true;}
+            if(!unsupported)throw std::runtime_error("Floating-point constant depth bias silently accepted");
+        }
         // End-to-end synthetic Xbox resource headers and committed memory.
         hulkpocket::XboxGuestAddressSpace memory;
         memory.Commit(0x10000,0x10000);memory.Commit(0x80100000,0x10000);
@@ -551,6 +569,24 @@ int main(int argc,char** argv){
                 bridge_mem.Write(0x80114000,uv,sizeof(uv));
                 backend.Draw(feedback,5,0,3,nullptr);
                 Expect("ordinary texture after framebuffer snapshot",backend.ReadPixel(32,32),{255,128,64,255});
+                // Real captured-combiner replay: fog alpha interpolates
+                // texture color with the fog register (linear depth 0..1).
+                auto fog=bridge.Snapshot();
+                fog.rs[kRsStencilEnable]=0;fog.rs[kRsFogEnable]=1;
+                fog.rs[kRsFogTableMode]=3;fog.rs[kRsFogStart]=std::bit_cast<uint32_t>(0.f);
+                fog.rs[kRsFogEnd]=std::bit_cast<uint32_t>(1.f);
+                fog.rs[kRsFogDensity]=std::bit_cast<uint32_t>(1.f);
+                fog.rs[kRsFogColor]=0xff0000ff;
+                bridge.AdoptLiveSetters(fog);
+                write_packet({{kMPsFinalAbcd,0x13080300},{kMPsFinalEfgh,0x1800}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("captured linear fog combiner",backend.ReadPixel(32,32),{128,64,160,255});
+                fog=bridge.Snapshot();fog.rs[kRsFogEnd]=std::bit_cast<uint32_t>(2.f);
+                bridge.AdoptLiveSetters(fog);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("updated fog range",backend.ReadPixel(32,32),{191,96,112,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
