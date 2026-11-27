@@ -2,6 +2,7 @@
 #include "cpu/x86_context.h"
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 namespace hulkpocket {
 // Internal host callback IDs, never guest kernel ordinals.
 constexpr uint32_t kGraphicsCreate=0x10000,kGraphicsDraw=0x10001,
@@ -120,6 +121,15 @@ inline unsigned DiagnosticAudioSeconds(){
     return seconds>120?seconds:120;
 }
 constexpr bool DiagnosticTracePoll(unsigned count){return count<=16||count%1024==0;}
+inline bool CompactVulkanGraphicsTrace(){
+    auto eq=[](const char* key,const char* value){
+        const auto* p=std::getenv(key);return p&&std::strcmp(p,value)==0;
+    };
+    return eq("HULK_RENDERER","vulkan")&&eq("HULK_COMPACT_REPORT","1")&&!eq("HULK_FULL_DRAW_CAPTURE","1");
+}
+inline bool GraphicsTraceSample(unsigned& count){
+    return !CompactVulkanGraphicsTrace()||DiagnosticTracePoll(++count);
+}
 using GraphicsCallback=void(*)(X86Context&,uint8_t*,uint32_t);
 inline thread_local GraphicsCallback graphics_callback=nullptr;
 class ScopedGraphicsCallback {

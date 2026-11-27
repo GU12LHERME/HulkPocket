@@ -24,11 +24,15 @@ constexpr bool Stdcall(std::string_view name){
     return true;
 }
 [[maybe_unused]] void Boundary(X86Context& ctx,uint8_t* base,uint32_t id,const char* name,bool stack_abi){
-    std::fprintf(stderr,"D3D8 GUEST BOUNDARY: %s ESP=%08X EAX=%08X ECX=%08X EDX=%08X thread=%08X\n",
-        name,ctx.esp,ctx.eax,ctx.ecx,ctx.edx,ctx.thread_handle);
+    static thread_local unsigned calls=0;
+    const bool sampled=hulkpocket::GraphicsTraceSample(calls);
+    auto log=[&]{std::fprintf(stderr,"D3D8 GUEST BOUNDARY: %s ESP=%08X EAX=%08X ECX=%08X EDX=%08X thread=%08X\n",
+        name,ctx.esp,ctx.eax,ctx.ecx,ctx.edx,ctx.thread_handle);};
+    if(sampled)log();
     if(!stack_abi)throw std::runtime_error("D3D8 boundary has explicit ABI mapping; host adapter required");
     auto original_esp=ctx.esp;
-    if(hulkpocket::graphics_callback)hulkpocket::graphics_callback(ctx,base,id);
+    try{if(hulkpocket::graphics_callback)hulkpocket::graphics_callback(ctx,base,id);}
+    catch(...){if(!sampled)log();throw;}
     // Only explicitly integrated diagnostic boundaries may return.
     // A callback that did not complete its stdcall frame must still stop.
     if((id==hulkpocket::kGraphicsCreate||id==hulkpocket::kGraphicsClear)&&
@@ -43,6 +47,7 @@ constexpr bool Stdcall(std::string_view name){
         ctx.eax<0x84000000u&&!(ctx.eax&4095u))return;
     if((id==(hulkpocket::kGraphicsDraw|0x1000u)||id==(hulkpocket::kGraphicsDrawIndexed|0x1000u))&&
         uint64_t(original_esp)+16==ctx.esp&&ctx.eax==0)return;
+    if(!sampled)log();
     throw std::runtime_error("D3D8 guest device integration checkpoint");
 }
 }
@@ -160,7 +165,8 @@ HOOK(D3DDevice_Clear,hulkpocket::kGraphicsClear)
 // The guest draw ABI remains three stack arguments.
 #define DRAW_HOOK(name,id) extern "C" __attribute__((visibility("default"))) \
 void GUEST(name)(X86Context& ctx,uint8_t* base){ \
-    std::fprintf(stderr,"D3D DRAW ORIGINAL REGISTERS EAX=%08X ECX=%08X EDX=%08X\n",ctx.eax,ctx.ecx,ctx.edx); \
+    static thread_local unsigned traces=0; \
+    if(hulkpocket::GraphicsTraceSample(traces))std::fprintf(stderr,"D3D DRAW ORIGINAL REGISTERS EAX=%08X ECX=%08X EDX=%08X\n",ctx.eax,ctx.ecx,ctx.edx); \
     ctx.eax=GUEST_VA(SYM_D3D_Streams);ctx.ecx=GUEST_VA(SYM_D3D_RenderState); \
     ctx.edx=GUEST_VA(SYM_D3D_DeferredTextureState); \
     Boundary(ctx,base,id,#name,Stdcall(#name)); \

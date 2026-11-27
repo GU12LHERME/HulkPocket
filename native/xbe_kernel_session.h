@@ -145,7 +145,8 @@ private:
                 catch(const std::exception& ex){std::fprintf(stderr,"D3D SWAP BITMAP FAILED: %s\n",ex.what());}
             }
         }
-        unsigned identical_frames=0;
+        unsigned identical_frames=0,clear_calls=0,viewport_trace_enters=0;
+        bool viewport_trace_sampled=false;
         const unsigned diagnostic_draw_limit=expanded_preview
             ?DiagnosticBudget("HULK_DRAW_LIMIT",kVulkanPreviewDrawsPerFrame,kVulkanPreviewMaxDrawsPerFrame)
             :DiagnosticBudget("HULK_DRAW_LIMIT",kDiagnosticDrawsPerFrame,512);
@@ -732,7 +733,7 @@ private:
                 // Preserve ordering with direct guest writes. Only supported
                 // state-only packets may be consumed; unknown ones stop.
                 DrainLivePush(live);
-                XbeD3dDefaultTrace trace(mem_,live.bridge.Snapshot());
+                XbeD3dDefaultTrace trace(mem_,live.bridge.Snapshot(),live.TraceGraphics());
                 apply(trace);
                 live.bridge.AdoptLiveSetters(trace.State());
             }
@@ -1168,17 +1169,21 @@ private:
                 auto& live=*live_d3d_;
                 DrainLivePush(live);
                 SyncLiveTargets(live);
-                std::fprintf(stderr,"D3D LIVE CLEAR caller=%08X rects=%u flags=%08X color=%08X z=%08X stencil=%08X\n",
+                const bool sample_clear=!live.expanded_preview||!live.compact_capture||live.detailed_draws||
+                    DiagnosticTracePoll(++live.clear_calls);
+                if(sample_clear)std::fprintf(stderr,"D3D LIVE CLEAR caller=%08X rects=%u flags=%08X color=%08X z=%08X stencil=%08X\n",
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5));
                 live.bridge.Call("D3DDevice_Clear",cpu,D3dAbi::Stdcall(6));
-                {
+                // Only the diagnostic sample needs immediate color readback.
+                // Real presentation and resource sync retain their readbacks.
+                if(sample_clear){
                     gpu::ScopedGuestMemory scope(mem_);
                     auto state=live.bridge.Snapshot();
                     live.backend.ReadbackColor(state.rt);
                     auto pixel=live.backend.ReadPixel(0,0);
                     std::fprintf(stderr,"D3D LIVE CLEAR READBACK RGBA=%02X%02X%02X%02X\n",pixel[0],pixel[1],pixel[2],pixel[3]);
                 }
-                std::fprintf(stderr,"D3D LIVE CLEAR PASS (offscreen)\n");return;
+                if(sample_clear)std::fprintf(stderr,"D3D LIVE CLEAR PASS (offscreen)\n");return;
 #else
                 throw std::runtime_error("D3D clear requires GLES backend");
 #endif
@@ -2324,6 +2329,10 @@ public:
                 auto& mem=session.mem_;
                 auto dev=live->buffers.DeviceAddress();
                 bool before=ordinal==kViewportTraceEnter;
+                if(live->expanded_preview&&live->compact_capture&&!live->detailed_draws){
+                    if(before)live->viewport_trace_sampled=DiagnosticTracePoll(++live->viewport_trace_enters);
+                    if(!live->viewport_trace_sampled)return;
+                }
                 std::fprintf(stderr,"D3D VIEWPORT WRITER %s caller=%08X esp=%08X eax=%08X ecx=%08X edx=%08X fields=",
                     before?"ENTER":"LEAVE",mem.IsCommitted(cpu.esp,4)?mem.Read32(cpu.esp):0,
                     cpu.esp,cpu.eax,cpu.ecx,cpu.edx);

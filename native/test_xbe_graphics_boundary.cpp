@@ -68,6 +68,16 @@ int main(){
         assert(rejected!=accept);
         if(accept)assert(c.eax==n&&c.esp==0x1008);
     };
+    // Compact Vulkan logging samples hot boundaries but does not affect
+    // the full-capture or legacy paths.
+    setenv("HULK_RENDERER","vulkan",1);setenv("HULK_COMPACT_REPORT","1",1);
+    unsetenv("HULK_FULL_DRAW_CAPTURE");
+    unsigned trace_count=0;
+    for(unsigned i=1;i<=1024;++i)assert(GraphicsTraceSample(trace_count)==(i<=16||i==1024));
+    setenv("HULK_FULL_DRAW_CAPTURE","1",1);assert(GraphicsTraceSample(trace_count));
+    unsetenv("HULK_FULL_DRAW_CAPTURE");setenv("HULK_RENDERER","gles",1);
+    assert(GraphicsTraceSample(trace_count));
+    unsetenv("HULK_RENDERER");unsetenv("HULK_COMPACT_REPORT");
     unsetenv("HULK_FRAME_LIMIT");
     assert(DiagnosticFrameLimit()==60);
     swap(59,true);swap(60,false);swap(0,false);

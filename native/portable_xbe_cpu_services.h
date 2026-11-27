@@ -17,3 +17,6 @@ void x86_priv(X86Context& ctx, std::uint32_t va, const char* what);
 std::uint32_t x86_trace(X86Context& ctx, std::uint32_t va, std::uint32_t ret);
 std::uint64_t x86_rdtsc();
 void x86_cpuid(X86Context& ctx);
+
+// Conditional hook used by the pinned Hulk recompilation configuration.
+bool HasNoActorUpdateOwner(X86Context& ctx, std::uint8_t* base);

@@ -23,6 +23,10 @@ void x86_resume(X86Context&, uint8_t*, const X86Resume&) {
 }
 void x86_cpuid(X86Context& ctx) { hulkpocket::GuestCpuId(ctx); }
 uint64_t x86_rdtsc() { return hulkpocket::GuestTimestamp(); }
-void HasNoActorUpdateOwner(X86Context&, uint8_t*) {
-    stop("Hulk actor owner hook not implemented", 0);
+// MIT Hulk Windows reference, pinned 6603e8a4021a06331f63310ce47b42315d9dbfc6,
+// src/game/hooks.cpp; USA config hook 0x3B995 -> 0x3BA1D.
+// This is a recompiler conditional hook, not a guest function return.
+// The generated branch skips optional owner access only when EAX is null.
+bool HasNoActorUpdateOwner(X86Context& ctx, uint8_t*) {
+    return ctx.eax == 0;
 }

@@ -10,9 +10,10 @@ class XbeD3dDefaultTrace {
     gpu::State state_{};
     unsigned calls_=0;
     const char* phase_="DEFAULT";
+    bool log_enabled_=true;
     void Log(const char* kind,uint32_t a,uint32_t b,uint32_t value){
         if(calls_++>=2048)throw std::runtime_error("D3D default setter budget exceeded");
-        std::fprintf(stderr,"D3D %s %s a=%08X b=%08X value=%08X\n",phase_,kind,a,b,value);
+        if(log_enabled_)std::fprintf(stderr,"D3D %s %s a=%08X b=%08X value=%08X\n",phase_,kind,a,b,value);
     }
     void Mirror(uint32_t base,uint32_t index,uint32_t value){
         uint64_t a=uint64_t(base)+4ull*index;
@@ -22,7 +23,7 @@ class XbeD3dDefaultTrace {
     }
 public:
     explicit XbeD3dDefaultTrace(XboxGuestAddressSpace& mem):mem_(mem){}
-    XbeD3dDefaultTrace(XboxGuestAddressSpace& mem,const gpu::State& initial):mem_(mem),state_(initial),phase_("LIVE"){}
+    XbeD3dDefaultTrace(XboxGuestAddressSpace& mem,const gpu::State& initial,bool log_enabled=true):mem_(mem),state_(initial),phase_("LIVE"),log_enabled_(log_enabled){}
     void Simple(uint32_t method,uint32_t value){
         method&=0x1ffc;Log("simple",method,0,value);state_.simple[method>>2]=value;
     }
