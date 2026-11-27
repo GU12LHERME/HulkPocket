@@ -11,10 +11,23 @@ on:
 jobs:
   shader-and-lifetime:
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: /tmp/hulk-ci-ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 500M
     steps:
       - uses: actions/checkout@v4
       - name: Install Vulkan headers and validator
-        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers spirv-tools ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers spirv-tools ninja-build ccache
+      - name: Restore compiler object cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/hulk-ci-ccache
+          key: hulk-vulkan-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            hulk-vulkan-ccache-v1-${{ runner.os }}-${{ runner.arch }}-
+      - name: Reset compiler cache statistics
+        run: ccache --zero-stats
       - name: Fetch pinned Xbox runtime ABI header
         run: |
           mkdir -p /tmp/hulk-sdk/cpu
@@ -22,7 +35,7 @@ jobs:
           test "$(git hash-object /tmp/hulk-sdk/cpu/x86_context.h)" = a02e10b8e2069920529d79d1f4e2413c73cb5f10
       - name: Build upstream reference and Hulk shader compiler
         run: |
-          cmake -S native/vulkan_experiment -B /tmp/hulk-vk -G Ninja -DCMAKE_BUILD_TYPE=Release -DHULK_SDK_DIR=/tmp/hulk-sdk
+          cmake -S native/vulkan_experiment -B /tmp/hulk-vk -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DHULK_SDK_DIR=/tmp/hulk-sdk
           cmake --build /tmp/hulk-vk --parallel 2
       - name: Run reference tests, shader compiler and real offscreen Vulkan draws
         run: |
@@ -43,6 +56,7 @@ jobs:
           mkdir -p /tmp/hulk-vk/android-probe/spv
           cmake -S native/vulkan_experiment -B /tmp/hulk-vk-android -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/28.2.13676358/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_static \
             -DHULK_SDK_DIR=/tmp/hulk-sdk -DBUILD_SHARED_LIBS=OFF -DFETCHCONTENT_SOURCE_DIR_GLSLANG=/tmp/hulk-vk/_deps/glslang-src
@@ -63,3 +77,7 @@ jobs:
           name: hulk-vulkan-shader-probe
           path: /tmp/hulk-vk/spv
           if-no-files-found: ignore
+
+      - name: Show compiler cache statistics
+        if: always()
+        run: ccache --show-stats || true
