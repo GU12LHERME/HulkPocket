@@ -334,8 +334,12 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,true);
         if(f.readback_copies!=copies||f.draw_submissions!=draws+2)
             throw std::runtime_error("Draw or clear forced eager readback");
+        auto readback_submits=f.queue_submissions,readback_batches=f.draw_batches;
+        if(f.pending_draws!=2)throw std::runtime_error("Missing pending draws before readback");
         Expect("deferred readback newest color",f.Pixel(32,32),{128,0,127,191});
         if(f.readback_copies!=copies+1)throw std::runtime_error("Missing deferred color transfer");
+        if(f.queue_submissions!=readback_submits+1||f.draw_batches!=readback_batches+1||f.pending_draws)
+            throw std::runtime_error("Readback failed to coalesce with pending draws");
         Expect("cached readback same frame",f.Pixel(0,0),{0,0,255,255});
         f.ClearFrame(3,0,1,0);
         Expect("depth clear retains CPU color",f.Pixel(32,32),{128,0,127,191});

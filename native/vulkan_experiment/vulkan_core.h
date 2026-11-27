@@ -534,10 +534,21 @@ struct VulkanCore{
     // at explicit consumers (present, resource sync, capture or pixel probe).
     const uint8_t* ColorPixels(){
         if(!frame_valid)throw std::logic_error("Readback of uninitialized Vulkan frame");
-        FlushBatch();
         if(!readback_valid){
-            Begin();ReadbackCommands();Submit();readback_valid=true;++readback_copies;
-        }else ++readback_hits;
+            // Draw records end outside the render pass, with attachment
+            // visibility established. Append the transfer to the same
+            // command buffer instead of submitting and waiting twice.
+            if(pending_draws){
+                ReadbackCommands();
+                FlushBatch();
+            }else{
+                Begin();ReadbackCommands();Submit();
+            }
+            readback_valid=true;++readback_copies;
+        }else{
+            // Pending depth/stencil-only work still needs to complete.
+            FlushBatch();++readback_hits;
+        }
         return static_cast<const uint8_t*>(readback.data);
     }
     std::array<uint8_t,4> Pixel(uint32_t x,uint32_t y){

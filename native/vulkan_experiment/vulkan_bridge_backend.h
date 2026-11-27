@@ -198,12 +198,17 @@ public:
         if(from_target||to_target)Writeback();
         const auto* source=gpu::CheckedGuestRange(a.data,uint64_t(a.pitch)*a.height);
         auto* dest=gpu::CheckedGuestRange(b.data,uint64_t(b.pitch)*b.height);
-        // Snapshot before any write: self/overlapping copies cannot corrupt
-        // later source rows. Keep destination pitch padding untouched.
-        std::vector<uint8_t> snapshot(source,source+size_t(a.pitch)*a.height);
+        // Snapshot before any write only when the complete backing spans
+        // overlap. Otherwise the checked source remains unchanged for every
+        // rectangle. Keep destination pitch padding untouched in both cases.
+        std::vector<uint8_t> snapshot;
+        if(overlap(a.data,uint64_t(a.pitch)*a.height,b.data,uint64_t(b.pitch)*b.height)){
+            snapshot.assign(source,source+size_t(a.pitch)*a.height);
+            source=snapshot.data();
+        }
         for(auto r:regions)for(unsigned y=0;y<r.h;++y)
             std::memcpy(dest+size_t(r.dy+y)*b.pitch+size_t(r.dx)*4,
-                        snapshot.data()+size_t(r.y+y)*a.pitch+size_t(r.x)*4,size_t(r.w)*4);
+                        source+size_t(r.y+y)*a.pitch+size_t(r.x)*4,size_t(r.w)*4);
         if(to_target)core_.ReplaceColor(dest,b.pitch);
     }
     std::array<uint8_t,4> ReadPixel(uint32_t x,uint32_t y){if(!core_.frame_valid||x>=core_.W||y>=core_.H)throw std::out_of_range("Invalid Vulkan pixel read");return core_.Pixel(x,y);}
