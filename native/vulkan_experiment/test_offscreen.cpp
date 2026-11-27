@@ -539,7 +539,8 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false);f.FlushBatch();
         f.ClearFrame(0xf0,0xff102030,1,0);f.FlushBatch();
         f.Draw(argv[1],false,false,true,false,nullptr,false,nullptr,false,true);
-        Expect("interleaved draw clear reference",f.Pixel(32,32),interleaved);
+        Expect("interleaved draw clear reference",f.Pixel(32,32),
+            {interleaved[0],interleaved[1],interleaved[2],interleaved[3]});
         submits=f.queue_submissions;
         for(unsigned i=0;i<VulkanCore::BatchLimit;++i)f.ClearFrame(0xf0,0xff000000u|i,1,0);
         if(f.HasPendingCommands()||f.queue_submissions!=submits+1)
