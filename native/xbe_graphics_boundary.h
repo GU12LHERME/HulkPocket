@@ -79,6 +79,15 @@ constexpr unsigned kDiagnosticFrameLimit=60;
 constexpr unsigned kDiagnosticMaxFrames=10800;
 constexpr unsigned kDiagnosticMaxSeconds=600;
 constexpr unsigned kDiagnosticDrawsPerFrame=8;
+// Explicit Vulkan preview limits, not changes to the legacy diagnostics.
+// A busy frame may contain thousands of draws and many state changes.
+constexpr unsigned kVulkanPreviewDrawsPerFrame=8192;
+constexpr unsigned kVulkanPreviewMaxDrawsPerFrame=16384;
+constexpr unsigned kVulkanPreviewSettersPerFrame=65536;
+constexpr unsigned kVulkanPreviewWaitsPerFrame=4096;
+constexpr bool PreviewBudgetReached(uint64_t total,uint64_t at_swap,unsigned limit){
+    return total<at_swap||total-at_swap>=limit;
+}
 // Explicitly bounded longer diagnostic sessions. Reject malformed values
 // by falling back to the previous conservative defaults.
 inline unsigned DiagnosticBudget(const char* name,unsigned fallback,unsigned maximum){

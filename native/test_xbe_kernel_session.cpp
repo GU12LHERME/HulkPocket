@@ -4,6 +4,14 @@
 #include <atomic>
 #include <cstring>
 using namespace hulkpocket;
+static_assert(!PreviewBudgetReached(0,0,kVulkanPreviewDrawsPerFrame));
+static_assert(!PreviewBudgetReached(8191,0,kVulkanPreviewDrawsPerFrame));
+static_assert(PreviewBudgetReached(8192,0,kVulkanPreviewDrawsPerFrame));
+static_assert(!PreviewBudgetReached(8192,8192,kVulkanPreviewDrawsPerFrame));
+static_assert(!PreviewBudgetReached(1000000,1000000,kVulkanPreviewSettersPerFrame));
+static_assert(PreviewBudgetReached(1000000+65536,1000000,kVulkanPreviewSettersPerFrame));
+static_assert(PreviewBudgetReached(0,1,kVulkanPreviewWaitsPerFrame));
+static_assert(!PreviewBudgetReached(50000,50000,kVulkanPreviewWaitsPerFrame));
 namespace {
 XboxGuestAddressSpace* memory;
 std::atomic<unsigned> ran{0};

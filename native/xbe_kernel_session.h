@@ -123,7 +123,9 @@ private:
         XbeD3d8Bridge bridge;
         uint32_t owner;
         unsigned setter_calls=0,diagnostic_draw_returns=0,diagnostic_gpu_waits=0,diagnostic_vblanks=0;
+        unsigned setters_at_swap=0,waits_at_swap=0,vblanks_at_swap=0;
         uint32_t diagnostic_vertices=0;
+        const bool expanded_preview=VulkanPreviewSelected()&&preview_host.enabled.load();
         unsigned diagnostic_swap_returns=0,draws_at_swap=0;
         std::unique_ptr<gpu::State> diagnostic_line_profile,diagnostic_texture_profile;
         unsigned diagnostic_texture_returns=0,diagnostic_lit_returns=0;
@@ -140,7 +142,22 @@ private:
             }
         }
         unsigned identical_frames=0;
-        const unsigned diagnostic_draw_limit=DiagnosticBudget("HULK_DRAW_LIMIT",kDiagnosticDrawsPerFrame,512);
+        const unsigned diagnostic_draw_limit=expanded_preview
+            ?DiagnosticBudget("HULK_DRAW_LIMIT",kVulkanPreviewDrawsPerFrame,kVulkanPreviewMaxDrawsPerFrame)
+            :DiagnosticBudget("HULK_DRAW_LIMIT",kDiagnosticDrawsPerFrame,512);
+        bool TraceGraphics()const{
+            return !expanded_preview||!compact_capture||detailed_draws||
+                diagnostic_swap_returns<2||DiagnosticTracePoll(diagnostic_draw_returns);
+        }
+        bool SetterLimitReached()const{
+            return expanded_preview?PreviewBudgetReached(setter_calls,setters_at_swap,kVulkanPreviewSettersPerFrame)
+                :setter_calls>=DiagnosticSetterLimit(frame_limit);
+        }
+        bool WaitLimitReached(bool vblank)const{
+            auto total=vblank?diagnostic_vblanks:diagnostic_gpu_waits;
+            auto base=vblank?vblanks_at_swap:waits_at_swap;
+            return expanded_preview?PreviewBudgetReached(total,base,kVulkanPreviewWaitsPerFrame):total>=4*frame_limit;
+        }
         const unsigned frame_limit=DiagnosticFrameLimit();
         const bool detailed_draws=std::getenv("HULK_FULL_DRAW_CAPTURE")&&
             std::strcmp(std::getenv("HULK_FULL_DRAW_CAPTURE"),"1")==0;
@@ -178,9 +195,20 @@ private:
     void DrainLivePush(LiveD3dDevice& live){
         auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
         if(end==begin)return;
-        for(auto m:DecodeNv2aMethods(mem_,begin,end))
-            std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
-        live.bridge.ApplyPush(begin,end,VulkanPreviewSelected());
+        const bool trace=live.TraceGraphics();
+        auto dump=[&]{
+            for(auto m:DecodeNv2aMethods(mem_,begin,end))
+                std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
+        };
+        if(trace)dump();
+        try{live.bridge.ApplyPush(begin,end,VulkanPreviewSelected(),!trace);}
+        catch(...){
+            if(!trace){
+                std::fprintf(stderr,"D3D LIVE PUSH FAILURE begin=%08X end=%08X\n",begin,end);
+                try{dump();}catch(...){/* keep original failure */}
+            }
+            throw;
+        }
         live.buffers.RewindScratch();
     }
     void ReleaseD3dOwner(uint32_t thread){
@@ -657,11 +685,14 @@ private:
                 if(!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
                     throw std::runtime_error("D3D state setter without owned live device");
                 auto& live=*live_d3d_;
-                if(live.setter_calls++>=DiagnosticSetterLimit(live.frame_limit))
-                    throw std::runtime_error("D3D live setter diagnostic budget exceeded");
-                std::fprintf(stderr,"D3D LIVE SETTER caller=%08X id=%08X ECX=%08X EDX=%08X stack_args=%u\n",
-                    mem_.Read32(cpu.esp),ordinal,cpu.ecx,cpu.edx,n);
-                for(unsigned i=0;i<n;++i)std::fprintf(stderr,"D3D LIVE ARG %u=%08X\n",i,Arg(cpu,i));
+                if(live.SetterLimitReached())
+                    throw std::runtime_error("D3D live setter budget exceeded");
+                ++live.setter_calls;
+                if(live.TraceGraphics()){
+                    std::fprintf(stderr,"D3D LIVE SETTER caller=%08X id=%08X ECX=%08X EDX=%08X stack_args=%u\n",
+                        mem_.Read32(cpu.esp),ordinal,cpu.ecx,cpu.edx,n);
+                    for(unsigned i=0;i<n;++i)std::fprintf(stderr,"D3D LIVE ARG %u=%08X\n",i,Arg(cpu,i));
+                }
                 // Preserve ordering with direct guest writes. Only supported
                 // state-only packets may be consumed; unknown ones stop.
                 DrainLivePush(live);
@@ -1103,7 +1134,7 @@ private:
                 auto& live=*live_d3d_;
                 live.buffers.VerifyInitialTargets();
                 auto dev=live.buffers.DeviceAddress();
-                std::fprintf(stderr,"D3D FIRST DRAW caller=%08X prim=%u arg1=%08X arg2=%08X streams=%08X rs=%08X tss=%08X\n",
+                if(live.TraceGraphics())std::fprintf(stderr,"D3D FIRST DRAW caller=%08X prim=%u arg1=%08X arg2=%08X streams=%08X rs=%08X tss=%08X\n",
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),cpu.eax,cpu.ecx,cpu.edx);
                 // Capture actual shader object, viewport, texture bindings and
                 // streams before draining the scratch buffer; a pending packet
@@ -1138,7 +1169,7 @@ private:
                 bool indexed=ordinal==(kGraphicsDrawIndexed|0x1000u);
                 auto vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
                     indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0);
-                std::fprintf(stderr,"D3D ORIGINAL GEOMETRY ASSEMBLED: fvf=%08X vertices=%u (not rendered)\n",fvf,vertices);
+                if(live.TraceGraphics())std::fprintf(stderr,"D3D ORIGINAL GEOMETRY ASSEMBLED: fvf=%08X vertices=%u (not rendered)\n",fvf,vertices);
                 auto synced=live.bridge.Snapshot();
                 if(full_capture)for(auto slot:{2,3,256}){
                     std::fprintf(stderr,"D3D DRAW MATRIX %u",slot);
@@ -1175,7 +1206,17 @@ private:
                     // No hardcoded callsite or one-texture profile for
                     // nonzero-view Vulkan draws. The bridge validates the
                     // captured declaration, primitive, states and resources.
-                    live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices,true);
+                    try{live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices,true);}
+                    catch(...){
+                        std::fprintf(stderr,"D3D VULKAN DRAW FAILURE frame=%u draw=%u caller=%08X prim=%u start=%u count=%u indices=%08X fvf=%08X ps=%08X\n",
+                            live.diagnostic_swap_returns+1,frame_draws,caller,Arg(cpu,0),start,count,indices,fvf,synced.ps?synced.ps->handle:0);
+                        for(unsigned st=0;st<4;++st){
+                            std::fprintf(stderr,"D3D FAILURE TEXTURE stage=%u header=%08X palette=%08X\n",st,synced.textures[st],synced.palettes[st]);
+                            for(unsigned i=0;i<gpu::kTssCount;++i)std::fprintf(stderr,"D3D FAILURE TSS %u %u=%08X\n",st,i,synced.tss[st][i]);
+                        }
+                        for(unsigned i=gpu::kRsDeferredFirst;i<gpu::kRsMax;++i)std::fprintf(stderr,"D3D FAILURE RS %u=%08X\n",i,synced.rs[i]);
+                        throw;
+                    }
                     ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
                     if(synced.vs&&synced.vs->program.empty())++live.diagnostic_lit_returns;
                     if(!synced.ps)++live.diagnostic_texture_returns;
@@ -1307,7 +1348,7 @@ private:
                     throw std::runtime_error("D3D vertical wait without owned live device");
                 auto& live=*live_d3d_;
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_vblanks>=4*live.frame_limit)
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.WaitLimitReached(true))
                     throw std::runtime_error("D3D vertical wait diagnostic continuation not enabled");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1341,7 +1382,7 @@ private:
                 std::fprintf(stderr,"D3D LIVE WAIT caller=%08X target=%08X current=%08X flags=%08X callback=%08X\n",
                     mem_.Read32(cpu.esp),target,current,flags,callback);
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.diagnostic_gpu_waits>=4*live.frame_limit)
+                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.WaitLimitReached(false))
                     throw std::runtime_error("D3D initial wait diagnostic continuation not enabled");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1427,6 +1468,9 @@ private:
                 live.bridge.BindInitialTargets(back,live.buffers.Depth());
                 live.backend.BeginRotatedFrame(live.bridge.Snapshot().rt);
                 live.draws_at_swap=live.diagnostic_draw_returns;
+                live.setters_at_swap=live.setter_calls;
+                live.waits_at_swap=live.diagnostic_gpu_waits;
+                live.vblanks_at_swap=live.diagnostic_vblanks;
                 ++live.diagnostic_swap_returns;
                 std::fprintf(stderr,"D3D ORIGINAL SWAP RETURN: count=%u front=%08X back=%08X (next frame requires full clear)\n",n,mem_.Read32(front+4),mem_.Read32(back+4));
                 input_frame_=n;

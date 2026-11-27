@@ -59,6 +59,7 @@ public:
                             input_events.push_back(line);if(input_events.size()>256)input_events.pop_front();
                         }
                         if(line.starts_with("HULK RENDERER ")||line.starts_with("Guest stopped:")||
+                           line.starts_with("D3D VULKAN DRAW FAILURE")||line.starts_with("D3D LIVE PUSH FAILURE")||
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||
                            (line.starts_with("D3D LIGHT ")&&(!line.starts_with("D3D LIGHT OBSERVE")||line.ends_with("accepted=0")))||
                            line.starts_with("HULK CRT MATH ")||
@@ -115,7 +116,7 @@ extern "C" JNIEXPORT jint JNICALL Java_com_hulkpocket_diagnostic_GameActivity_na
         setenv("HULK_FVF_SHADER",f.c_str(),1);
         setenv("HULK_ISOLATE_INVALID_XYZ","1",1);
         setenv("HULK_CONTINUE_CREATE","1",1);setenv("HULK_CONTINUE_DRAW","1",1);setenv("HULK_CONTINUE_SWAP","1",1);
-        setenv("HULK_FRAME_LIMIT","10800",1);setenv("HULK_WATCHDOG_SECONDS","600",1);setenv("HULK_DRAW_LIMIT","128",1);
+        setenv("HULK_FRAME_LIMIT","10800",1);setenv("HULK_WATCHDOG_SECONDS","600",1);setenv("HULK_DRAW_LIMIT",vulkan?"8192":"128",1);
         setenv("HULK_COMPACT_AUDIO_TRACE","1",1);setenv("HULK_COMPACT_REPORT","1",1);setenv("HULK_AUDIO_OUTPUT","1",1);
         unsetenv("HULK_INPUT_SCRIPT");unsetenv("HULK_AUDIO_PCM");unsetenv("HULK_REPLAY_BITMAP");
         hulkpocket::preview_host.enabled.store(true);

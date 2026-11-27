@@ -738,7 +738,7 @@ public:
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         backend_.Draw(replay,prim,start,count,ip);if(!defer_draw_flush_)backend_.Flush();
     }
-    void ApplyPush(uint32_t begin,uint32_t end,bool capture_pixel=false){
+    void ApplyPush(uint32_t begin,uint32_t end,bool capture_pixel=false,bool compact=false){
         std::lock_guard guard(lock_);
         if(!initialized_)throw std::logic_error("D3D bridge not initialized");
         // Validate and decode newly complete raw texture bindings before
@@ -757,11 +757,17 @@ public:
             if((format&3)==1&&!(format&4)&&((format>>4)&15)==2&&
                gpu::Format((format>>8)&255).swizzled&&
                gpu::Format((format>>8)&255).host==gpu::Host::BGRA8&&((format>>8)&255)!=0xb){
-                auto probe=ProbeNv2aSwizzledTexture(offset,format);
-                std::fprintf(stderr,"D3D RAW TEXTURE DECODE PASS stage=%u physical=%08X format=%08X %ux%u mips=%u hash=%016llX (not sampled)\n",
-                    stage,offset,format,probe.desc.width,probe.desc.height,probe.desc.levels,
-                    static_cast<unsigned long long>(probe.hash));
-            }else{
+                if(compact&&capture_pixel){
+                    // Keep address/layout validation; actual decoding happens
+                    // in the Vulkan texture cache when the resource is sampled.
+                    (void)DescribeNv2aSwizzledTexture(offset,format);
+                }else{
+                    auto probe=ProbeNv2aSwizzledTexture(offset,format);
+                    std::fprintf(stderr,"D3D RAW TEXTURE DECODE PASS stage=%u physical=%08X format=%08X %ux%u mips=%u hash=%016llX (not sampled)\n",
+                        stage,offset,format,probe.desc.width,probe.desc.height,probe.desc.levels,
+                        static_cast<unsigned long long>(probe.hash));
+                }
+            }else if(!compact||!capture_pixel){
                 std::fprintf(stderr,"D3D RAW TEXTURE PENDING stage=%u physical=%08X format=%08X\n",stage,offset,format);
             }
             cursor.TextureInspected(stage);
