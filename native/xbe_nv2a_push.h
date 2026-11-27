@@ -67,6 +67,10 @@ struct Nv2aConstantCursor {
     std::bitset<0x800> combiner_seen{};
     std::array<uint8_t,4> bump_seen{};
     std::bitset<4> palette_seen{};
+    // Keep raw texgen and v11 current attribute across setter snapshots.
+    std::array<std::array<uint32_t,4>,4> texgen{};
+    bool current_v11_seen=false;
+    uint32_t current_v11=0;
     // Surface state writes may be split between scratch drains. Validate
     // at the next actual target-use boundary, after guest mirrors update.
     uint8_t surface_pending=0;
@@ -224,6 +228,21 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
             unsigned stage=(m-0x1b00)/0x40,field=((m&0x3f)-0x28)/4;
             simple[m/4]=v;next.bump_seen[stage]|=uint8_t(1u<<field);
             next.pending_raw_configuration=true;continue;
+        }
+        // NV097_SET_VERTEX_DATA4UB + 11*4: current v11, not a draw.
+        // Missing programmable inputs that consume it are guarded at replay.
+        if(capture_combiner&&m==0x196c){
+            next.current_v11_seen=true;next.current_v11=v;
+            simple[m/4]=v;next.pending_raw_configuration=true;continue;
+        }
+        // NV097_SET_TEXGEN_S/T/R/Q. Admit the observed reflection-map
+        // state and disables, not unimplemented linear/sphere modes.
+        if(capture_combiner&&m>=0x03c0&&m<=0x03fc&&m%4==0){
+            if(v!=0&&v!=0x8512)throw std::logic_error("Unsupported raw NV2A texgen mode");
+            auto stage=(m-0x03c0)/16,coord=((m-0x03c0)%16)/4;
+            next.texgen[stage][coord]=v;simple[m/4]=v;
+            if(v)next.pending_raw_configuration=true;
+            continue;
         }
         if(IsPendingRawConfiguration(m)){
             simple[m>>2]=v;next.pending_raw_configuration=true;continue;

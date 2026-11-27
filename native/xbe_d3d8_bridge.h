@@ -801,14 +801,38 @@ public:
                 replay.textures[st]=0;replay.palettes[st]=0;
             }
         }
+        if(program&&push_constants_.current_v11_seen&&state_.vs->inputs[11].stream<0){
+            // Reject only programs that reference the missing latched input.
+            // Operand mux 2 = vertex input; shared input selector is word1[12:9].
+            const auto& words=state_.vs->program;
+            for(size_t n=0;n+4<=words.size();n+=4)
+                if(((words[n+1]>>9)&15)==11&&
+                   (((words[n+2]>>26)&3)==2||((words[n+2]>>11)&3)==2||((words[n+3]>>28)&3)==2))
+                    throw std::logic_error("Current NV2A v11 attribute requires vertex input translation");
+        }
         if(!program){
             gpu::VertexShader fvf_layout;
             if(!state_.vs)gpu::FvfInputs(state_.vs_handle,fvf_layout);
             const auto& layout=state_.vs?*state_.vs:fvf_layout;
-            for(unsigned st=0;st<4;++st)if(replay.textures[st]){
-                const auto set=replay.tss[st][gpu::kTssTexCoordIndex];
+            for(unsigned st=0;st<4;++st){
+                const auto& raw=push_constants_.texgen[st];
+                const bool generated=std::any_of(raw.begin(),raw.end(),[](auto v){return v!=0;});
+                const auto mode=(state_.rs[gpu::kRsPsTextureModes]>>(5*st))&31;
+                if(!replay.textures[st]&&!(state_.ps&&generated&&(mode==4||mode==5)))continue;
+                auto& t=replay.tss[st];const auto set=t[gpu::kTssTexCoordIndex];
+                if(generated){
+                    // Shared FixedVertexHlsl already implements camera-space
+                    // reflection vectors. Require the full S/T/R profile,
+                    // position/normal inputs and no texture transform.
+                    if(!allow_fixed||rhw||raw[0]!=0x8512||raw[1]!=0x8512||
+                       raw[2]!=0x8512||raw[3]!=0||layout.inputs[2].stream<0||
+                       t[gpu::kTssTextureTransformFlags])
+                        throw std::logic_error("Unsupported active NV2A reflection coordinate profile");
+                    t[gpu::kTssTexCoordIndex]=(set&3u)|0x30000u;
+                    continue;
+                }
                 if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0||
-                   replay.tss[st][gpu::kTssTextureTransformFlags])
+                   t[gpu::kTssTextureTransformFlags])
                     throw std::logic_error("Captured fixed vertex path requires declared UV set without transform");
             }
         }

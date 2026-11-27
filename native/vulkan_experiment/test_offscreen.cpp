@@ -738,6 +738,9 @@ int main(int argc,char** argv){
                 // AdoptLiveSetters only transfers render/texture-stage setters.
                 // Bind the resource through the real D3D bridge entry point.
                 call("D3DDevice_SetTexture",{2,tex0});
+                // Exact new RP6 attribute and reflection words, in an inactive
+                // stage. They must not change the fixed cascade's pixels.
+                write_packet({{0x196c,0xff000000},{0x03e0,0x8512},{0x03e4,0x8512},{0x03e8,0x8512}});
                 const auto latent=bridge.Snapshot();
                 if(latent.textures[2]!=tex0||latent.tss[2][kTssTexCoordIndex]!=3)
                     throw std::runtime_error("Inactive stage fixture was not installed");
@@ -747,6 +750,12 @@ int main(int argc,char** argv){
                        {stage_zero[0],stage_zero[1],stage_zero[2],stage_zero[3]});
                 if(bridge.Snapshot().tss!=latent.tss||bridge.Snapshot().textures!=latent.textures)
                     throw std::runtime_error("Fixed replay mutated latent guest state");
+                // Active reflection on a pretransformed HUD is not supported.
+                write_packet({{0x03c0,0x8512},{0x03c4,0x8512},{0x03c8,0x8512}});
+                bool invalid_reflection=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);}catch(const std::logic_error&){invalid_reflection=true;}
+                if(!invalid_reflection)throw std::runtime_error("Pretransformed reflection silently accepted");
+                write_packet({{0x03c0,0},{0x03c4,0},{0x03c8,0},{0x03e0,0},{0x03e4,0},{0x03e8,0}});
                 call("D3DDevice_SetTexture",{2,two_stage.textures[2]});
                 // Real change of combiner, not a shader-specific replay.
                 fixed_state=two_stage;fixed_state.tss[1][kTssColorOp]=7;

@@ -81,6 +81,24 @@ int main(){
         ApplyNv2aState(pushed,cursor,{{0x194c,0xffffffff},{0x1950,0},{0x195c,0xffffffff},{0x1960,0}});
         assert(pushed.simple[0x194c>>2]==0xffffffff&&cursor.pending_raw_configuration);
         assert(pushed.simple[0x195c>>2]==0xffffffff);
+        // RP6 preview 7511f54: capture the exact failing scratch batch.
+        gpu::State reflection_state{};Nv2aConstantCursor reflection_cursor{};
+        const std::vector<Nv2aMethod> reflection_packet={
+            {0x1b00,0x0337d000},{0x1b04,0x07740629},
+            {0x1b40,0x0350d000},{0x1b44,0x06630c29},{0x1b4c,0},
+            {0x1b80,0x034b2000},{0x1b84,0x06630c29},{0x1b8c,0},
+            {0x196c,0xff000000},{0x03e0,0x8512},{0x03e4,0x8512},{0x03e8,0x8512}};
+        ApplyNv2aState(reflection_state,reflection_cursor,reflection_packet,true);
+        assert(reflection_cursor.current_v11_seen&&reflection_cursor.current_v11==0xff000000);
+        assert(reflection_cursor.texgen[2][0]==0x8512&&reflection_cursor.texgen[2][1]==0x8512&&
+               reflection_cursor.texgen[2][2]==0x8512&&reflection_cursor.texgen[2][3]==0);
+        assert(reflection_cursor.pending_raw_configuration);
+        bool bad_gen=false;
+        try{ApplyNv2aState(reflection_state,reflection_cursor,{{0x03e0,0},{0x03e4,0x2400}},true);}
+        catch(const std::logic_error&){bad_gen=true;}
+        assert(bad_gen&&reflection_cursor.texgen[2][0]==0x8512);
+        ApplyNv2aState(reflection_state,reflection_cursor,{{0x03e0,0},{0x03e4,0},{0x03e8,0}},true);
+        assert(reflection_cursor.texgen[2][0]==0&&reflection_cursor.texgen[2][1]==0&&reflection_cursor.texgen[2][2]==0);
         // Actual RP6 first texture packet, including disabled sampler.
         ApplyNv2aState(pushed,cursor,{{0x1b00,0x03ae0000},{0x1b04,0x08810629},{0x1b0c,0}});
         assert(cursor.texture_words[0]==3&&pushed.simple[0x1b00>>2]==0x03ae0000);
