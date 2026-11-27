@@ -772,6 +772,44 @@ int main(int argc,char** argv){
                 try{backend.ReadbackColor(bridge.Snapshot().rt);}catch(const std::logic_error&){rejected_alias=true;}
                 if(!rejected_alias)throw std::runtime_error("Partial color target alias accepted");
                 Expect("active target unchanged after rejected alias",backend.ReadPixel(32,32),{0,255,0,255});
+                // Separate UV sets in the original fixed vertex declaration.
+                // Both stage bindings are real guest resources, not fixtures.
+                call("D3DDevice_SetRenderTarget",{surface,depth_surface});
+                struct TwoUV{float x,y,z;uint32_t color;float u0,v0,u1,v1;};
+                const TwoUV mesh[]={{-.75f,-.75f,.5f,0xffffffff,.25f,.25f,.75f,.25f},
+                    {.75f,-.75f,.5f,0xffffffff,.25f,.25f,.75f,.25f},
+                    {0,.75f,.5f,0xffffffff,.25f,.25f,.75f,.25f}};
+                gpu::VertexShader multi_layout;gpu::FvfInputs(0x242,multi_layout);
+                for(unsigned k=0;k<16;++k){
+                    auto at=decl+0x14+16*k;auto in=multi_layout.inputs[k];
+                    for(unsigned j=0;j<4;++j)bridge_mem.Write32(at+4*j,0);
+                    if(in.stream>=0){
+                        bridge_mem.Write32(at,uint32_t(in.stream));bridge_mem.Write32(at+4,in.offset);bridge_mem.Write32(at+8,in.type);
+                    }
+                }
+                bridge_mem.Write(0x80114000,mesh,sizeof(mesh));
+                call("D3DDevice_SetStreamSource",{0,buffer,sizeof(TwoUV)});
+                uint32_t different_uv[4]={0xffff0000,0xff00ff00,0xff0000ff,0xffffff00};
+                bridge_mem.Write(0x80115100,different_uv,sizeof(different_uv));
+                auto multi_state=bridge.Snapshot();
+                multi_state.tss[1][kTssTexCoordIndex]=1;
+                multi_state.tss[1][kTssColorOp]=4;
+                bridge.AdoptLiveSetters(multi_state);
+                if(bridge.SyncFixedDiffuseShader(device,true)!=0x242||
+                   bridge.VerifyGuestGeometry(5,0,3,0)!=3)
+                    throw std::runtime_error("Multi UV declaration capture failed");
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("independent second UV set",backend.ReadPixel(32,32),{0,128,0,255});
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=0;
+                bridge.AdoptLiveSetters(multi_state);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("select first UV set",backend.ReadPixel(32,32),{255,0,0,255});
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=2;
+                bridge.AdoptLiveSetters(multi_state);
+                bool missing_uv=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);}catch(const std::logic_error&){missing_uv=true;}
+                if(!missing_uv)throw std::runtime_error("Undeclared UV set accepted");
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

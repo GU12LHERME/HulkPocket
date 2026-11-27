@@ -379,8 +379,9 @@ public:
             }
         }
         uint32_t fvf=0;
-        for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u}){
-            if(flags!=0x400)continue;
+        for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u,
+                                0x242u,0x244u,0x342u,0x344u,0x442u,0x444u}){
+            if(flags!=0x400||(!capture_pixel&&candidate>=0x200))continue;
             // A declaration can retain UVs after SetTexture(0,null).
             // Only a bound texture requires UV; keep the original stride.
             if(std::any_of(textures.begin(),textures.end(),[](auto t){return t!=0;})&&!(candidate&0x100u))continue;
@@ -505,7 +506,12 @@ public:
             throw std::invalid_argument("Invalid guest geometry request");
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         gpu::Assembled a;
-        const auto regs=state_.vs?0x205u:((state_.vs_handle&0x100u)?0x209u:9u);
+        uint32_t regs=0x205u;
+        if(!state_.vs){
+            gpu::VertexShader layout;gpu::FvfInputs(state_.vs_handle,layout);
+            regs=0;
+            for(unsigned r=0;r<16;++r)if(layout.inputs[r].stream>=0)regs|=1u<<r;
+        }
         const bool program=state_.vs&&!state_.vs->program.empty();
         if(!gpu::Assemble(state_,prim,start,count,ip,a)||(program?!(a.regs&1):a.regs!=regs))
             throw std::runtime_error("Guest diffuse geometry assembly failed");
@@ -731,12 +737,15 @@ public:
     void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0,bool allow_fixed=false){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         const bool program=state_.vs&&!state_.vs->program.empty();
-        const bool rhw=!state_.vs&&(state_.vs_handle==0x44||state_.vs_handle==0x144);
+        const auto fvf=state_.vs_handle;
+        const bool rhw=!state_.vs&&(fvf==0x44||fvf==0x144);
+        const bool multi_uv=allow_fixed&&!state_.vs&&
+            (fvf==0x242||fvf==0x244||fvf==0x342||fvf==0x344||fvf==0x442||fvf==0x444);
         const bool fixed=allow_fixed&&!state_.ps&&!program;
         const bool packed=fixed&&state_.vs;
         const bool lighting=state_.rs[gpu::kRsLighting]!=0;
         if(!initialized_||(!state_.ps&&!program&&!fixed)||
-           (!program&&!packed&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw)))||
+           (!program&&!packed&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw&&!multi_uv)))||
            count>262144||!CapturedPrimitive(prim,count)||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
            (lighting&&(!packed||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
@@ -751,9 +760,15 @@ public:
         if(fixed)ValidateFixedStages(state_);
         auto replay=state_;replay.rs.fill(0);replay.simple.fill(0);
         if(!program){
-            for(unsigned st=0;st<4;++st)if(state_.textures[st]&&
-                (state_.tss[st][gpu::kTssTexCoordIndex]||state_.tss[st][gpu::kTssTextureTransformFlags]))
-                throw std::logic_error("Captured fixed vertex path requires UV set zero without transform");
+            gpu::VertexShader fvf_layout;
+            if(!state_.vs)gpu::FvfInputs(state_.vs_handle,fvf_layout);
+            const auto& layout=state_.vs?*state_.vs:fvf_layout;
+            for(unsigned st=0;st<4;++st)if(state_.textures[st]){
+                const auto set=state_.tss[st][gpu::kTssTexCoordIndex];
+                if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0||
+                   state_.tss[st][gpu::kTssTextureTransformFlags])
+                    throw std::logic_error("Captured fixed vertex path requires declared UV set without transform");
+            }
         }
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
                     gpu::kRsStencilEnable,gpu::kRsStencilFail,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode,
