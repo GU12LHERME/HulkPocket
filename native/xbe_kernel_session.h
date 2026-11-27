@@ -1169,14 +1169,20 @@ private:
                 const auto frame_draws=live.diagnostic_draw_returns-live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp),start=indexed?0u:Arg(cpu,1),count=indexed?Arg(cpu,1):Arg(cpu,2);
                 const auto indices=indexed?Arg(cpu,2):0u;
-                if((synced.ps||(synced.vs&&!synced.vs->program.empty()))&&VulkanPreviewSelected()&&opted_in){
+                if(VulkanPreviewSelected()&&opted_in&&!zero_viewport){
                     if(frame_draws>=live.diagnostic_draw_limit)
-                        throw std::runtime_error("Captured pixel draw budget reached");
-                    live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices);
+                        throw std::runtime_error("Vulkan live draw budget reached");
+                    // No hardcoded callsite or one-texture profile for
+                    // nonzero-view Vulkan draws. The bridge validates the
+                    // captured declaration, primitive, states and resources.
+                    live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices,true);
                     ++live.diagnostic_draw_returns;live.diagnostic_vertices+=vertices;
-                    std::fprintf(stderr,"D3D CAPTURED SHADER DRAW RETURN: vs=%08X instructions=%zu ps=%08X combiners=%u vertices=%u\n",
-                        synced.vs_handle,synced.vs?synced.vs->program.size()/4:0,
-                        synced.ps?synced.ps->handle:0,synced.ps?synced.ps->def[53]&255:0,vertices);
+                    if(synced.vs&&synced.vs->program.empty())++live.diagnostic_lit_returns;
+                    if(!synced.ps)++live.diagnostic_texture_returns;
+                    if(full_capture||frame_draws==0)
+                        std::fprintf(stderr,"D3D VULKAN LIVE DRAW RETURN: vs=%08X instructions=%zu ps=%08X combiners=%u vertices=%u\n",
+                            synced.vs_handle,synced.vs?synced.vs->program.size()/4:0,
+                            synced.ps?synced.ps->handle:0,synced.ps?synced.ps->def[53]&255:0,vertices);
                     Ret(cpu,3,0);return;
                 }
                 if(((!indexed&&caller==0x0031c10f)||(indexed&&caller==0x00327371&&indices))&&(fvf==0x142||synced.vs)&&

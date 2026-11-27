@@ -317,12 +317,12 @@ public:
             throw std::logic_error("Unsupported guest shader program or flags");
         if(capture_pixel&&!programmable&&push_constants_.execution_mode_seen&&push_constants_.execution_mode==2)
             throw std::logic_error("NV2A program selected without supported vertex declaration");
-        // Additional stages are admitted only with a captured programmable
-        // pixel shader. Keep the existing GLES/fixed replay profile unchanged.
+        // Vulkan can translate multiple checked fixed or programmable
+        // stages. Keep the GLES capture restrictions unchanged.
         std::array<uint32_t,4> textures{};
         for(unsigned st=0;st<4;++st){
             textures[st]=Read(uint64_t(device)+0xf88+4*st);
-            if(Read(uint64_t(device)+0xf98+4*st)||(st&&textures[st]&&!(capture_pixel&&pixel)))
+            if(Read(uint64_t(device)+0xf98+4*st)||(st&&textures[st]&&!capture_pixel))
                 throw std::logic_error("Unsupported original texture stage or palette");
             if(!textures[st])continue;
             gpu::TextureDesc d{};
@@ -369,7 +369,7 @@ public:
         // Preserve the exact declaration for the upstream geometry assembler.
         // The GLES lighting stage is still deliberately guarded.
         std::shared_ptr<gpu::VertexShader> packed;
-        if(!programmable&&!fvf&&flags==0&&textures[0]&&state_.streams[0].vb&&state_.streams[0].stride==24){
+        if(!programmable&&!fvf&&flags==0&&(textures[0]||capture_pixel)&&state_.streams[0].vb&&state_.streams[0].stride==24){
             auto layout=std::make_shared<gpu::VertexShader>();
             layout->inputs.fill({});
             layout->inputs[0]={0,0,0x32};
@@ -656,21 +656,63 @@ public:
         default:return false; // point-size output not yet translated
         }
     }
-    // Validated captured shader path; unsupported states remain guarded.
-    void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
+    // Validate fixed-function combiner operations actually implemented by
+    // PixelHlsl, avoiding its fallback for unknown operations/arguments.
+    static void ValidateFixedStages(const gpu::State& s){
+        using namespace gpu;
+        bool ended=false;
+        auto check_op=[](uint32_t op,uint32_t a0,uint32_t a1,uint32_t a2,bool bound,bool alpha){
+            if(op<=1)return;
+            // Shared HLSL handles these operations without silent fallbacks.
+            if(op>24||op==17||(alpha&&op>=18&&op<=22))
+                throw std::logic_error("Unsupported fixed texture operation");
+            auto arg=[&](uint32_t v){
+                if((v&~0x3fu)||(v&15)>5)throw std::logic_error("Invalid fixed texture argument");
+                if((v&15)==2&&!bound)throw std::logic_error("Fixed texture argument lacks resource");
+            };
+            if(op!=3)arg(a1);
+            if(op!=2)arg(a2);
+            if(op==23||op==24)arg(a0);
+            if((op==14||op==16)&&!bound)throw std::logic_error("Fixed texture operation lacks resource");
+        };
+        for(unsigned i=0;i<4;++i){
+            const auto& t=s.tss[i];const bool bound=s.textures[i]!=0;
+            const auto color=t[kTssColorOp],alpha=t[kTssAlphaOp];
+            if(color<=1){ended=true;continue;}
+            if(ended)throw std::logic_error("Fixed texture stage after disabled stage");
+            if(t[kTssResultArg]!=1&&t[kTssResultArg]!=5)
+                throw std::logic_error("Unsupported fixed texture result");
+            check_op(color,t[kTssColorArg0],t[kTssColorArg1],t[kTssColorArg2],bound,false);
+            check_op(alpha,t[kTssAlphaArg0],t[kTssAlphaArg1],t[kTssAlphaArg2],bound,true);
+            if(t[kTssColorKeyOp]||t[kTssColorSign]||
+               (t[kTssAlphaKill]&&t[kTssAlphaKill]!=4)||
+               t[kTssMaxAnisotropy]>1)
+                throw std::logic_error("Unsupported fixed texture sampling state");
+        }
+    }
+    // Validated captured shader path; fixed-function extension is explicitly
+    // selected by the live Vulkan hook, never the legacy GLES caller.
+    void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0,bool allow_fixed=false){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         const bool program=state_.vs&&!state_.vs->program.empty();
         const bool rhw=!state_.vs&&(state_.vs_handle==0x44||state_.vs_handle==0x144);
-        if(!initialized_||(!state_.ps&&!program)||(!program&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw)))||
+        const bool fixed=allow_fixed&&!state_.ps&&!program;
+        const bool packed=fixed&&state_.vs;
+        const bool lighting=state_.rs[gpu::kRsLighting]!=0;
+        if(!initialized_||(!state_.ps&&!program&&!fixed)||
+           (!program&&!packed&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw)))||
            count>262144||!CapturedPrimitive(prim,count)||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
-           state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]>1||
+           (lighting&&(!packed||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
+           state_.rs[gpu::kRsFogEnable]>1||(fixed&&state_.rs[gpu::kRsRangeFogEnable])||
+           (lighting&&state_.rs[gpu::kRsFogEnable])||
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
             throw std::logic_error("Unsupported captured shader replay profile");
         gpu::TextureDesc desc{};
         if(!gpu::DescribeSurface(state_.rt,desc)||!state_.viewport.w||!state_.viewport.h||
            uint64_t(state_.viewport.x)+state_.viewport.w>desc.width||uint64_t(state_.viewport.y)+state_.viewport.h>desc.height)
             throw std::logic_error("Captured shader viewport outside target");
+        if(fixed)ValidateFixedStages(state_);
         auto replay=state_;replay.rs.fill(0);replay.simple.fill(0);
         if(!program){
             for(unsigned st=0;st<4;++st)if(state_.textures[st]&&
@@ -679,7 +721,12 @@ public:
         }
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
                     gpu::kRsStencilEnable,gpu::kRsStencilFail,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode,
-                    gpu::kRsFogEnable,gpu::kRsFogTableMode,gpu::kRsFogStart,gpu::kRsFogEnd,gpu::kRsFogDensity,gpu::kRsFogColor})
+                    gpu::kRsFogEnable,gpu::kRsFogTableMode,gpu::kRsFogStart,gpu::kRsFogEnd,gpu::kRsFogDensity,gpu::kRsFogColor,
+                    gpu::kRsTextureFactor})
+            replay.rs[r]=state_.rs[r];
+        if(fixed&&lighting)for(auto r:{gpu::kRsLighting,gpu::kRsLocalViewer,gpu::kRsColorVertex,
+            gpu::kRsNormalizeNormals,gpu::kRsDiffuseMaterialSource,gpu::kRsSpecularMaterialSource,
+            gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient})
             replay.rs[r]=state_.rs[r];
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
                     gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,

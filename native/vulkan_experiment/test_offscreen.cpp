@@ -663,6 +663,39 @@ int main(int argc,char** argv){
                 bridge.ReplayCapturedShaderDiagnostic(8,0,4);
                 Expect("captured screen-space HUD quad",backend.ReadPixel(32,32),{255,128,64,255});
                 Expect("captured HUD outside",backend.ReadPixel(2,2),{0,0,0,255});
+                // Same real device declaration and texture bindings, but no
+                // pixel program. Exercise the new Vulkan live fixed profile.
+                bridge_mem.Write32(device+0x784,0);
+                uint32_t fixed_second[4]={0xff204080,0xff204080,0xff204080,0xff204080};
+                bridge_mem.Write(0x80115100,fixed_second,sizeof(fixed_second));
+                auto fixed_state=bridge.Snapshot();
+                fixed_state.rs[kRsFogEnable]=0;fixed_state.rs[kRsRangeFogEnable]=0;
+                for(unsigned st=0;st<2;++st){
+                    auto& t=fixed_state.tss[st];t[kTssColorOp]=t[kTssAlphaOp]=4;
+                    t[kTssColorArg1]=t[kTssAlphaArg1]=st?1:0;
+                    t[kTssColorArg2]=t[kTssAlphaArg2]=2;t[kTssResultArg]=1;
+                    t[kTssColorSign]=t[kTssColorKeyOp]=t[kTssAlphaKill]=0;
+                }
+                for(unsigned st=2;st<4;++st)fixed_state.tss[st][kTssColorOp]=fixed_state.tss[st][kTssAlphaOp]=1;
+                bridge.AdoptLiveSetters(fixed_state);
+                if(bridge.SyncFixedDiffuseShader(device,true)!=0x144)throw std::runtime_error("Fixed multi-stage capture mismatch");
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                Expect("fixed two-stage live HUD",backend.ReadPixel(32,32),{32,32,32,255});
+                // Real change of combiner, not a shader-specific replay.
+                fixed_state=bridge.Snapshot();fixed_state.tss[1][kTssColorOp]=7;
+                bridge.AdoptLiveSetters(fixed_state);
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                Expect("fixed additive material stage",backend.ReadPixel(32,32),{255,192,192,255});
+                fixed_state=bridge.Snapshot();fixed_state.tss[1][kTssColorOp]=17;
+                bridge.AdoptLiveSetters(fixed_state);
+                bool unsupported_fixed=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);}catch(const std::logic_error&){unsupported_fixed=true;}
+                if(!unsupported_fixed)throw std::runtime_error("Unknown fixed operation silently accepted");
+                fixed_state.tss[1][kTssColorOp]=4;bridge.AdoptLiveSetters(fixed_state);
+                bool legacy_rejected=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(8,0,4);}catch(const std::logic_error&){legacy_rejected=true;}
+                if(!legacy_rejected)throw std::runtime_error("Fixed extension enabled without opt-in");
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
