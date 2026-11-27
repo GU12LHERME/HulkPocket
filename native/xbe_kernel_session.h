@@ -1489,11 +1489,14 @@ private:
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 const bool no_draw=live.diagnostic_draw_returns==live.draws_at_swap;
                 const auto caller=mem_.Read32(cpu.esp);
-                // RP6 f74de56: after 36 normal frames the original game
-                // requested another swap with zero intervening draws.
-                // Only continue the already verified two-buffer caller.
-                if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||Arg(cpu,0)!=0||
-                    (no_draw&&(!live.diagnostic_swap_returns||caller!=0x0031b1d4||live.buffers.BufferCount()!=2)))
+                // Vulkan uses the checked resource state rather than a
+                // single menu caller. A clear-only frame can be presented;
+                // the backend still rejects an uninitialized color image.
+                const bool vk=VulkanPreviewSelected();
+                if(!allow||std::strcmp(allow,"1")||Arg(cpu,0)!=0||
+                    (vk?live.buffers.BufferCount()!=2:
+                        (!live.diagnostic_draw_returns||
+                         (no_draw&&(!live.diagnostic_swap_returns||caller!=0x0031b1d4||live.buffers.BufferCount()!=2)))))
                     throw std::runtime_error("Unsupported diagnostic swap request");
                 if(!VulkanPreviewSelected())live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
@@ -1503,6 +1506,7 @@ private:
                 gpu::TextureDesc desc{};
                 if(!gpu::DescribeSurface(state.rt,desc)||state.rt.header!=live.buffers.BackBuffer(0))
                     throw std::runtime_error("Unsupported diagnostic swap target");
+                if(vk)live.buffers.VerifyTwoBufferSwap(live.diagnostic_swap_returns,desc.pitch*desc.height);
                 if(no_draw){
                     live.backend.RestoreRotatedColor(state.rt);
                     std::fprintf(stderr,"D3D SWAP WITHOUT DRAW PASS: caller=%08X backing=%08X (preserved color)\n",caller,desc.data);
@@ -1536,7 +1540,7 @@ private:
                     presented,live.frame_limit,static_cast<unsigned long long>(hash),live.identical_frames,live.diagnostic_draw_returns-live.draws_at_swap);
                 const char* swap_opt=std::getenv("HULK_CONTINUE_SWAP");
                 if(!swap_opt||std::strcmp(swap_opt,"1")||
-                    presented!=live.diagnostic_swap_returns+1||mem_.Read32(cpu.esp)!=0x0031b1d4||live.buffers.BufferCount()!=2)
+                    presented!=live.diagnostic_swap_returns+1||(!vk&&mem_.Read32(cpu.esp)!=0x0031b1d4)||live.buffers.BufferCount()!=2)
                     throw std::runtime_error("D3D original swap reached; guest continuation not enabled or outside verified swap profile");
                 if(presented>=live.frame_limit)
                     throw std::runtime_error("D3D diagnostic frame budget reached (offscreen; no gameplay claim)");
@@ -1549,6 +1553,7 @@ private:
                     !physical_.Contains(0x80000000u+old_front,uint64_t(desc.pitch)*desc.height)||
                     !physical_.Contains(0x80000000u+old_back,uint64_t(desc.pitch)*desc.height))
                     throw std::runtime_error("Unsupported original swap backing state");
+                if(vk)live.buffers.VerifyTwoBufferSwap(live.diagnostic_swap_returns,desc.pitch*desc.height);
                 const auto n=live.buffers.Rotate();
                 if(n!=presented||mem_.Read32(front+4)!=old_back||mem_.Read32(back+4)!=old_front)
                     throw std::runtime_error("D3D swap rotation verification failed");

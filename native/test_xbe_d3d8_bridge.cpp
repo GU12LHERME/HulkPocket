@@ -213,9 +213,28 @@ int main(){
             assert(guest.Read32(back+12)==0x00011221&&guest.Read32(depth+12)==0x00012e21);
             auto a=guest.Read32(front+4),b=guest.Read32(back+4);
             assert(a!=b&&physical.Contains(0x80000000u+b,640*480*4));
+            constexpr uint32_t span=640*480*4;
+            device.VerifyTwoBufferSwap(0,span);
+            auto reject_swap=[&](uint32_t epoch,uint32_t bytes){
+                bool rejected=false;
+                try{device.VerifyTwoBufferSwap(epoch,bytes);}catch(const std::logic_error&){rejected=true;}
+                assert(rejected);
+            };
+            reject_swap(1,span);reject_swap(0,span-4);
+            guest.Write32(front+4,b);reject_swap(0,span);guest.Write32(front+4,a);
+            guest.Write32(front+4,guest.Read32(depth+4));reject_swap(0,span);guest.Write32(front+4,a);
+            guest.Write32(back+8,1);reject_swap(0,span);guest.Write32(back+8,0);
+            auto fmt=guest.Read32(front+12);
+            guest.Write32(front+12,0x00012e21);reject_swap(0,span);guest.Write32(front+12,fmt);
+            auto layout=guest.Read32(front+16);
+            guest.Write32(front+16,layout-1);reject_swap(0,span);guest.Write32(front+16,layout);
+            guest.Write32(dev+0x1a04,front);reject_swap(0,span);guest.Write32(dev+0x1a04,back);
+            assert(guest.Read32(dev+0x2478)==0);
             assert(device.Rotate()==1&&guest.Read32(front+4)==b&&guest.Read32(back+4)==a);
             assert(guest.Read32(dev+0x2478)==1);
+            device.VerifyTwoBufferSwap(1,span);
             assert(device.Rotate()==2&&guest.Read32(front+4)==a);
+            device.VerifyTwoBufferSwap(2,span);
         }
         assert(pool.Outstanding()==0&&physical.AllocatedPages()==0&&guest.Read32(slot)==0);
         guest.Write32(pp,320);guest.Write32(pp+4,240);

@@ -12,7 +12,7 @@ class XbeD3d8DeviceMemory {
     XboxGuestAddressSpace& mem_;
     XbeKernelPool& pool_;
     XbePhysicalMemory& physical_;
-    struct Resource{uint32_t header=0,data=0;};
+    struct Resource{uint32_t header=0,data=0,format=0,size=0,bytes=0;};
     std::array<Resource,4> resources_{};
     uint32_t count_=0,device_=0,slot_=0,scratch_=0;
     static constexpr uint32_t scratch_size=0x10000;
@@ -29,7 +29,7 @@ class XbeD3d8DeviceMemory {
                 0x00010021|(fmt<<8),(w-1)|((h-1)<<12)|((pitch/64-1)<<24),0};
             mem_.Write(hdr,words,sizeof(words));
         }catch(...){if(hdr)pool_.Free(hdr);physical_.Free(data);throw;}
-        return {hdr,data};
+        return {hdr,data,mem_.Read32(hdr+12),mem_.Read32(hdr+16),pitch*h};
     }
     void Release(){
         for(auto& r:resources_){
@@ -129,6 +129,26 @@ public:
         return scratch_;
     }
     uint32_t BufferCount()const{return count_;}
+    // The verified Swap entry point has the same stdcall ABI for every
+    // caller. Validate its actual two-buffer resource state, not a return
+    // address from one previous menu trace. This is read-only preflight.
+    void VerifyTwoBufferSwap(uint32_t expected_count,uint32_t span)const{
+        if(!device_||count_!=2||mem_.Read32(device_+0x2478)!=expected_count||
+           mem_.Read32(device_+0x1a04)!=resources_[1].header)
+            throw std::logic_error("Invalid two-buffer swap device state");
+        const auto a=physical_.Physical(resources_[0].data),b=physical_.Physical(resources_[1].data);
+        const auto front=mem_.Read32(resources_[0].header+4),back=mem_.Read32(resources_[1].header+4);
+        if(a==b||!((front==a&&back==b)||(front==b&&back==a)))
+            throw std::logic_error("Swap backing is not the owned framebuffer pair");
+        for(unsigned i=0;i<2;++i){
+            const auto& r=resources_[i];
+            if(!span||span!=r.bytes||!mem_.IsCommitted(r.header,20)||
+               (mem_.Read32(r.header)&0x70000u)!=0x50000u||
+               mem_.Read32(r.header+8)||mem_.Read32(r.header+12)!=r.format||
+               mem_.Read32(r.header+16)!=r.size||!physical_.Contains(r.data,r.bytes))
+                throw std::logic_error("Invalid owned swap surface layout or lock");
+        }
+    }
     // Rotate physical data and lock words while preserving resource headers.
     // Called only after a successful backend present and push processing.
     uint32_t Rotate(){
