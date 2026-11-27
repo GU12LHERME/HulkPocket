@@ -134,6 +134,28 @@ private:
         std::unique_ptr<gpu::State> diagnostic_line_profile,diagnostic_texture_profile;
         unsigned diagnostic_texture_returns=0,diagnostic_lit_returns=0;
         uint64_t last_frame_hash=0;
+        // Wall-clock samples from real Android presents, not guest vblank
+        // frequency. Readback includes synchronous GPU completion.
+        using PerfClock=std::chrono::steady_clock;
+        PerfClock::time_point perf_start{};
+        uint64_t perf_readback_us=0,perf_window_us=0,perf_diag_us=0;
+        unsigned perf_frames=0;
+        void RecordPresentPerf(PerfClock::time_point begin,PerfClock::time_point readback,
+                               PerfClock::time_point window,PerfClock::time_point end){
+            if(!expanded_preview)return;
+            if(perf_start==PerfClock::time_point{})perf_start=begin;
+            auto us=[](auto a,auto b){return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(b-a).count());};
+            perf_readback_us+=us(begin,readback);
+            perf_window_us+=us(readback,window);
+            perf_diag_us+=us(window,end);
+            if(++perf_frames==60){
+                const auto elapsed=us(perf_start,end);
+                std::fprintf(stderr,"D3D PERF frames=%u elapsed_ms=%.3f fps=%.2f frame_ms=%.3f readback_ms=%.3f window_ms=%.3f post_ms=%.3f\n",
+                    perf_frames,elapsed/1000.0,elapsed?perf_frames*1000000.0/elapsed:0.0,elapsed/1000.0/perf_frames,
+                    perf_readback_us/1000.0/perf_frames,perf_window_us/1000.0/perf_frames,perf_diag_us/1000.0/perf_frames);
+                perf_start=end;perf_frames=0;perf_readback_us=perf_window_us=perf_diag_us=0;
+            }
+        }
         const bool compact_capture=std::getenv("HULK_COMPACT_REPORT")&&
             std::strcmp(std::getenv("HULK_COMPACT_REPORT"),"1")==0;
         std::vector<uint8_t> last_presented_pixels;
@@ -1533,12 +1555,23 @@ private:
                     live.backend.RestoreRotatedColor(state.rt);
                     std::fprintf(stderr,"D3D SWAP WITHOUT DRAW PASS: caller=%08X backing=%08X (preserved color)\n",caller,desc.data);
                 }
-                live.backend.ReadbackColor(state.rt);
+                const auto perf_begin=LiveD3dDevice::PerfClock::now();
+                // Vulkan Present already synchronizes and stores the actual
+                // guest color backing. Do not write the same image twice.
+                // GLES Present does not read back; preserve its old order.
+                uint32_t presented=0;
+                if(vk)presented=live.bridge.Present(state.rt.header);
+                else live.backend.ReadbackColor(state.rt);
                 auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
+                const auto perf_readback=LiveD3dDevice::PerfClock::now();
                 if(preview_host.enabled.load())preview_host.Present(pixels,desc.width,desc.height,desc.pitch);
+                const auto perf_window=LiveD3dDevice::PerfClock::now();
                 if(live.expanded_preview)PumpPreviewAudio();
                 RefreshPreviewPorts();
-                if(live.compact_capture){
+                const char* bitmap_path=std::getenv("HULK_REPLAY_BITMAP");
+                // Android explicitly disables bitmap capture. Avoid the
+                // full frame copy when there is no consumer for it.
+                if(live.compact_capture&&(!vk||(bitmap_path&&*bitmap_path))){
                     live.last_presented_pixels.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
                     live.last_presented_width=desc.width;live.last_presented_height=desc.height;live.last_presented_pitch=desc.pitch;
                     if(!live.diagnostic_swap_returns||(live.diagnostic_swap_returns+1)%120==0||
@@ -1553,7 +1586,8 @@ private:
                 for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width*4;++x){
                     hash^=pixels[size_t(y)*desc.pitch+x];hash*=1099511628211ull;
                 }
-                const auto presented=live.bridge.Present(state.rt.header);
+                if(!vk)presented=live.bridge.Present(state.rt.header);
+                live.RecordPresentPerf(perf_begin,perf_readback,perf_window,LiveD3dDevice::PerfClock::now());
                 if(presented>1&&hash==live.last_frame_hash)++live.identical_frames;
                 live.last_frame_hash=hash;
                 std::fprintf(stderr,"D3D ORIGINAL SWAP OFFSCREEN PASS: presents=%u draws=%u vertices=%u waits=%u (reduced diagnostic)\n",

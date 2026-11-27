@@ -35,7 +35,7 @@ public:
         close(p[1]);
         drain_=std::thread([fd=p[0],path]{
             std::deque<std::string> tail,events,input_events;
-            std::string last_swap,last_checksum;
+            std::string last_swap,last_checksum,last_perf;
             std::string line;char buffer[8192];uint64_t n=0;
             auto last=std::chrono::steady_clock::now();
             auto flush=[&]{
@@ -45,7 +45,7 @@ public:
                 for(const auto& l:input_events)out<<l<<'\n';
                 out<<"Retained graphics and error events:\n";
                 for(const auto& l:events)out<<l<<'\n';
-                out<<last_swap<<'\n'<<last_checksum<<"\nFinal raw context:\n";
+                out<<last_swap<<'\n'<<last_checksum<<'\n'<<last_perf<<"\nFinal raw context:\n";
                 for(const auto& l:tail)out<<l<<'\n';
                 out.close();if(out)std::rename((path+".tmp").c_str(),path.c_str());
             };
@@ -70,6 +70,7 @@ public:
                         }
                         if(line.starts_with("D3D ORIGINAL SWAP OFFSCREEN PASS:"))last_swap=line;
                         if(line.starts_with("D3D FRAME CHECKSUM "))last_checksum=line;
+                        if(line.starts_with("D3D PERF "))last_perf=line;
                         tail.push_back(std::move(line));line.clear();if(tail.size()>4096)tail.pop_front();
                     }
                     else if(line.size()<4096)line+=buffer[i];
