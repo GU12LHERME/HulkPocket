@@ -722,8 +722,27 @@ int main(int argc,char** argv){
                 call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
                 bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
                 Expect("fixed two-stage live HUD",backend.ReadPixel(32,32),{32,32,32,255});
+                // Physical RP6 draw had stage 0 active, stage 1 disabled,
+                // and stale stage 2 MODULATE. Ignore later stages and their
+                // resources without mutating the guest's latent setters.
+                const auto two_stage=bridge.Snapshot();
+                fixed_state=two_stage;
+                fixed_state.tss[1][kTssColorOp]=fixed_state.tss[1][kTssAlphaOp]=1;
+                bridge.AdoptLiveSetters(fixed_state);
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                const auto stage_zero=backend.ReadPixel(32,32);
+                fixed_state.tss[2][kTssColorOp]=fixed_state.tss[2][kTssAlphaOp]=4;
+                fixed_state.tss[2][kTssTexCoordIndex]=3;
+                fixed_state.textures[2]=fixed_state.textures[1];
+                bridge.AdoptLiveSetters(fixed_state);
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                Expect("disabled fixed stage terminates cascade",backend.ReadPixel(32,32),stage_zero);
+                if(bridge.Snapshot().tss!=fixed_state.tss||bridge.Snapshot().textures!=fixed_state.textures)
+                    throw std::runtime_error("Fixed replay mutated latent guest state");
                 // Real change of combiner, not a shader-specific replay.
-                fixed_state=bridge.Snapshot();fixed_state.tss[1][kTssColorOp]=7;
+                fixed_state=two_stage;fixed_state.tss[1][kTssColorOp]=7;
                 bridge.AdoptLiveSetters(fixed_state);
                 bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
                 Expect("fixed additive material stage",backend.ReadPixel(32,32),{255,192,192,255});

@@ -730,7 +730,6 @@ public:
     // PixelHlsl, avoiding its fallback for unknown operations/arguments.
     static void ValidateFixedStages(const gpu::State& s){
         using namespace gpu;
-        bool ended=false;
         auto check_op=[](uint32_t op,uint32_t a0,uint32_t a1,uint32_t a2,bool bound,bool alpha){
             if(op<=1)return;
             // Shared HLSL handles these operations without silent fallbacks.
@@ -748,8 +747,9 @@ public:
         for(unsigned i=0;i<4;++i){
             const auto& t=s.tss[i];const bool bound=s.textures[i]!=0;
             const auto color=t[kTssColorOp],alpha=t[kTssAlphaOp];
-            if(color<=1){ended=true;continue;}
-            if(ended)throw std::logic_error("Fixed texture stage after disabled stage");
+            // D3DTOP_DISABLE terminates the fixed-function cascade.
+            // Higher stages can retain old state; it is not executed.
+            if(color<=1)break;
             if(t[kTssResultArg]!=1&&t[kTssResultArg]!=5)
                 throw std::logic_error("Unsupported fixed texture result");
             check_op(color,t[kTssColorArg0],t[kTssColorArg1],t[kTssColorArg2],bound,false);
@@ -789,14 +789,26 @@ public:
             throw std::logic_error("Captured shader viewport outside target");
         if(fixed)ValidateFixedStages(state_);
         auto replay=state_;replay.rs.fill(0);replay.simple.fill(0);
+        if(fixed){
+            // Normalize only the draw-local copy. Do not erase latent
+            // guest stage state, which can become active on a later draw.
+            bool ended=false;
+            for(unsigned st=0;st<4;++st){
+                ended=ended||replay.tss[st][gpu::kTssColorOp]<=1;
+                if(!ended)continue;
+                replay.tss[st].fill(0);
+                replay.tss[st][gpu::kTssColorOp]=replay.tss[st][gpu::kTssAlphaOp]=1;
+                replay.textures[st]=0;replay.palettes[st]=0;
+            }
+        }
         if(!program){
             gpu::VertexShader fvf_layout;
             if(!state_.vs)gpu::FvfInputs(state_.vs_handle,fvf_layout);
             const auto& layout=state_.vs?*state_.vs:fvf_layout;
-            for(unsigned st=0;st<4;++st)if(state_.textures[st]){
-                const auto set=state_.tss[st][gpu::kTssTexCoordIndex];
+            for(unsigned st=0;st<4;++st)if(replay.textures[st]){
+                const auto set=replay.tss[st][gpu::kTssTexCoordIndex];
                 if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0||
-                   state_.tss[st][gpu::kTssTextureTransformFlags])
+                   replay.tss[st][gpu::kTssTextureTransformFlags])
                     throw std::logic_error("Captured fixed vertex path requires declared UV set without transform");
             }
         }
