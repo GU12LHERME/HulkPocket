@@ -734,14 +734,20 @@ int main(int argc,char** argv){
                 const auto stage_zero=backend.ReadPixel(32,32);
                 fixed_state.tss[2][kTssColorOp]=fixed_state.tss[2][kTssAlphaOp]=4;
                 fixed_state.tss[2][kTssTexCoordIndex]=3;
-                fixed_state.textures[2]=fixed_state.textures[1];
                 bridge.AdoptLiveSetters(fixed_state);
+                // AdoptLiveSetters only transfers render/texture-stage setters.
+                // Bind the resource through the real D3D bridge entry point.
+                call("D3DDevice_SetTexture",{2,tex0});
+                const auto latent=bridge.Snapshot();
+                if(latent.textures[2]!=tex0||latent.tss[2][kTssTexCoordIndex]!=3)
+                    throw std::runtime_error("Inactive stage fixture was not installed");
                 call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
                 bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
                 Expect("disabled fixed stage terminates cascade",backend.ReadPixel(32,32),
                        {stage_zero[0],stage_zero[1],stage_zero[2],stage_zero[3]});
-                if(bridge.Snapshot().tss!=fixed_state.tss||bridge.Snapshot().textures!=fixed_state.textures)
+                if(bridge.Snapshot().tss!=latent.tss||bridge.Snapshot().textures!=latent.textures)
                     throw std::runtime_error("Fixed replay mutated latent guest state");
+                call("D3DDevice_SetTexture",{2,two_stage.textures[2]});
                 // Real change of combiner, not a shader-specific replay.
                 fixed_state=two_stage;fixed_state.tss[1][kTssColorOp]=7;
                 bridge.AdoptLiveSetters(fixed_state);
