@@ -587,6 +587,23 @@ int main(int argc,char** argv){
                 bridge.AdoptLiveSetters(fog);
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("updated fog range",backend.ReadPixel(32,32),{191,96,112,255});
+                fog=bridge.Snapshot();fog.rs[kRsFogEnable]=0;bridge.AdoptLiveSetters(fog);
+                // 2x2 Morton-order texels: AR of stage zero (1,1) selects
+                // yellow bottom-right; GB (.502,.251) selects green top-right.
+                uint32_t lookup[4]={0xffff0000,0xff00ff00,0xff0000ff,0xffffff00};
+                bridge_mem.Write(0x80115100,lookup,sizeof(lookup));
+                write_packet({{0x1e70,1|(0xf<<5)},{kMPsFinalAbcd,9},{kMPsFinalEfgh,0x1900}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("dependent AR texture lookup",backend.ReadPixel(32,32),{255,255,0,255});
+                write_packet({{0x1e70,1|(0x10<<5)}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("dependent GB texture lookup",backend.ReadPixel(32,32),{0,255,0,255});
+                write_packet({{0x1e70,0xf|(1<<5)}});
+                bool invalid_dep=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){invalid_dep=true;}
+                if(!invalid_dep)throw std::runtime_error("Dependent stage zero silently accepted");
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

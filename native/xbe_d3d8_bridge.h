@@ -430,7 +430,8 @@ public:
             next.rs[gpu::kRsPsTextureModes]=next.ps->def[54];
             for(unsigned st=0;st<4;++st){
                 auto mode=(next.ps->def[54]>>(5*st))&31;
-                if((mode==1)!=bool(textures[st]))throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
+                if((mode==1||mode==0xf||mode==0x10)!=bool(textures[st]))
+                    throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
             }
         }
         next.textures=textures;next.palettes.fill(0);

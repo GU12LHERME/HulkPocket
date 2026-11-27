@@ -102,12 +102,22 @@ inline std::shared_ptr<gpu::PixelShader> CaptureNv2aCombiner(const gpu::State& s
     d[8]=get(kMPsFinalAbcd);d[9]=get(kMPsFinalEfgh);
     d[43]=get(kMPsFinalConstant0);d[44]=get(kMPsFinalConstant1);
     d[54]=get(0x1e70);
-    // Only modes supported by the current Vulkan shader implementation.
-    // Compare/dot/other-stage inputs do not affect 2D projection or pass-through.
+    // Dependent AR/GB samples read an earlier stage's color. The
+    // shared shader translator uses stage zero implicitly for stage one.
     for(unsigned i=0;i<4;++i){
         auto mode=(d[54]>>(5*i))&31;
-        if(mode!=0&&mode!=1&&mode!=4&&mode!=5)throw std::logic_error("Unintegrated captured pixel texture mode");
+        if(mode!=0&&mode!=1&&mode!=4&&mode!=5&&mode!=0xf&&mode!=0x10)
+            throw std::logic_error("Unintegrated captured pixel texture mode");
         if(mode==5)d[42]=get(kMPsCompareMode);
+        if(mode==0xf||mode==0x10){
+            if(!i)throw std::logic_error("Dependent pixel stage cannot be first");
+            if(i>=2)d[56]=get(kMPsInputTexture);
+            unsigned source=i==1?0:(d[56]>>(i==2?16:20))&15;
+            if(source>=i)throw std::logic_error("Invalid dependent pixel source stage");
+            auto previous=(d[54]>>(5*source))&31;
+            if(previous!=1&&previous!=4&&previous!=0xf&&previous!=0x10)
+                throw std::logic_error("Dependent pixel source has no color");
+        }
     }
     for(unsigned i=0;i<n;++i){
         d[i]=get(kMPsAlphaInputs+4*i);d[26+i]=get(kMPsAlphaOutputs+4*i);
