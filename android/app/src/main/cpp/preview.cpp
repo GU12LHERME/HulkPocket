@@ -60,6 +60,7 @@ public:
                         }
                         if(line.starts_with("HULK RENDERER ")||line.starts_with("Guest stopped:")||
                            line.starts_with("D3D VULKAN DRAW FAILURE")||line.starts_with("D3D LIVE PUSH FAILURE")||
+                           line.starts_with("D3D DECLARATION ")||
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||
                            (line.starts_with("D3D LIGHT ")&&(!line.starts_with("D3D LIGHT OBSERVE")||line.ends_with("accepted=0")))||
                            line.starts_with("HULK CRT MATH ")||

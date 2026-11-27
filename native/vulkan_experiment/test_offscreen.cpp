@@ -1224,6 +1224,56 @@ int main(int argc,char** argv){
                         }
                     }
                 }
+                // Broaden exact FVF capture beyond diffuse-only layouts.
+                // Check normal-only, position-only, specular and no-diffuse UV.
+                for(uint32_t candidate:{0x2u,0x12u,0x82u,0x112u,0x182u,0x204u}){
+                    gpu::VertexShader layout;gpu::FvfInputs(candidate,layout);
+                    for(unsigned k=0;k<16;++k){
+                        auto at=decl+0x14+16*k;const auto in=layout.inputs[k];
+                        for(unsigned j=0;j<4;++j)bridge_mem.Write32(at+4*j,0);
+                        if(in.stream>=0){
+                            bridge_mem.Write32(at,uint32_t(in.stream));
+                            bridge_mem.Write32(at+4,in.offset);bridge_mem.Write32(at+8,in.type);
+                        }
+                    }
+                    std::vector<uint8_t> verts(3*layout.stream_stride[0],0);
+                    bridge_mem.Write(0x80114000,verts.data(),verts.size());
+                    call("D3DDevice_SetStreamSource",{0,buffer,layout.stream_stride[0]});
+                    if(bridge.SyncFixedDiffuseShader(device,true)!=candidate||
+                       bridge.VerifyGuestGeometry(5,0,3,0)!=3)
+                        throw std::runtime_error("Extended exact FVF capture failed");
+                    bool legacy=false;
+                    try{bridge.SyncFixedDiffuseShader(device,false);}catch(const std::logic_error&){legacy=true;}
+                    if(!legacy)throw std::runtime_error("Extended FVF enabled on legacy path");
+                }
+                // Position-only unlit mesh with no texture: shared fixed
+                // shader supplies its defined default diffuse (white).
+                bridge_mem.Write32(device+0x784,0);
+                for(unsigned st=0;st<4;++st)bridge_mem.Write32(device+0xf88+4*st,0);
+                auto bare=bridge.Snapshot();bare.rs.fill(0);
+                for(auto& stage:bare.tss){stage.fill(0);stage[kTssColorOp]=stage[kTssAlphaOp]=1;}
+                bare.simple[kMColorWriteEnable/4]=0x01010101;
+                bare.simple[kMBlendEnable/4]=0;
+                bridge.AdoptLiveSetters(bare);
+                for(unsigned k=0;k<16;++k)
+                    for(unsigned j=0;j<4;++j)bridge_mem.Write32(decl+0x14+16*k+4*j,0);
+                bridge_mem.Write32(decl+0x14+8,0x32);
+                const float bare_positions[]={-.75f,-.75f,.5f,.75f,-.75f,.5f,0,.75f,.5f};
+                bridge_mem.Write(0x80114000,bare_positions,sizeof(bare_positions));
+                call("D3DDevice_SetStreamSource",{0,buffer,12});
+                const uint16_t bare_indices[]={0,1,2};
+                bridge_mem.Write(0x80115e00,bare_indices,sizeof(bare_indices));
+                bridge_mem.Write32(device+0x1c,0);
+                if(bridge.SyncFixedDiffuseShader(device,true)!=2||
+                   bridge.VerifyGuestGeometry(5,0,3,0x80115e00)!=3)
+                    throw std::runtime_error("Position-only indexed geometry capture failed");
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0x80115e00,true);
+                Expect("position-only indexed fixed geometry",backend.ReadPixel(32,32),{255,255,255,255});
+                bridge_mem.Write32(decl+0x14+4,4);
+                bool bad_bare=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){bad_bare=true;}
+                if(!bad_bare)throw std::runtime_error("Malformed position-only FVF accepted");
                 // Replay actual NV097 SET_VERTEX_DATA4UB v11 with a
                 // program reading it as diffuse color and no v11 stream.
                 bridge_mem.Write32(decl+4,0x10);

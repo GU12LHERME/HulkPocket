@@ -1245,7 +1245,29 @@ private:
                     std::fprintf(stderr,"D3D DRAW TSS %u %u=%08X\n",st,i,state.tss[st][i]);
                 DrainLivePush(live);
                 SyncLiveTargets(live);
-                auto fvf=live.bridge.SyncFixedDiffuseShader(dev,VulkanPreviewSelected());
+                uint32_t fvf=0;
+                try{fvf=live.bridge.SyncFixedDiffuseShader(dev,VulkanPreviewSelected());}
+                catch(const std::exception& ex){
+                    // Capture the rejected declaration even when hot tracing
+                    // is sampled. Fixed-size checked reads only, no mutation.
+                    if(VulkanPreviewSelected()){
+                        auto ptr=mem_.Read32(dev+0x794);
+                        std::fprintf(stderr,"D3D DECLARATION FAILURE frame=%u draw=%u caller=%08X prim=%u args=%08X,%08X shader=%08X reason=%s\n",
+                            live.diagnostic_swap_returns+1,live.diagnostic_draw_returns-live.draws_at_swap+1,
+                            mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),ptr,ex.what());
+                        if(ptr&&mem_.IsCommitted(ptr,0x114)){
+                            std::fprintf(stderr,"D3D DECLARATION HEADER %08X %08X %08X %08X %08X\n",
+                                mem_.Read32(ptr),mem_.Read32(ptr+4),mem_.Read32(ptr+8),mem_.Read32(ptr+12),mem_.Read32(ptr+16));
+                            for(unsigned i=0;i<16;++i){
+                                auto a=ptr+0x14+16*i;
+                                std::fprintf(stderr,"D3D DECLARATION SLOT %u stream=%08X offset=%08X type=%08X extra=%08X vb=%08X stride=%u\n",
+                                    i,mem_.Read32(a),mem_.Read32(a+4),mem_.Read32(a+8),mem_.Read32(a+12),
+                                    state.streams[i].vb,state.streams[i].stride);
+                            }
+                        }
+                    }
+                    throw;
+                }
                 bool indexed=ordinal==(kGraphicsDrawIndexed|0x1000u);
                 // Keep prepared storage alive throughout this serialized
                 // draw. State replay only filters raster/shader constants,

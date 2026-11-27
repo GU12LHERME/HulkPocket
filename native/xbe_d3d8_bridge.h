@@ -46,6 +46,13 @@ class XbeD3d8Bridge {
     uint32_t light_defined_=0,light_enable_seen_=0;
     uint32_t presents_=0,framebuffer_w_=0,framebuffer_h_=0;
     static float Float(uint32_t x){return std::bit_cast<float>(x);}
+    static bool SupportedVulkanFixedFvf(uint32_t fvf){
+        const auto pos=fvf&0xe,uv=(fvf>>8)&15;
+        if((pos!=2&&pos!=4)||uv>4||(fvf&0x0000f029u)||(fvf>>24)||
+           (pos==4&&(fvf&0x10)))return false;
+        const uint32_t used=uv?((1u<<(uv*2))-1):0;
+        return !(fvf>>16&~used);
+    }
     uint32_t Read(uint64_t a){return gpu::ReadGuest32(a);}
     gpu::Surface Surface(uint32_t h) {
         if(!h)return {};
@@ -476,13 +483,32 @@ public:
                 if(sizes)for(uint32_t pos:{2u,4u})candidates.push_back(sizes|0x40u|pos|((st+1)<<8));
             }
         }
+        if(capture_pixel&&flags==0x400){
+            // Derive the FVF from the real register declaration rather than
+            // assuming every mesh has a diffuse color and UV. The exact
+            // per-slot and stride comparison below remains mandatory.
+            auto type=[&](unsigned r){return Read(uint64_t(ptr)+0x14+16*r+8);};
+            auto present=[&](unsigned r){return type(r)!=0&&type(r)!=2;};
+            uint32_t f=type(0)==0x32?2u:type(0)==0x42?4u:0u;
+            if(present(2))f|=0x10;
+            if(present(3))f|=0x40;
+            if(present(4))f|=0x80;
+            unsigned count=0;
+            for(unsigned st=0;st<4;++st)if(present(9+st)){
+                count=st+1;
+                auto t=type(9+st);
+                f|=(t==0x32?1u:t==0x42?2u:t==0x12?3u:0u)<<(16+2*st);
+            }
+            f|=count<<8;
+            if(SupportedVulkanFixedFvf(f))candidates.push_back(f);
+        }
         for(uint32_t candidate:candidates){
             if(flags!=0x400||(!capture_pixel&&candidate>=0x200))continue;
             // A declaration can retain UVs after SetTexture(0,null).
             // Only a bound texture requires UV; keep the original stride.
             // FVF texture count is a four-bit field, not a flag:
             // TEX2 and TEX4 do not have bit 8 set.
-            if(std::any_of(textures.begin(),textures.end(),[](auto t){return t!=0;})&&!(candidate&0xf00u))continue;
+            if(!capture_pixel&&std::any_of(textures.begin(),textures.end(),[](auto t){return t!=0;})&&!(candidate&0xf00u))continue;
             gpu::VertexShader layout;
             gpu::FvfInputs(candidate,layout);
             bool match=true;
@@ -881,12 +907,14 @@ public:
              base_fvf==0x342||base_fvf==0x344||base_fvf==0x442||base_fvf==0x444);
         const bool fixed=allow_fixed&&!state_.ps&&!program;
         const bool packed=allow_fixed&&state_.vs&&!program;
+        const bool general_fvf=allow_fixed&&!state_.vs&&SupportedVulkanFixedFvf(fvf);
+        const bool normal=packed?state_.vs->inputs[2].stream>=0:general_fvf&&(fvf&0x10);
         const bool lighting=state_.rs[gpu::kRsLighting]!=0;
         if(!initialized_||(!state_.ps&&!program&&!fixed)||
-           (!program&&!packed&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw&&!multi_uv)))||
+           (!program&&!packed&&!general_fvf&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw&&!multi_uv)))||
            count>262144||!CapturedPrimitive(prim,count)||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
-           (lighting&&(!fixed||!packed||state_.vs->inputs[2].stream<0||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
+           (lighting&&(!fixed||!normal||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
            state_.rs[gpu::kRsFogEnable]>1||(fixed&&state_.rs[gpu::kRsRangeFogEnable])||
            (lighting&&state_.rs[gpu::kRsFogEnable])||
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
