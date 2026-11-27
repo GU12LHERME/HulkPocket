@@ -68,7 +68,8 @@ struct VulkanCore{
     Buffer verts,indices,uniform,vertex_constants,readback,staging,depth_readback,stencil_readback;
     std::array<Buffer,BatchLimit-1> extra_verts{},extra_indices{};
     uint32_t uniform_stride=4096,constant_stride=3072;
-    unsigned pending_draws=0;
+    unsigned pending_draws=0,pending_clears=0;
+    bool HasPendingCommands()const{return pending_draws||pending_clears;}
     uint64_t queue_submissions=0,draw_batches=0;
     Image target,depth;
     static constexpr unsigned DepthSlots=4;
@@ -188,8 +189,8 @@ struct VulkanCore{
         images.Free(dev,x.alloc);x={};
     }
     void FlushBatch(){
-        if(!pending_draws)return;
-        Submit();pending_draws=0;++draw_batches;
+        if(!HasPendingCommands())return;
+        Submit();pending_draws=0;pending_clears=0;++draw_batches;
     }
     void Begin(){
         FlushBatch();
@@ -760,7 +761,7 @@ struct VulkanCore{
             // Draw records end outside the render pass, with attachment
             // visibility established. Append the transfer to the same
             // command buffer instead of submitting and waiting twice.
-            if(pending_draws){
+            if(HasPendingCommands()){
                 ReadbackCommands();
                 FlushBatch();
             }else{
@@ -794,7 +795,9 @@ struct VulkanCore{
         VkClearValue values[2]{};
         values[0].color={{float((argb>>16)&255)/255,float((argb>>8)&255)/255,float(argb&255)/255,float(argb>>24)/255}};
         values[1].depthStencil={z,stencil};
-        Begin();
+        // Clears use no per-draw vertex/descriptor storage. Record them
+        // in order with pending draws instead of waiting after each clear.
+        if(!HasPendingCommands())Begin();
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=frame_valid?load_pass:pass;ri.framebuffer=fb;
         ri.renderArea={{0,0},{W,H}};ri.clearValueCount=frame_valid?0:2;ri.pClearValues=frame_valid?nullptr:values;
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
@@ -806,9 +809,11 @@ struct VulkanCore{
             vkCmdClearAttachments(cmd,n,ca,rects.empty()?1u:uint32_t(rects.size()),rects.empty()?&rect:rects.data());
         }
         // Preserve attachment visibility even when there is no CPU read.
-        vkCmdEndRenderPass(cmd);gpu::RenderPassBarrier(cmd);Submit();
+        vkCmdEndRenderPass(cmd);gpu::RenderPassBarrier(cmd);
         if(!frame_valid||(flags&0xf0))readback_valid=false;
         frame_valid=true;
+        // Keep command recording bounded even for clear-only guest frames.
+        if(++pending_clears==BatchLimit)FlushBatch();
     }
     void RestoreColor(const uint8_t* bgra,uint32_t pitch){
         if(!bgra||pitch<uint64_t(W)*4||frame_valid)throw std::invalid_argument("Invalid Vulkan restored color");
@@ -920,7 +925,7 @@ struct VulkanCore{
         std::memset(vc,0,192*16);
         if(dynamic)std::memcpy(vc,state->vsc.data(),192*16);
         std::memset(uc,0,4096);std::memcpy(uc,&dc,sizeof(dc));
-        if(!pending_draws)Begin();
+        if(!HasPendingCommands())Begin();
         if(counted)vkCmdResetQueryPool(cmd,visibility_query,0,1);
         VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=preserve?load_pass:pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=preserve?0:2;ri.pClearValues=preserve?nullptr:clear;

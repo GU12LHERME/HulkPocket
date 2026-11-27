@@ -478,9 +478,12 @@ int main(int argc,char** argv){
         f.FlushBatch();
         // Multiple submissions may update color without forcing host transfers.
         auto copies=f.readback_copies,readback_hits_before=f.readback_hits,draws=f.draw_submissions;
+        auto clear_draw_submits=f.queue_submissions;
         f.ClearFrame(0xf3,0xff0000ff,1,0);
         f.Draw(argv[1],false,false,false);
         f.Draw(argv[1],false,false,true);
+        if(f.pending_clears!=1||f.queue_submissions!=clear_draw_submits)
+            throw std::runtime_error("Clear and draws did not share command recording");
         if(f.readback_copies!=copies||f.draw_submissions!=draws+2)
             throw std::runtime_error("Draw or clear forced eager readback");
         auto readback_submits=f.queue_submissions,readback_batches=f.draw_batches;
@@ -513,6 +516,35 @@ int main(int argc,char** argv){
         if(f.pending_draws||f.queue_submissions!=submits+1)
             throw std::runtime_error("Vulkan batch limit failed");
         Expect("bounded batch final color",f.Pixel(32,32),{0,255,0,255});
+        // Clear-only readback, interleaved draw/clear ordering and bounded
+        // clear count: do not conflate cleared attachments with empty work.
+        submits=f.queue_submissions;
+        f.ClearFrame(0xf0,0xff010203,1,0);
+        f.ClearFrame(0xf0,0xff123456,1,0);
+        if(f.pending_clears!=2||f.queue_submissions!=submits)
+            throw std::runtime_error("Clear-only recording submitted early");
+        Expect("batched clear-only newest color",f.Pixel(32,32),{18,52,86,255});
+        if(f.HasPendingCommands()||f.queue_submissions!=submits+1)
+            throw std::runtime_error("Clear-only readback did not coalesce");
+        submits=f.queue_submissions;
+        f.Draw(argv[1],false,false,false);
+        f.ClearFrame(0xf0,0xff102030,1,0);
+        f.Draw(argv[1],false,false,true,false,nullptr,false,nullptr,false,true);
+        if(f.queue_submissions!=submits||f.pending_draws!=2||f.pending_clears!=1)
+            throw std::runtime_error("Draw-clear-draw batch submitted early");
+        Expect("interleaved clear outside triangle",f.Pixel(0,0),{16,32,48,255});
+        // Existing blend regression establishes the exact center blend;
+        // verify this ordering against a separate explicitly flushed run.
+        auto interleaved=f.Pixel(32,32);
+        f.Draw(argv[1],false,false,false);f.FlushBatch();
+        f.ClearFrame(0xf0,0xff102030,1,0);f.FlushBatch();
+        f.Draw(argv[1],false,false,true,false,nullptr,false,nullptr,false,true);
+        Expect("interleaved draw clear reference",f.Pixel(32,32),interleaved);
+        submits=f.queue_submissions;
+        for(unsigned i=0;i<VulkanCore::BatchLimit;++i)f.ClearFrame(0xf0,0xff000000u|i,1,0);
+        if(f.HasPendingCommands()||f.queue_submissions!=submits+1)
+            throw std::runtime_error("Clear recording bound failed");
+        Expect("bounded clear last color",f.Pixel(32,32),{0,0,uint8_t(VulkanCore::BatchLimit-1),255});
         std::printf("Vulkan pipelines created=%llu reused=%llu resident=%zu\n",
             (unsigned long long)f.pipeline_creates,(unsigned long long)f.pipeline_hits,f.pipelines.size());
         }
