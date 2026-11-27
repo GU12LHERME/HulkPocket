@@ -154,6 +154,28 @@ int main(){
             assert(std::min(640u,guest.Read32(dev+0x954))==640);
             assert(std::min(480u,guest.Read32(dev+0x958))==480);
             assert(device.Scratch()&&device.ScratchEnd()==device.Scratch());
+            const auto scratch=device.Scratch();
+            guest.Write32(scratch,(1u<<18)|gpu::kMBlendEnable);
+            guest.Write32(scratch+4,1);
+            guest.Write32(dev,scratch+8);
+            bool failed=false;
+            try{device.RefillScratch([&](uint32_t begin,uint32_t end){
+                assert(begin==scratch&&end==scratch+8);
+                throw std::logic_error("synthetic consumer failure");
+            });}catch(const std::logic_error&){failed=true;}
+            assert(failed&&device.ScratchEnd()==scratch+8);
+            gpu::State scratch_state{};Nv2aConstantCursor scratch_cursor{};
+            assert(device.RefillScratch([&](uint32_t begin,uint32_t end){
+                ApplyNv2aState(scratch_state,scratch_cursor,DecodeNv2aMethods(guest,begin,end),true);
+            })==scratch);
+            assert(scratch_state.simple[gpu::kMBlendEnable/4]==1&&device.ScratchEnd()==scratch);
+            assert(device.RefillScratch([&](uint32_t,uint32_t){assert(false);})==scratch);
+            guest.Write32(dev,scratch+0x10004);
+            bool bad_end=false;
+            try{device.RefillScratch([&](uint32_t,uint32_t){assert(false);});}
+            catch(const std::out_of_range&){bad_end=true;}
+            assert(bad_end);
+            device.RewindScratch();
             device.BindInitialFvf(0x25c00);
             assert(guest.Read32(dev+0x794)==0x25c00);
             bool bad_fvf=false;

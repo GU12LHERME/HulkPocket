@@ -119,6 +119,15 @@ public:
         if(!device_)throw std::logic_error("D3D device not allocated");
         Set(0,scratch_);
     }
+    // Consume a checked scratch range before making its storage writable
+    // again. A failed parser or backend operation leaves the guest cursor
+    // untouched for fault diagnostics.
+    template<class Consumer> uint32_t RefillScratch(Consumer consume){
+        auto end=ScratchEnd();
+        if(end!=scratch_)consume(scratch_,end);
+        RewindScratch();
+        return scratch_;
+    }
     uint32_t BufferCount()const{return count_;}
     // Rotate physical data and lock words while preserving resource headers.
     // Called only after a successful backend present and push processing.

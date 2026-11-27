@@ -196,16 +196,18 @@ private:
         return false;
 #endif
     }
-    void DrainLivePush(LiveD3dDevice& live){
-        auto begin=live.buffers.Scratch(),end=live.buffers.ScratchEnd();
-        if(end==begin)return;
+    void DrainLivePush(LiveD3dDevice& live,bool flush_before_reuse=false){
+        live.buffers.RefillScratch([&](uint32_t begin,uint32_t end){
         const bool trace=live.TraceGraphics();
         auto dump=[&]{
             for(auto m:DecodeNv2aMethods(mem_,begin,end))
                 std::fprintf(stderr,"D3D LIVE PUSH method=%04X value=%08X\n",m.method,m.value);
         };
         if(trace)dump();
-        try{live.bridge.ApplyPush(begin,end,VulkanPreviewSelected(),!trace);}
+        try{
+            live.bridge.ApplyPush(begin,end,VulkanPreviewSelected(),!trace);
+            if(flush_before_reuse)live.backend.Flush();
+        }
         catch(...){
             if(!trace){
                 std::fprintf(stderr,"D3D LIVE PUSH FAILURE begin=%08X end=%08X\n",begin,end);
@@ -213,7 +215,7 @@ private:
             }
             throw;
         }
-        live.buffers.RewindScratch();
+        });
     }
     void SyncLiveTargets(LiveD3dDevice& live){
         if(!VulkanPreviewSelected()){
@@ -815,7 +817,27 @@ private:
                 for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
                 Ret(cpu,n,sound_.Buffer(a[0],ordinal,a));return;
             }
-            case kDefaultMakeSpace:throw std::runtime_error("D3D scratch-space refill checkpoint");
+            case kGraphicsRefillScratch:{
+                Check(cpu,0);
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+                if(!VulkanPreviewSelected()||!live_d3d_||default_trace_||
+                   live_d3d_->owner!=cpu.thread_handle)
+                    throw std::runtime_error("D3D scratch-space refill outside live Vulkan owner");
+                auto& live=*live_d3d_;
+                // Pinned SCDA D3DDevice_MakeSpace stdcall(0) returns the
+                // scratch base. Unlike that implementation, parse pending
+                // state packets before rewinding and flush queued draws.
+                if(live.SetterLimitReached())throw std::runtime_error("D3D scratch refill budget exceeded");
+                ++live.setter_calls;
+                live.backend.Flush();
+                DrainLivePush(live,true);
+                if(live.TraceGraphics())std::fprintf(stderr,"D3D VULKAN SCRATCH REFILL base=%08X\n",live.buffers.Scratch());
+                Ret(cpu,0,live.buffers.Scratch());return;
+#else
+                throw std::runtime_error("D3D scratch-space refill requires live backend");
+#endif
+            }
+            case kDefaultMakeSpace:throw std::runtime_error("D3D requested-space ABI not integrated");
             case kXapiInitDevices: {
                 Check(cpu,2);
                 auto pad=cpu.ecx,mu=cpu.edx;
