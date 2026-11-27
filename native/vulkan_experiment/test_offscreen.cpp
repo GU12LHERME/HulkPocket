@@ -623,6 +623,46 @@ int main(int argc,char** argv){
                 bridge.SyncFixedDiffuseShader(device,true);
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("bump luminance modulates color",backend.ReadPixel(32,32),{0,128,0,128});
+                // Exercise actual bridge replay of converted primitives,
+                // rather than only the standalone geometry assembler.
+                write_packet({{0x1e70,0x21},{kMPsFinalAbcd,8},{kMPsFinalEfgh,0x1800}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                const Vertex corners[]={{-.75f,-.75f,.5f,0xffffffff,.25f,.25f},
+                    {.75f,-.75f,.5f,0xffffffff,.25f,.25f},{.75f,.75f,.5f,0xffffffff,.25f,.25f},
+                    {-.75f,.75f,.5f,0xffffffff,.25f,.25f}};
+                bridge_mem.Write(0x80114000,corners,sizeof(corners));
+                for(unsigned prim:{7u,8u,10u}){
+                    call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                    bridge.ReplayCapturedShaderDiagnostic(prim,0,4);
+                    Expect("captured fan/quad/polygon interior",backend.ReadPixel(40,20),{255,128,64,255});
+                    Expect("captured primitive outside",backend.ReadPixel(2,2),{0,0,0,255});
+                }
+                const Vertex strip[]={corners[0],corners[1],corners[3],corners[2]};
+                bridge_mem.Write(0x80114000,strip,sizeof(strip));
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(9,0,4);
+                Expect("captured quad strip",backend.ReadPixel(40,20),{255,128,64,255});
+                bool malformed=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(8,0,3);}catch(const std::logic_error&){malformed=true;}
+                if(!malformed)throw std::runtime_error("Incomplete quad accepted");
+                // Pretransformed XYZRHW declaration uses screen positions
+                // rather than the fixed world/view/projection transform.
+                struct ScreenVertex{float x,y,z,rhw;uint32_t color;float u,v;};
+                const ScreenVertex hud[]={{8,56,.5f,1,0xffffffff,.25f,.25f},
+                    {56,56,.5f,1,0xffffffff,.25f,.25f},{56,8,.5f,1,0xffffffff,.25f,.25f},
+                    {8,8,.5f,1,0xffffffff,.25f,.25f}};
+                gpu::VertexShader screen_layout;gpu::FvfInputs(0x144,screen_layout);
+                for(unsigned k=0;k<16;++k)if(screen_layout.inputs[k].stream>=0){
+                    auto at=decl+0x14+16*k;auto in=screen_layout.inputs[k];
+                    bridge_mem.Write32(at,uint32_t(in.stream));bridge_mem.Write32(at+4,in.offset);bridge_mem.Write32(at+8,in.type);
+                }
+                bridge_mem.Write(0x80114000,hud,sizeof(hud));
+                call("D3DDevice_SetStreamSource",{0,buffer,sizeof(ScreenVertex)});
+                if(bridge.SyncFixedDiffuseShader(device,true)!=0x144)throw std::runtime_error("XYZRHW capture mismatch");
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4);
+                Expect("captured screen-space HUD quad",backend.ReadPixel(32,32),{255,128,64,255});
+                Expect("captured HUD outside",backend.ReadPixel(2,2),{0,0,0,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

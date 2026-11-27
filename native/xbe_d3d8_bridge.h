@@ -641,14 +641,28 @@ public:
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         backend_.Draw(replay,prim,start,count,ip);if(!defer_draw_flush_)backend_.Flush();
     }
-    // Narrow live programmable-pixel path: preserve only the existing
-    // verified fixed diffuse vertex profile and captured combiner words.
-    // All other raw configuration remains guarded; this is not general D3D replay.
+    // The upstream assembler converts fans, quad lists/strips and convex
+    // polygons to triangle indices. Reject incomplete primitives rather
+    // than letting a malformed draw be silently truncated.
+    static bool CapturedPrimitive(uint32_t prim,uint32_t count){
+        switch(prim){
+        case 2:return count>=2&&count%2==0;
+        case 3:return count>=3;
+        case 4:return count>=2;
+        case 5:return count>=3&&count%3==0;
+        case 6:case 7:case 10:return count>=3;
+        case 8:return count>=4&&count%4==0;
+        case 9:return count>=4&&count%2==0;
+        default:return false; // point-size output not yet translated
+        }
+    }
+    // Validated captured shader path; unsupported states remain guarded.
     void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         const bool program=state_.vs&&!state_.vs->program.empty();
-        if(!initialized_||(!state_.ps&&!program)||(!program&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42)))||
-           !count||count>262144||!((prim==5&&count%3==0)||(prim==6&&count>=3))||
+        const bool rhw=!state_.vs&&(state_.vs_handle==0x44||state_.vs_handle==0x144);
+        if(!initialized_||(!state_.ps&&!program)||(!program&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw)))||
+           count>262144||!CapturedPrimitive(prim,count)||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
            state_.rs[gpu::kRsLighting]||state_.rs[gpu::kRsFogEnable]>1||
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
