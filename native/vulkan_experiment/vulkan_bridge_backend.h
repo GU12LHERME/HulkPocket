@@ -165,8 +165,25 @@ public:
             if(!gpu::Describe(s.textures[i],d)||!d.depth||(d.cube&&(d.linear||d.depth!=1||d.width!=d.height||d.width>4096)))
                 throw std::logic_error("Vulkan bridge requires supported color texture");
             auto bytes=d.depth>1?CheckedVolumeBytes(d):gpu::TotalSize(d);
-            if(DepthOverlap(d.data,bytes))
-                throw std::logic_error("Vulkan depth texture alias needs depth translation");
+            if(DepthOverlap(d.data,bytes)){
+                unsigned slot=VulkanCore::DepthSlots;
+                for(unsigned k=0;k<depth_backings_.size();++k){
+                    const auto& e=depth_backings_[k];
+                    if(e.header&&e.address==d.data&&e.pitch==d.pitch){slot=k;break;}
+                }
+                if(slot==VulkanCore::DepthSlots||!d.linear||d.format!=0x2e||d.cube||d.depth!=1||d.levels!=1||
+                    d.width!=core_.W||d.height!=core_.H||s.palettes[i])
+                    throw std::logic_error("Unsupported Vulkan partial or reinterpreted depth texture alias");
+                if(!(slot==depth_slot_?depth_valid_:depth_backings_[slot].depth_valid))
+                    throw std::logic_error("Vulkan depth snapshot requires guest depth clear");
+                // Match reference's rule against sampling the attachment
+                // while depth/stencil tests use it in the same draw.
+                if(slot==depth_slot_&&(s.rs[gpu::kRsZEnable]||s.rs[gpu::kRsStencilEnable]))
+                    throw std::logic_error("Vulkan simultaneous depth test and sampling unsupported");
+                core_.SnapshotDepthTexture(i,slot);
+                core_.SetSampler(i,s);
+                continue;
+            }
             bool alias=uint64_t(d.data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&
                        uint64_t(address_)<uint64_t(d.data)+bytes;
             if(alias){

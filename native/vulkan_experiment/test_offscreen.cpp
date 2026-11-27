@@ -767,6 +767,24 @@ int main(int argc,char** argv){
                 backend.Draw(feedback,5,0,3,nullptr);
                 Expect("refreshed target texture snapshot",backend.ReadPixel(32,40),{160,64,32,255});
                 Expect("snapshot preserves outside",backend.ReadPixel(0,0),{18,52,86,255});
+                // Sample the parked depth2 surface. Its depth was cleared to
+                // 1, but guest RAM has never received that rendered value.
+                auto shadow_feedback=feedback;
+                shadow_feedback.textures[0]=depth2;shadow_feedback.vs_handle=0x10142;
+                shadow_feedback.vs.reset();shadow_feedback.rs[kRsZEnable]=0;
+                shadow_feedback.rs[kRsStencilEnable]=0;
+                shadow_feedback.rs[kRsPsTextureModes]=2;
+                shadow_feedback.rs[kRsShadowFunc]=0x204;
+                struct ShadowVertex {float x,y,z;uint32_t color;float u,v,w;};
+                const ShadowVertex shadow_mesh[]={{-.75f,-.75f,.5f,0xffffffff,32.5f,32.5f,8388608.f},
+                    {.75f,-.75f,.5f,0xffffffff,32.5f,32.5f,8388608.f},{0,.75f,.5f,0xffffffff,32.5f,32.5f,8388608.f}};
+                shadow_feedback.streams[0].stride=sizeof(ShadowVertex);
+                bridge_mem.Write(0x80114000,shadow_mesh,sizeof(shadow_mesh));
+                backend.Draw(shadow_feedback,5,0,3,nullptr);
+                Expect("parked depth GPU snapshot",backend.ReadPixel(32,32),{255,255,255,255});
+                shadow_feedback.rs[kRsShadowFunc]=0x201;
+                backend.Draw(shadow_feedback,5,0,3,nullptr);
+                Expect("parked depth reversed comparison",backend.ReadPixel(32,32),{0,0,0,0});
                 // Switching back to an ordinary guest texture must invalidate
                 // any CPU cache entries from before the GPU snapshot.
                 feedback.textures[0]=tex0;

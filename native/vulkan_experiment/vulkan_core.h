@@ -78,6 +78,8 @@ struct VulkanCore{
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1},tex_depth{1,1,1,1};
     std::array<bool,4> tex_rect{},tex_cube{};
     std::array<uint8_t,4> tex_shadow{};
+    std::array<bool,4> tex_depth_snapshot{};
+    bool depth_snapshot_supported=false;
     std::array<std::vector<uint8_t>,4> last_pixels{};
     // Exact byte snapshots avoid repeated unswizzling/BC expansion.
     // No guest dirty flag is required: compare all source bytes on every bind.
@@ -90,7 +92,7 @@ struct VulkanCore{
     std::array<RawTexture,4> raw_textures{};
     uint64_t texture_decodes=0,raw_texture_hits=0,texture_uploads=0;
     std::array<VkSampler,4> stage_samplers{};
-    std::array<std::array<uint32_t,13>,4> stage_sampler_keys{};
+    std::array<std::array<uint32_t,14>,4> stage_sampler_keys{};
     bool sampler_anisotropy=false;
     VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
@@ -258,7 +260,14 @@ struct VulkanCore{
             if(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT){depth_format=format;break;}
         }
         if(depth_format==VK_FORMAT_UNDEFINED)throw std::runtime_error("No depth/stencil format");
-        CreateImage(depth,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,depth_format,VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT);
+        VkImageFormatProperties source_properties{},sample_properties{};
+        depth_snapshot_supported=
+            vkGetPhysicalDeviceImageFormatProperties(physical,depth_format,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&source_properties)==VK_SUCCESS&&
+            vkGetPhysicalDeviceImageFormatProperties(physical,depth_format,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,
+                VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&sample_properties)==VK_SUCCESS;
+        CreateImage(depth,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|
+            (depth_snapshot_supported?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0),depth_format,VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT);
         for(unsigned i=0;i<4;++i){CreateImage(textures[i],2,2,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);tex_width[i]=tex_height[i]=2;}
         // Constant-color image is a synthetic sampled texture, not a guest decoder test.
         Begin();
@@ -340,7 +349,8 @@ struct VulkanCore{
             if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_TRANSFER_DST_BIT))
                 throw std::invalid_argument("Vulkan depth attachment initialization unavailable");
             const VkImageAspectFlags aspect=VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT;
-            CreateImage(next,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,depth_format,aspect);
+            CreateImage(next,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|
+                (depth_snapshot_supported?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0),depth_format,aspect);
             // Initialize layouts for LOAD render passes without discarding
             // the current color. These defaults are not guest-valid until
             // the title explicitly clears the corresponding aspect.
@@ -395,7 +405,7 @@ struct VulkanCore{
                 throw std::invalid_argument("Unsupported Xbox shadow sampler profile");
             constexpr uint32_t swap[]={0,4,2,6,1,5,3,7};compare=swap[fn-0x200];
         }
-        std::array<uint32_t,13> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso),address_w,uint32_t(shadow),compare};
+        std::array<uint32_t,13> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso),address_w,uint32_t(shadow),compare,uint32_t(tex_depth_snapshot[stage])};
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
         auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;case 4:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
         auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2||v==3)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
@@ -405,7 +415,7 @@ struct VulkanCore{
         ci.mipLodBias=effective_bias;ci.minLod=float(lod);ci.maxLod=key[4]?float(key[5]-1):ci.minLod;
         ci.anisotropyEnable=aniso>1.f;ci.maxAnisotropy=aniso;
         if(shadow){
-            VkFormatProperties properties{};vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_D32_SFLOAT,&properties);
+            VkFormatProperties properties{};vkGetPhysicalDeviceFormatProperties(physical,tex_depth_snapshot[stage]?depth_format:VK_FORMAT_D32_SFLOAT,&properties);
             if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
                 ci.minFilter=ci.magFilter=VK_FILTER_NEAREST;
             ci.compareEnable=VK_TRUE;ci.compareOp=static_cast<VkCompareOp>(compare);
@@ -440,7 +450,7 @@ struct VulkanCore{
             CreateImage(texture,W,H,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,1);
             tex_width[stage]=W;tex_height[stage]=H;tex_levels[stage]=1;tex_depth[stage]=1;
         }
-        tex_rect[stage]=true;tex_cube[stage]=false;tex_shadow[stage]=0;
+        tex_rect[stage]=true;tex_cube[stage]=false;tex_shadow[stage]=0;tex_depth_snapshot[stage]=false;
         // GPU copies are not represented by the CPU decoded-pixel cache.
         last_pixels[stage].clear();raw_textures[stage]={};
         Begin();
@@ -452,6 +462,47 @@ struct VulkanCore{
         vkCmdCopyImage(cmd,target.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
         Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                    VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        Submit();
+        VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
+        wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
+        vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+    }
+    // Sample an already rendered D24S8 backing without guest readback.
+    // Use a separate sampled image to preserve the source's attachment
+    // layout and stencil contents. Combined depth/stencil layouts require
+    // transitions of both aspects, even though only depth is copied.
+    void SnapshotDepthTexture(unsigned stage,unsigned slot){
+        if(!depth_snapshot_supported||stage>=textures.size()||slot>=DepthSlots)
+            throw std::logic_error("Vulkan depth snapshot unsupported");
+        const auto& source=slot==active_depth_slot?depth:parked_depth[slot];
+        if(!source.image)throw std::logic_error("Missing Vulkan depth snapshot source");
+        FlushBatch();
+        const bool resize=!tex_depth_snapshot[stage]||tex_width[stage]!=W||tex_height[stage]!=H;
+        auto& texture=textures[stage];
+        if(resize){
+            Destroy(texture);
+            CreateImage(texture,W,H,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,depth_format,VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
+        tex_width[stage]=W;tex_height[stage]=H;tex_levels[stage]=tex_depth[stage]=1;
+        tex_rect[stage]=true;tex_cube[stage]=false;tex_shadow[stage]=1;tex_depth_snapshot[stage]=true;
+        raw_textures[stage]={};last_pixels[stage].clear();
+        constexpr VkImageAspectFlags aspects=VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT;
+        constexpr VkPipelineStageFlags tests=VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        constexpr VkAccessFlags attachment_access=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        Begin();
+        Transition(source.image,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            attachment_access,VK_ACCESS_TRANSFER_READ_BIT,tests,VK_PIPELINE_STAGE_TRANSFER_BIT,1,1,aspects);
+        Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
+            resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,1,1,aspects);
+        VkImageCopy copy{};copy.srcSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,1};
+        copy.dstSubresource=copy.srcSubresource;copy.extent={W,H,1};
+        vkCmdCopyImage(cmd,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&copy);
+        Transition(source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_ACCESS_TRANSFER_READ_BIT,attachment_access,VK_PIPELINE_STAGE_TRANSFER_BIT,tests,1,1,aspects);
+        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,1,1,aspects);
         Submit();
         VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
@@ -526,7 +577,7 @@ struct VulkanCore{
             copies.push_back(copy);pixels.insert(pixels.end(),p.rgba.begin(),p.rgba.end());
         }
         tex_rect[stage]=desc.linear;
-        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube||tex_depth[stage]!=desc.depth||tex_shadow[stage]!=shadow;
+        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube||tex_depth[stage]!=desc.depth||tex_shadow[stage]!=shadow||tex_depth_snapshot[stage];
         if(!resize&&last_pixels[stage]==pixels){remember();return;}
         FlushBatch();
         EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
@@ -535,7 +586,7 @@ struct VulkanCore{
         if(resize){
             Destroy(texture);
             CreateImage(texture,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,shadow?VK_FORMAT_D32_SFLOAT:Format,aspect,desc.levels,desc.cube,desc.depth);
-            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;tex_cube[stage]=desc.cube;tex_depth[stage]=desc.depth;tex_shadow[stage]=shadow;
+            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;tex_cube[stage]=desc.cube;tex_depth[stage]=desc.depth;tex_shadow[stage]=shadow;tex_depth_snapshot[stage]=false;
         }
         Begin();
         Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
