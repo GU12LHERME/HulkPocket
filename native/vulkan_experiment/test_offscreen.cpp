@@ -709,9 +709,31 @@ int main(int argc,char** argv){
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("restored original stencil mask inside",backend.ReadPixel(32,32),{128,128,64,255});
                 Expect("restored original stencil mask outside",backend.ReadPixel(4,4),{0,0,255,255});
-                bool inactive_depth_sync=false;
-                try{backend.Sync(0x80120000,4);}catch(const std::logic_error&){inactive_depth_sync=true;}
-                if(!inactive_depth_sync)throw std::runtime_error("Inactive depth backing read allowed");
+                // Synchronize both parked and active depth/stencil images.
+                // The stencil mask must survive the transfer and later draws.
+                backend.Sync(0x80120000,4);
+                if(bridge_mem.Read32(0x80120000)!=0xffffff00u)
+                    throw std::runtime_error("Parked depth/stencil readback mismatch");
+                backend.Sync(0x8011c000,64*64*4);
+                if(bridge_mem.Read32(0x8011c000+(32*64+32)*4)!=0xffffff01u||
+                   bridge_mem.Read32(0x8011c000+(4*64+4)*4)!=0xffffff00u)
+                    throw std::runtime_error("Active depth/stencil readback mismatch");
+                bool partial_depth_sync=false;
+                try{backend.Sync(0x8011bffc,8);}catch(const std::logic_error&){partial_depth_sync=true;}
+                if(!partial_depth_sync)throw std::runtime_error("Partial depth alias accepted");
+                bridge_mem.Write32(0x80120000,0);
+                bool cpu_depth_write=false;
+                try{backend.Sync(0x80120000,4);}catch(const std::logic_error&){cpu_depth_write=true;}
+                if(!cpu_depth_write)throw std::runtime_error("CPU depth write silently discarded");
+                bridge_mem.Write32(0x80120000,0xffffff00u);
+                // Nontrivial depth clear distinguishes 24-bit packing from
+                // accidentally treating the depth-aspect bytes as Xbox data.
+                call("D3DDevice_Clear",{0,0,1,0,std::bit_cast<uint32_t>(.5f),0});
+                backend.Sync(0x8011c000,4);
+                const auto middle=bridge_mem.Read32(0x8011c000+(32*64+32)*4);
+                if((middle>>8)<0x7fffffu||(middle>>8)>0x800000u||(middle&255)!=1)
+                    throw std::runtime_error("Depth conversion or stencil preservation mismatch");
+                call("D3DDevice_Clear",{0,0,1,0,std::bit_cast<uint32_t>(1.f),0});
                 // Preserve the shared stencil on a color-only clear after
                 // rotation, and restore old color on the next depth-only clear.
                 bridge.Present(surface);

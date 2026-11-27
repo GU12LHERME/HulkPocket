@@ -9,7 +9,12 @@ class VulkanBridgeBackend final:public gpu::Backend {
     VulkanCore core_;
     gpu::Surface target_{};
     uint32_t address_=0,pitch_=0,presented_frames_=0;
-    struct DepthBacking {uint32_t header=0,address=0,pitch=0;bool depth_valid=false,stencil_valid=false;};
+    struct DepthBacking {
+        uint32_t header=0,address=0,pitch=0;bool depth_valid=false,stencil_valid=false;
+        // Populated only after an explicit CPU synchronization. Until
+        // depth uploads exist, reject writes rather than lose CPU changes.
+        std::vector<uint32_t> guest_mirror;
+    };
     std::array<DepthBacking,VulkanCore::DepthSlots> depth_backings_{};
     unsigned depth_slot_=0;
     bool depth_valid_=false,stencil_valid_=false,rotated_=false;
@@ -25,6 +30,25 @@ class VulkanBridgeBackend final:public gpu::Backend {
         return std::any_of(depth_backings_.begin(),depth_backings_.end(),[&](const auto& d){
             return d.header&&Overlap(address,bytes,d.address,uint64_t(d.pitch)*core_.H);
         });
+    }
+    void VerifyDepthMirror(unsigned slot)const{
+        const auto& e=depth_backings_[slot];
+        if(e.guest_mirror.empty())return;
+        const auto* guest=gpu::CheckedGuestRange(e.address,uint64_t(e.pitch)*core_.H);
+        for(unsigned y=0;y<core_.H;++y)
+            if(std::memcmp(guest+size_t(y)*e.pitch,e.guest_mirror.data()+size_t(y)*core_.W,size_t(core_.W)*4))
+                throw std::logic_error("Vulkan CPU depth writes not integrated");
+    }
+    void ReadbackDepth(unsigned slot){
+        auto& e=depth_backings_[slot];
+        if(!(slot==depth_slot_?depth_valid_&&stencil_valid_:e.depth_valid&&e.stencil_valid))
+            throw std::logic_error("Vulkan depth readback requires full depth and stencil initialization");
+        VerifyDepthMirror(slot);
+        auto* guest=gpu::CheckedGuestRange(e.address,uint64_t(e.pitch)*core_.H);
+        auto pixels=core_.ReadDepthStencil(slot);
+        for(unsigned y=0;y<core_.H;++y)
+            std::memcpy(guest+size_t(y)*e.pitch,pixels.data()+size_t(y)*core_.W,size_t(core_.W)*4);
+        e.guest_mirror=std::move(pixels);
     }
     void Depth(const gpu::Surface& s){
         gpu::TextureDesc d{};
@@ -47,6 +71,7 @@ class VulkanBridgeBackend final:public gpu::Backend {
             if(unused==VulkanCore::DepthSlots)throw std::logic_error("Vulkan depth attachment pool exhausted");
             slot=unused;
         }
+        VerifyDepthMirror(slot);
         if(slot!=depth_slot_){
             core_.SelectDepthAttachment(slot);
             auto& previous=depth_backings_[depth_slot_];
@@ -180,6 +205,7 @@ public:
                 // while depth/stencil tests use it in the same draw.
                 if(slot==depth_slot_&&(s.rs[gpu::kRsZEnable]||s.rs[gpu::kRsStencilEnable]))
                     throw std::logic_error("Vulkan simultaneous depth test and sampling unsupported");
+                VerifyDepthMirror(slot);
                 core_.SnapshotDepthTexture(i,slot);
                 core_.SetSampler(i,s);
                 continue;
@@ -274,7 +300,13 @@ public:
     void Present(const gpu::Surface& front)override{ReadbackColor(front);++presented_frames_;}
     void Sync(uint32_t data,uint32_t size)override{
         if(!size)return;
-        if(DepthOverlap(data,size))throw std::logic_error("Vulkan guest depth readback not integrated");
+        for(unsigned slot=0;slot<depth_backings_.size();++slot){
+            const auto& e=depth_backings_[slot];
+            if(!e.header||!Overlap(data,size,e.address,uint64_t(e.pitch)*core_.H))continue;
+            if(data<e.address||uint64_t(data)+size>uint64_t(e.address)+uint64_t(e.pitch)*core_.H)
+                throw std::logic_error("Vulkan partial depth resource overlap");
+            ReadbackDepth(slot);return;
+        }
         if(target_.header&&uint64_t(data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&uint64_t(address_)<uint64_t(data)+size)Writeback();
     }
     void SyncLate(uint32_t data)override{Sync(data,1);}

@@ -65,7 +65,7 @@ struct VulkanCore{
     std::unique_ptr<gpu::FrameFences<1>> fence;
     static constexpr unsigned BatchLimit=4;
     static constexpr VkDeviceSize ExtraSlotLimit=2*1024*1024;
-    Buffer verts,indices,uniform,vertex_constants,readback,staging;
+    Buffer verts,indices,uniform,vertex_constants,readback,staging,depth_readback,stencil_readback;
     std::array<Buffer,BatchLimit-1> extra_verts{},extra_indices{};
     uint32_t uniform_stride=4096,constant_stride=3072;
     unsigned pending_draws=0;
@@ -79,7 +79,7 @@ struct VulkanCore{
     std::array<bool,4> tex_rect{},tex_cube{};
     std::array<uint8_t,4> tex_shadow{};
     std::array<bool,4> tex_depth_snapshot{};
-    bool depth_snapshot_supported=false;
+    bool depth_snapshot_supported=false,depth_readback_supported=false;
     std::array<std::vector<uint8_t>,4> last_pixels{};
     // Exact byte snapshots avoid repeated unswizzling/BC expansion.
     // No guest dirty flag is required: compare all source bytes on every bind.
@@ -132,6 +132,7 @@ struct VulkanCore{
             for(auto& b:extra_verts)Destroy(b);
             for(auto& b:extra_indices)Destroy(b);
             Destroy(uniform);Destroy(vertex_constants);Destroy(readback);Destroy(staging);
+            Destroy(depth_readback);Destroy(stencil_readback);
             fence.reset();
             if(pool)vkDestroyCommandPool(dev,pool,nullptr);
             vkDestroyDevice(dev,nullptr);
@@ -270,13 +271,14 @@ struct VulkanCore{
         }
         if(depth_format==VK_FORMAT_UNDEFINED)throw std::runtime_error("No depth/stencil format");
         VkImageFormatProperties source_properties{},sample_properties{};
-        depth_snapshot_supported=
+        depth_readback_supported=
             vkGetPhysicalDeviceImageFormatProperties(physical,depth_format,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,
-                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&source_properties)==VK_SUCCESS&&
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&source_properties)==VK_SUCCESS;
+        depth_snapshot_supported=depth_readback_supported&&
             vkGetPhysicalDeviceImageFormatProperties(physical,depth_format,VK_IMAGE_TYPE_2D,VK_IMAGE_TILING_OPTIMAL,
                 VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,0,&sample_properties)==VK_SUCCESS;
         CreateImage(depth,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|
-            (depth_snapshot_supported?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0),depth_format,VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT);
+            (depth_readback_supported?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0),depth_format,VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT);
         for(unsigned i=0;i<4;++i){CreateImage(textures[i],2,2,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);tex_width[i]=tex_height[i]=2;}
         // Constant-color image is a synthetic sampled texture, not a guest decoder test.
         Begin();
@@ -359,7 +361,7 @@ struct VulkanCore{
                 throw std::invalid_argument("Vulkan depth attachment initialization unavailable");
             const VkImageAspectFlags aspect=VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT;
             CreateImage(next,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|
-                (depth_snapshot_supported?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0),depth_format,aspect);
+                (depth_readback_supported?VK_IMAGE_USAGE_TRANSFER_SRC_BIT:0),depth_format,aspect);
             // Initialize layouts for LOAD render passes without discarding
             // the current color. These defaults are not guest-valid until
             // the title explicitly clears the corresponding aspect.
@@ -517,6 +519,54 @@ struct VulkanCore{
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
         wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+    }
+    // Vulkan copies each aspect in its own buffer representation. Xbox
+    // LIN_D24S8 instead stores depth in bits 31:8 and stencil in bits 7:0
+    // (XboxXBERecomp DepthTexel). No layout changes escape this operation.
+    std::vector<uint32_t> ReadDepthStencil(unsigned slot){
+        if(!depth_readback_supported||slot>=DepthSlots)
+            throw std::logic_error("Vulkan depth readback unsupported");
+        const auto& source=slot==active_depth_slot?depth:parked_depth[slot];
+        if(!source.image)throw std::logic_error("Missing Vulkan depth readback source");
+        const size_t count=size_t(W)*H;
+        FlushBatch();
+        EnsureBuffer(depth_readback,count*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        EnsureBuffer(stencil_readback,count,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+        constexpr VkImageAspectFlags aspects=VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT;
+        constexpr VkPipelineStageFlags tests=VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        constexpr VkAccessFlags access=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        Begin();
+        Transition(source.image,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            access,VK_ACCESS_TRANSFER_READ_BIT,tests,VK_PIPELINE_STAGE_TRANSFER_BIT,1,1,aspects);
+        VkBufferImageCopy copy{};copy.imageSubresource={VK_IMAGE_ASPECT_DEPTH_BIT,0,0,1};copy.imageExtent={W,H,1};
+        vkCmdCopyImageToBuffer(cmd,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,depth_readback.b,1,&copy);
+        copy.imageSubresource.aspectMask=VK_IMAGE_ASPECT_STENCIL_BIT;
+        vkCmdCopyImageToBuffer(cmd,source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,stencil_readback.b,1,&copy);
+        Transition(source.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            VK_ACCESS_TRANSFER_READ_BIT,access,VK_PIPELINE_STAGE_TRANSFER_BIT,tests,1,1,aspects);
+        VkBufferMemoryBarrier barriers[2]{};
+        for(unsigned i=0;i<2;++i){
+            auto& b=barriers[i];b.sType=VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+            b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+            b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            b.buffer=i?stencil_readback.b:depth_readback.b;b.size=VK_WHOLE_SIZE;
+        }
+        vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,2,barriers,0,nullptr);
+        Submit();
+        std::vector<uint32_t> packed(count);
+        const auto* bytes=static_cast<const uint8_t*>(depth_readback.data);
+        const auto* stencil=static_cast<const uint8_t*>(stencil_readback.data);
+        for(size_t i=0;i<count;++i){
+            uint32_t bits;std::memcpy(&bits,bytes+4*i,4);
+            uint32_t z=bits&0xffffffu; // Vulkan X8_D24_UNORM_PACK32 depth aspect
+            if(depth_format==VK_FORMAT_D32_SFLOAT_S8_UINT){
+                float f=std::bit_cast<float>(bits);
+                if(!std::isfinite(f)||f<0||f>1)throw std::logic_error("Invalid Vulkan depth readback value");
+                z=uint32_t(std::lround(double(f)*16777215.0));
+            }
+            packed[i]=(z<<8)|stencil[i];
+        }
+        return packed;
     }
     void UploadGuestTexture(uint32_t header,unsigned stage=0,uint32_t palette=0){
         if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
