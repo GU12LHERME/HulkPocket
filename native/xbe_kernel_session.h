@@ -70,14 +70,18 @@ private:
     std::map<uint32_t,InputHandle> input_handles_;
     HulkPadScript pad_script_;
     unsigned input_frame_=0;
-    void RefreshPreviewPorts(){
+    void RefreshPreviewPorts(bool connected){
         if(!gamepad_type_||!preview_host.enabled.load())return;
-        const uint32_t current=preview_host.Poll().first?1u:0u;
+        const uint32_t current=connected?1u:0u;
         const auto old=mem_.Read32(gamepad_type_);
         if(old!=current){
             mem_.Write32(gamepad_type_,current);
             mem_.Write32(gamepad_type_+4,mem_.Read32(gamepad_type_+4)|(old^current));
         }
+    }
+    void RefreshPreviewPorts(){
+        if(gamepad_type_&&preview_host.enabled.load())
+            RefreshPreviewPorts(preview_host.Poll().first);
     }
     // Objects remain owned by the session until shutdown, including bodies
     // held by in-flight waits. References are tracked independently of handles.
@@ -684,6 +688,11 @@ private:
         if(preview_host.enabled.load()&&preview_host.stop.load())
             throw std::runtime_error("Android preview stop requested");
         Pause(cpu,lock);
+        // XGetDevices can inspect the guest record without an input hook.
+        // Publish hotplug state at ordinary guest boundaries as well as swaps,
+        // including during loading or when the title has not opened a pad.
+        if(ordinal!=kXapiInputGetState&&ordinal!=kXapiInputGetCapabilities&&
+           ordinal!=kXapiInputSetState)RefreshPreviewPorts();
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
         // Advance wall-clock audio even while the guest is rendering or
         // doing I/O rather than explicitly calling DirectSoundDoWork.
@@ -848,9 +857,10 @@ private:
                 auto it=input_handles_.find(Arg(cpu,0));
                 if(it==input_handles_.end()){Ret(cpu,2,6);return;}
                 auto& h=it->second;
-                RefreshPreviewPorts();
                 const auto physical=preview_host.Poll();
                 const bool live_input=preview_host.enabled.load();
+                // Publish the same snapshot used to answer this call.
+                if(live_input)RefreshPreviewPorts(physical.first);
                 if(h.port!=0||!(live_input?physical.first:pad_script_.Enabled())){Ret(cpu,2,1167);return;}
                 const auto out=Arg(cpu,1);
                 if(ordinal==kXapiInputGetState){

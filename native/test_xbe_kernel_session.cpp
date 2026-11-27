@@ -110,6 +110,39 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     unsetenv("HULK_INPUT_SCRIPT");unsetenv("HULK_FRAME_LIMIT");
     c->ecx=0x12b00;c->edx=0x12b20;
     call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
+    // Physical provider hotplug must be visible even without rendering or
+    // XInput polling. Ordinary kernel calls publish the XPP device record.
+    preview_host.enabled.store(true);
+    preview_host.Input(false,{});
+    c->ecx=0x12b00;c->edx=0x12b20;
+    call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
+    assert(memory->Read32(0x12b00)==0&&memory->Read32(0x12b04)==0);
+    HulkPadScript::State physical_pad{};physical_pad[0]=16;physical_pad[2]=255;
+    preview_host.Input(true,physical_pad);
+    call(*c,base,cb,127,{});
+    assert(memory->Read32(0x12b00)==1&&memory->Read32(0x12b04)==1);
+    memory->Write32(0x12b04,0); // guest consumes change notification
+    call(*c,base,cb,kXapiInputOpen,{0x12b00,0,0,0});pad_handle=c->eax;assert(pad_handle);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==0&&memory->Read32(0x12b40)==1&&memory->Read32(0x12b44)==0x00ff0010u);
+    assert(memory->Read32(0x12b04)==0);
+    physical_pad[0]=0;preview_host.Input(true,physical_pad);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==0&&memory->Read32(0x12b40)==2);
+    preview_host.Input(false,{});
+    call(*c,base,cb,127,{});
+    assert(memory->Read32(0x12b00)==0&&memory->Read32(0x12b04)==1);
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==1167&&memory->Read32(0x12b40)==2);
+    memory->Write32(0x12b04,0);
+    preview_host.Input(true,{});
+    call(*c,base,cb,kXapiInputGetState,{pad_handle,0x12b40});
+    assert(c->eax==0&&memory->Read32(0x12b00)==1&&memory->Read32(0x12b04)==1);
+    assert(memory->Read32(0x12b40)==3&&memory->Read32(0x12b44)==0);
+    call(*c,base,cb,kXapiInputClose,{pad_handle});
+    preview_host.Input(false,{});preview_host.enabled.store(false);
+    c->ecx=0x12b00;c->edx=0x12b20;
+    call(*c,base,cb,kXapiInitDevices,{0,0});assert(c->eax==0);
     HulkPadScript script;script.Configure("0:START,30:A,60:LY+",120);
     assert(script.At(0)[0]==16&&script.At(11)[0]==16&&script.At(12)[0]==0);
     assert(script.At(30)[2]==255&&script.At(42)[2]==0&&script.At(60)[12]==255&&script.At(60)[13]==127);
