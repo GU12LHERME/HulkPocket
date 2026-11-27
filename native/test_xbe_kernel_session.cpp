@@ -268,6 +268,37 @@ int entry(X86Context* c,uint8_t* base,uint32_t addr,XbeKernelSession::Callback c
     call(*c,base,cb,230,{signal_event,signal_event,0,0,0});assert(c->eax==0);
     call(*c,base,cb,233,{signal_event,0,0x12820});assert(c->eax==0x102);
     call(*c,base,cb,187,{signal_event});assert(c->eax==0);
+    // A guest DirectSound stream can wait for packet completion without
+    // DirectSoundDoWork, a renderer or another guest thread making calls.
+    // Exercise real kernel dispatch, audio mixer and auto-reset event.
+    assert(setenv("HULK_RENDERER","vulkan",1)==0);
+    preview_host.enabled.store(true);
+    call(*c,base,cb,kSoundCreate,{0,0x13000,0});assert(c->eax==0);
+    const auto ds=memory->Read32(0x13000);
+    const uint8_t stream_fmt[]={1,0,1,0,0x80,0xbb,0,0,0,0x77,1,0,2,0,16,0,0,0};
+    memory->Write(0x13020,stream_fmt,sizeof(stream_fmt));
+    const uint32_t desc[]={0,1,0x13020,0,0,0};
+    memory->Write(0x13040,desc,sizeof(desc));
+    c->ecx=0x13080;c->edx=0x13084;
+    call(*c,base,cb,kSoundNewStream,{0x13040,0x13004});assert(c->eax==0);
+    const auto stream=memory->Read32(0x13004);
+    call(*c,base,cb,189,{0x13008,0,1,0});assert(c->eax==0);
+    const auto audio_event=memory->Read32(0x13008);
+    std::vector<int16_t> audio(4800,1000);
+    memory->Write(0x14000,audio.data(),audio.size()*sizeof(int16_t));
+    const uint32_t packet[]={0x14000,9600,0x1300c,0x13010,audio_event};
+    memory->Write(0x13060,packet,sizeof(packet));
+    call(*c,base,cb,kSoundStreamProcess,{stream,0x13060,0});assert(c->eax==0);
+    assert(memory->Read32(0x13010)==0x8000000au);
+    const int64_t audio_deadline=-20000000;
+    memory->Write(0x13090,&audio_deadline,8);
+    call(*c,base,cb,233,{audio_event,0,0x13090});
+    assert(c->eax==0&&memory->Read32(0x1300c)==9600&&memory->Read32(0x13010)==0);
+    call(*c,base,cb,233,{audio_event,0,0x12820});assert(c->eax==0x102);
+    call(*c,base,cb,kSoundStreamRelease,{stream});assert(c->eax==0);
+    call(*c,base,cb,kSoundReleaseDevice,{ds});assert(c->eax==0);
+    call(*c,base,cb,187,{audio_event});assert(c->eax==0);
+    preview_host.enabled.store(false);unsetenv("HULK_RENDERER");
     // Requests for non-recompiled executable images return the same
     // error as the upstream XAPI replacement instead of rebooting.
     const char launch[]="C:\\xboxdash.xbe";

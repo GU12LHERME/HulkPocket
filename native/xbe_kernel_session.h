@@ -453,11 +453,11 @@ private:
         }
     }
     bool PreviewAudioClock()const{
-#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
-        return preview_host.enabled.load()&&VulkanPreviewSelected();
-#else
-        return false;
-#endif
+        // Audio scheduling is independent of a graphics device. This
+        // explicit preview mode is also exercised by the headless guest
+        // integration test without a Vulkan loader or proprietary XBE.
+        const char* renderer=std::getenv("HULK_RENDERER");
+        return preview_host.enabled.load()&&renderer&&std::strcmp(renderer,"vulkan")==0;
     }
     Steady::time_point NextTimer(Steady::time_point deadline){
         for(const auto& item:timers_)deadline=std::min(deadline,item.second.due);
@@ -765,7 +765,11 @@ private:
             case kSoundGetEffectData:Check(cpu,5);Ret(cpu,5,sound_.GetEffectData(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4)));return;
             case kSoundFullHrtf:Check(cpu,0);sound_.SelectFullHrtf();Ret(cpu,0,0);return;
             case kSoundSetEffectData:Check(cpu,6);Ret(cpu,6,sound_.SetEffectData(Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5)));return;
-            case kSoundSynchPlayback:Check(cpu,1);sound_.Pump();Ret(cpu,1,sound_.SynchPlayback(Arg(cpu,0)));return;
+            case kSoundSynchPlayback:{
+                Check(cpu,1);sound_.Pump();auto result=sound_.SynchPlayback(Arg(cpu,0));Ret(cpu,1,result);
+                if(PreviewAudioClock()&&!result&&sound_.HasPendingPlayback())cv_.notify_all();
+                return;
+            }
             case kSoundPump:Check(cpu,0);sound_.Pump();Ret(cpu,0,0);ServiceSoundDone(cpu,lock);return;
             case kSoundNewStream:case kSoundNewDeviceStream:{
                 unsigned n=ordinal==kSoundNewStream?2:4;Check(cpu,n);
@@ -789,6 +793,10 @@ private:
                     }
                 }
                 sound_.Pump();auto result=sound_.Stream(a[0],ordinal,a);Ret(cpu,n,result);
+                // Other guest threads may already be sleeping indefinitely
+                // with no timer or playback pending when a producer queues
+                // or resumes a stream. Recompute their cooperative deadline.
+                if(PreviewAudioClock()&&!result&&sound_.HasPendingPlayback())cv_.notify_all();
                 if(ordinal==kSoundStreamFlush||ordinal==kSoundStreamFlushEx||ordinal==kSoundStreamRelease||ordinal==kSoundStreamFormat)
                     ServiceSoundDone(cpu,lock);
                 return;
@@ -823,7 +831,9 @@ private:
                 sound_.Pump();
                 std::array<uint32_t,8> a{};
                 for(unsigned i=0;i<n;++i)a[i]=Arg(cpu,i);
-                Ret(cpu,n,sound_.Buffer(a[0],ordinal,a));return;
+                auto result=sound_.Buffer(a[0],ordinal,a);Ret(cpu,n,result);
+                if(PreviewAudioClock()&&!result&&sound_.HasPendingPlayback())cv_.notify_all();
+                return;
             }
             case kGraphicsRefillScratch:{
                 Check(cpu,0);
