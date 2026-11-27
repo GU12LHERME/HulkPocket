@@ -74,6 +74,7 @@ struct VulkanCore{
     std::array<Image,4> textures{};
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1},tex_depth{1,1,1,1};
     std::array<bool,4> tex_rect{},tex_cube{};
+    std::array<uint8_t,4> tex_shadow{};
     std::array<std::vector<uint8_t>,4> last_pixels{};
     // Exact byte snapshots avoid repeated unswizzling/BC expansion.
     // No guest dirty flag is required: compare all source bytes on every bind.
@@ -86,7 +87,7 @@ struct VulkanCore{
     std::array<RawTexture,4> raw_textures{};
     uint64_t texture_decodes=0,raw_texture_hits=0,texture_uploads=0;
     std::array<VkSampler,4> stage_samplers{};
-    std::array<std::array<uint32_t,11>,4> stage_sampler_keys{};
+    std::array<std::array<uint32_t,13>,4> stage_sampler_keys{};
     bool sampler_anisotropy=false;
     VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
@@ -194,10 +195,10 @@ struct VulkanCore{
         ++queue_submissions;
     }
     void Transition(VkImage im,VkImageLayout old,VkImageLayout next,VkAccessFlags src,VkAccessFlags dst,
-                    VkPipelineStageFlags before,VkPipelineStageFlags after,uint32_t levels=1,uint32_t layers=1){
+                    VkPipelineStageFlags before,VkPipelineStageFlags after,uint32_t levels=1,uint32_t layers=1,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT){
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=im;b.oldLayout=old;b.newLayout=next;
         b.srcAccessMask=src;b.dstAccessMask=dst;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,levels,0,layers};
+        b.subresourceRange={aspect,0,levels,0,layers};
         vkCmdPipelineBarrier(cmd,before,after,0,0,nullptr,0,nullptr,1,&b);
     }
     void Init(uint32_t width=64,uint32_t height=64){
@@ -327,6 +328,7 @@ struct VulkanCore{
         // SCDA StageSampler maps Xbox MAXMIPLEVEL to the most detailed
         // allowed mip and MIPMAPLODBIAS to a float. Keep all effective
         // fields in the descriptor cache key; never approximate border color.
+        const bool shadow=tex_shadow[stage]!=0;
         const auto address_w=tex_depth[stage]>1?t[gpu::kTssAddressW]:3u;
         const bool border=t[gpu::kTssAddressU]==4||t[gpu::kTssAddressV]==4||address_w==4;
         const float bias=std::bit_cast<float>(t[gpu::kTssMipLodBias]);
@@ -335,11 +337,20 @@ struct VulkanCore{
         const auto lod=std::min(t[gpu::kTssMaxMipLevel],tex_levels[stage]-1);
         const auto effective_bias=std::clamp(bias,-limits.maxSamplerLodBias,limits.maxSamplerLodBias);
         const bool anisotropic=t[gpu::kTssMinFilter]==3||t[gpu::kTssMagFilter]==3;
-        const auto requested_aniso=anisotropic?std::max(1u,t[gpu::kTssMaxAnisotropy]):1u;
+        const auto requested_aniso=anisotropic&&!shadow?std::max(1u,t[gpu::kTssMaxAnisotropy]):1u;
         if(requested_aniso>1&&!sampler_anisotropy)
             throw std::invalid_argument("Xbox anisotropic filter requires Vulkan samplerAnisotropy");
         const float aniso=requested_aniso>1?std::min(float(requested_aniso),limits.maxSamplerAnisotropy):1.f;
-        std::array<uint32_t,11> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso),address_w};
+        // SCDA swaps the compare direction: Xbox compares texel OP r,
+        // Vulkan compares r OP texel.
+        uint32_t compare=0;
+        if(shadow){
+            const auto fn=s.rs[gpu::kRsShadowFunc];
+            if(fn<0x200||fn>0x207||lod||effective_bias||border)
+                throw std::invalid_argument("Unsupported Xbox shadow sampler profile");
+            constexpr uint32_t swap[]={0,4,2,6,1,5,3,7};compare=swap[fn-0x200];
+        }
+        std::array<uint32_t,13> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso),address_w,uint32_t(shadow),compare};
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
         auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;case 4:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
         auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2||v==3)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
@@ -348,6 +359,13 @@ struct VulkanCore{
         ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=key[4]==2?VK_SAMPLER_MIPMAP_MODE_LINEAR:VK_SAMPLER_MIPMAP_MODE_NEAREST;
         ci.mipLodBias=effective_bias;ci.minLod=float(lod);ci.maxLod=key[4]?float(key[5]-1):ci.minLod;
         ci.anisotropyEnable=aniso>1.f;ci.maxAnisotropy=aniso;
+        if(shadow){
+            VkFormatProperties properties{};vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_D32_SFLOAT,&properties);
+            if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+                ci.minFilter=ci.magFilter=VK_FILTER_NEAREST;
+            ci.compareEnable=VK_TRUE;ci.compareOp=static_cast<VkCompareOp>(compare);
+            ci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;ci.minLod=ci.maxLod=0;
+        }
         if(border){
             switch(key[8]){
                 case 0:ci.borderColor=VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;break;
@@ -370,14 +388,14 @@ struct VulkanCore{
     void SnapshotColorTexture(unsigned stage){
         if(stage>=textures.size()||!frame_valid)throw std::invalid_argument("Invalid framebuffer texture snapshot");
         FlushBatch();
-        bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1||tex_cube[stage]||tex_depth[stage]!=1;
+        bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1||tex_cube[stage]||tex_depth[stage]!=1||tex_shadow[stage];
         auto& texture=textures[stage];
         if(resize){
             Destroy(texture);
             CreateImage(texture,W,H,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,1);
             tex_width[stage]=W;tex_height[stage]=H;tex_levels[stage]=1;tex_depth[stage]=1;
         }
-        tex_rect[stage]=true;tex_cube[stage]=false;
+        tex_rect[stage]=true;tex_cube[stage]=false;tex_shadow[stage]=0;
         // GPU copies are not represented by the CPU decoded-pixel cache.
         last_pixels[stage].clear();raw_textures[stage]={};
         Begin();
@@ -408,6 +426,16 @@ struct VulkanCore{
            (desc.cube&&(desc.linear||desc.depth!=1||desc.width!=desc.height||desc.width>limits.maxImageDimensionCube||limits.maxImageArrayLayers<6)))
             throw std::invalid_argument("Invalid Vulkan mip or cube extent");
         const unsigned faces=desc.cube?6:1;
+        const auto shadow=ShadowKind(desc.format);
+        const VkImageAspectFlags aspect=shadow?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT;
+        if(shadow){
+            if(desc.depth!=1||desc.cube||desc.levels!=1||palette)
+                throw std::invalid_argument("Unsupported Xbox depth texture shape");
+            VkFormatProperties properties{};vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_D32_SFLOAT,&properties);
+            if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)||
+               !(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_TRANSFER_DST_BIT))
+                throw std::invalid_argument("Vulkan D32 sampled depth upload unavailable");
+        }
         // Bound arithmetic before asking for a checked guest span. Only
         // layouts already successfully decoded can ever hit this cache.
         auto& raw=raw_textures[stage];
@@ -449,11 +477,11 @@ struct VulkanCore{
             auto p=hulkpocket::vkexp::GuestTexture(header,palette,level,face);
             if(p.rgba.size()!=size_t(p.width)*p.height*p.depth*4||p.rgba.size()>64ull*1024*1024-pixels.size())
                 throw std::invalid_argument("Decoded Vulkan mip chain exceeds bound");
-            VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,face,1};copy.imageExtent={p.width,p.height,p.depth};
+            VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={aspect,level,face,1};copy.imageExtent={p.width,p.height,p.depth};
             copies.push_back(copy);pixels.insert(pixels.end(),p.rgba.begin(),p.rgba.end());
         }
         tex_rect[stage]=desc.linear;
-        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube||tex_depth[stage]!=desc.depth;
+        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube||tex_depth[stage]!=desc.depth||tex_shadow[stage]!=shadow;
         if(!resize&&last_pixels[stage]==pixels){remember();return;}
         FlushBatch();
         EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
@@ -461,15 +489,15 @@ struct VulkanCore{
         auto& texture=textures[stage];
         if(resize){
             Destroy(texture);
-            CreateImage(texture,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,desc.levels,desc.cube,desc.depth);
-            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;tex_cube[stage]=desc.cube;tex_depth[stage]=desc.depth;
+            CreateImage(texture,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,shadow?VK_FORMAT_D32_SFLOAT:Format,aspect,desc.levels,desc.cube,desc.depth);
+            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;tex_cube[stage]=desc.cube;tex_depth[stage]=desc.depth;tex_shadow[stage]=shadow;
         }
         Begin();
         Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
-                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,desc.levels,faces);
+                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,desc.levels,faces,aspect);
         vkCmdCopyBufferToImage(cmd,staging.b,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,uint32_t(copies.size()),copies.data());
-        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,desc.levels,faces);
+        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,desc.levels,faces,aspect);
         Submit();
         VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
@@ -495,7 +523,7 @@ struct VulkanCore{
         if(dynamic){
             if(!override_state||!guest)throw std::invalid_argument("Missing dynamic draw state");
             gpu::TexInfo tex[4]{};
-            for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=tex_cube[i]?gpu::kTexCube:tex_depth[i]>1?gpu::kTex3D:gpu::kTex2D;tex[i].rect=tex_rect[i];}
+            for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=tex_cube[i]?gpu::kTexCube:tex_depth[i]>1?gpu::kTex3D:gpu::kTex2D;tex[i].rect=tex_rect[i];tex[i].shadow=tex_shadow[i];}
             vertex=shaders.Vertex(*override_state,*guest);
             fragment=shaders.Pixel(*override_state,tex);
         }else{

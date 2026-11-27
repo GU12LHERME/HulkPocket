@@ -397,6 +397,14 @@ public:
                 gpu::CheckedGuestRange(d.data,bytes);
                 gpu::CheckedGuestRange(gpu::PhysicalResourceAddress(address),1024);
                 palettes[st]=palette;
+            }else if(gpu::Format(d.format).depth){
+                const auto format=state_.simple[(base+4)/4],offset=state_.simple[base/4];
+                const auto bytes=uint64_t(d.width)*d.height*gpu::Format(d.format).bits/8;
+                if((format&3)!=1||(format&4)||((format>>4)&15)!=2||(format>>28)||
+                   offset%4||offset>=0x04000000u||((format>>16)&15)!=1||
+                   !bytes||uint64_t(offset)+bytes>0x04000000u)
+                    throw std::logic_error("Unsupported raw NV2A shadow texture layout");
+                gpu::CheckedGuestRange(d.data,bytes);
             }else if(d.depth>1){
                 const auto format=state_.simple[(base+4)/4],offset=state_.simple[base/4];
                 const auto bytes=CheckedVolumeBytes(d);
@@ -524,7 +532,7 @@ public:
                     throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
                 if(textures[st]){
                     gpu::TextureDesc d{};
-                    if(!gpu::Describe(textures[st],d)||d.cube!=(mode==3)||(d.depth>1)!=(mode==2))
+                    if(!gpu::Describe(textures[st],d)||d.cube!=(mode==3)||((d.depth>1||gpu::Format(d.format).depth)!=(mode==2)))
                         throw std::logic_error("Captured texture dimension disagrees with pixel stage mode");
                 }
                 if(mode==6||mode==7){
@@ -661,6 +669,8 @@ public:
         // Depth and signed bump-map data still require separate translation.
         switch(d.format){
             case 0x0b:if(!allow_palette)return false;break;
+            case 0x2a:case 0x2c:case 0x2e:case 0x30:
+                if(!allow_palette||d.cube||d.depth!=1||d.levels!=1)return false;break;
             case 0x00:case 0x01:case 0x02:case 0x03:case 0x04:case 0x05:
             case 0x06:case 0x07:case 0x0c:case 0x0e:case 0x0f:
             case 0x10:case 0x11:case 0x12:case 0x13:case 0x19:case 0x1a:
@@ -876,9 +886,9 @@ public:
                 if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0)
                     throw std::logic_error("Captured fixed vertex path requires declared UV set");
                 gpu::TextureDesc d{};
-                if(replay.textures[st]&&gpu::Describe(replay.textures[st],d)&&(d.cube||d.depth>1)){
+                if(replay.textures[st]&&gpu::Describe(replay.textures[st],d)&&(d.cube||d.depth>1||gpu::Format(d.format).depth)){
                     const auto type=layout.inputs[9+set].type;
-                    if((!flags&&type!=0x32&&type!=0x42)||(flags&&components<3)||(!state_.ps&&(flags&0x100)))
+                    if((!flags&&type!=0x32&&type!=0x42)||(flags&&components<3)||(!state_.ps&&(flags&0x100)&&!gpu::Format(d.format).depth))
                         throw std::logic_error("Unsupported cube or volume coordinate layout");
                 }
             }
@@ -886,8 +896,13 @@ public:
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
                     gpu::kRsStencilEnable,gpu::kRsStencilFail,gpu::kRsCullMode,gpu::kRsFillMode,gpu::kRsBackFillMode,
                     gpu::kRsFogEnable,gpu::kRsFogTableMode,gpu::kRsFogStart,gpu::kRsFogEnd,gpu::kRsFogDensity,gpu::kRsFogColor,
-                    gpu::kRsTextureFactor})
+                    gpu::kRsTextureFactor,gpu::kRsShadowFunc})
             replay.rs[r]=state_.rs[r];
+        if(allow_fixed&&push_constants_.shadow_compare_seen){
+            // NV097 raw order (nxdk) is the reversed D3DCMP ordering.
+            constexpr uint32_t swap[]={0,4,2,6,1,5,3,7};
+            replay.rs[gpu::kRsShadowFunc]=0x200+swap[push_constants_.shadow_compare];
+        }
         if(fixed&&lighting)for(auto r:{gpu::kRsLighting,gpu::kRsLocalViewer,gpu::kRsColorVertex,
             gpu::kRsNormalizeNormals,gpu::kRsDiffuseMaterialSource,gpu::kRsSpecularMaterialSource,
             gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient})

@@ -235,8 +235,27 @@ int main(int argc,char** argv){
             if(f.texture_decodes!=volume_decoded)throw std::runtime_error("Unchanged volume cache miss");
             memory.Write((0x80000000u|cube_phys)+16,white,sizeof(white));f.UploadGuestTexture(cube_header);
             sample_volume(.75f,{255,255,255,255});
+            // Guest-memory integer depth, tested through the shared
+            // comparison shader and Vulkan comparison sampler.
+            memory.Write32(cube_header+12,0x01112c21);
+            const uint16_t d16[]={0xc000,0xc000,0xc000,0xc000};
+            memory.Write(0x80000000u|cube_phys,d16,sizeof(d16));
+            f.UploadGuestTexture(cube_header);
+            cube_state.rs[kRsShadowFunc]=0x204;f.SetSampler(0,cube_state);
+            sample_volume(32768.f,{255,255,255,255});
+            cube_state.rs[kRsShadowFunc]=0x201;f.SetSampler(0,cube_state);
+            sample_volume(32768.f,{0,0,0,0});
+            memory.Write32(cube_header+12,0x01112a21);
+            const uint32_t d24[]={0xc0000000,0xc0000000,0xc0000000,0xc0000000};
+            memory.Write(0x80000000u|cube_phys,d24,sizeof(d24));
+            f.UploadGuestTexture(cube_header);
+            cube_state.rs[kRsShadowFunc]=0x204;f.SetSampler(0,cube_state);
+            cube_state.ps=std::make_shared<gpu::PixelShader>();cube_state.ps->def[8]=8;cube_state.ps->def[9]=0x1800;
+            cube_state.rs[kRsPsTextureModes]=2;
+            sample_volume(8388608.f,{255,255,255,255});
+            cube_state.ps.reset();
             f.UploadGuestTexture(tex);
-            if(f.tex_cube[0]||f.tex_depth[0]!=1)throw std::runtime_error("Volume view retained on 2D rebind");
+            if(f.tex_cube[0]||f.tex_depth[0]!=1||f.tex_shadow[0])throw std::runtime_error("Depth/volume view retained on 2D rebind");
             memory.Write(0x80100100,compact,sizeof(compact));
             if(!GuestDraw(guest_state,5,0,3,0,assembled))throw std::runtime_error("Restore compact geometry");
         }

@@ -69,6 +69,8 @@ struct Nv2aConstantCursor {
     std::bitset<4> palette_seen{};
     // Keep raw texgen and v11 current attribute across setter snapshots.
     std::array<std::array<uint32_t,4>,4> texgen{};
+    bool shadow_compare_seen=false;
+    uint32_t shadow_compare=0;
     bool current_v11_seen=false;
     uint32_t current_v11=0;
     // Surface state writes may be split between scratch drains. Validate
@@ -201,6 +203,10 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         if(m==0x1710){
             if(v)throw std::logic_error("Unsupported vertex cache break argument");
             continue;
+        }
+        if(capture_combiner&&m==0x1e6c){
+            if(v>7)throw std::logic_error("Invalid NV2A shadow compare");
+            next.shadow_compare_seen=true;next.shadow_compare=v;simple[m/4]=v;continue;
         }
         if(capture_combiner&&(m==gpu::kMBlendColor||m==gpu::kMStencilWriteMask||m==gpu::kMStencilFunc||m==gpu::kMStencilRef||
            m==gpu::kMStencilMask||m==gpu::kMStencilZFail||m==gpu::kMStencilPass||

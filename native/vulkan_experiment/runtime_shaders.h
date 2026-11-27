@@ -50,7 +50,7 @@ public:
     }
     std::vector<uint32_t> Pixel(const gpu::State& s,const gpu::TexInfo (&tex)[4]){
         for(unsigned i=0;i<4;++i)
-            if(bool(s.textures[i])!=bool(tex[i].kind)||(tex[i].kind!=gpu::kTexNone&&tex[i].kind!=gpu::kTex2D&&tex[i].kind!=gpu::kTex3D&&tex[i].kind!=gpu::kTexCube)||tex[i].shadow||tex[i].flags)
+            if(bool(s.textures[i])!=bool(tex[i].kind)||(tex[i].kind!=gpu::kTexNone&&tex[i].kind!=gpu::kTex2D&&tex[i].kind!=gpu::kTex3D&&tex[i].kind!=gpu::kTexCube)||(tex[i].shadow&&(tex[i].shadow>2||tex[i].kind!=gpu::kTex2D))||tex[i].flags)
                 throw std::invalid_argument("Unsupported runtime texture binding");
         auto key=gpu::MakePixelKey(s,tex);
         if(s.ps){
@@ -64,7 +64,8 @@ public:
                     throw std::invalid_argument("Unsupported Vulkan programmable texture mode");
                 if((raw==1||dependent)&&tex[i].kind!=gpu::kTex2D)
                     throw std::invalid_argument("Missing programmable 2D texture");
-                if(raw==2&&tex[i].kind!=gpu::kTex3D)
+                if(tex[i].shadow&&raw!=2)throw std::invalid_argument("Depth texture requires project3D mode");
+                if(raw==2&&tex[i].kind!=gpu::kTex3D&&!tex[i].shadow)
                     throw std::invalid_argument("Missing programmable volume texture");
                 if(raw==3&&tex[i].kind!=gpu::kTexCube)
                     throw std::invalid_argument("Missing programmable cube texture");

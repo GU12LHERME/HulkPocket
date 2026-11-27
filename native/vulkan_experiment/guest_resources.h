@@ -13,19 +13,28 @@ struct TexturePixels {
     std::vector<uint8_t> rgba;
     uint32_t depth=1;
 };
+// Only integer depth formats have the shared shadow shader's exact range.
+inline uint8_t ShadowKind(uint32_t format){
+    switch(format){case 0x2a:case 0x2e:return 1;case 0x2c:case 0x30:return 2;default:return 0;}
+}
 inline TexturePixels GuestTexture(uint32_t header,uint32_t palette=0,uint32_t level=0,uint32_t face=0){
     gpu::TextureDesc d{};
     if(!gpu::Describe(header,d)||!d.depth||(d.cube&&(d.linear||d.width!=d.height||d.depth!=1))||!d.width||!d.height||d.width>4096||d.height>4096)
         throw std::invalid_argument("Unsupported Xbox color texture");
     if(d.depth>1)(void)CheckedVolumeBytes(d);
     const auto& fmt=gpu::Format(d.format);
-    if(fmt.depth||fmt.host==gpu::Host::None)throw std::invalid_argument("Unsupported Xbox color texture format");
+    if(fmt.host==gpu::Host::None||(fmt.depth&&(!ShadowKind(d.format)||d.cube||d.depth!=1||d.levels!=1||palette)))
+        throw std::invalid_argument("Unsupported Xbox texture format");
     if(d.format==0x0b&&!palette)throw std::invalid_argument("Missing Xbox P8 palette");
     std::vector<uint8_t> decoded;uint32_t pitch=0;
     gpu::DecodeGuestLevel(d,level,face,palette,decoded,pitch);
     d.width=std::max(1u,d.width>>level);d.height=std::max(1u,d.height>>level);d.depth=std::max(1u,d.depth>>level);
     if(fmt.compressed)decoded=DecodeXboxBc(d.width,d.height,fmt.host,decoded);
-    else{
+    else if(fmt.depth){
+        // DecodeGuestLevel emits normalized float32 depth, not BGRA.
+        if(fmt.host!=gpu::Host::R32F||pitch!=d.width*4||decoded.size()!=size_t(d.width)*d.height*4)
+            throw std::invalid_argument("Invalid decoded Xbox depth layout");
+    }else{
         if(fmt.host!=gpu::Host::BGRA8||pitch!=d.width*4||decoded.size()!=size_t(d.width)*d.height*d.depth*4)
             throw std::invalid_argument("Unsupported decoded Xbox texture layout");
         for(size_t i=0;i<decoded.size();i+=4)std::swap(decoded[i],decoded[i+2]);

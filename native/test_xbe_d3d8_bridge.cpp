@@ -38,6 +38,11 @@ int main(){
         assert(cursor.reg==9&&cursor.component==0&&pushed.vsc[8][3]==4);
         ApplyNv2aState(pushed,cursor,{{gpu::kMBlendColor,0x804080c0}},true);
         assert(pushed.simple[gpu::kMBlendColor/4]==0x804080c0);
+        ApplyNv2aState(pushed,cursor,{{0x1e6c,1}},true);
+        assert(cursor.shadow_compare_seen&&cursor.shadow_compare==1);
+        bool bad_compare=false;
+        try{ApplyNv2aState(pushed,cursor,{{0x1e6c,8}},true);}catch(const std::logic_error&){bad_compare=true;}
+        assert(bad_compare&&cursor.shadow_compare==1);
         // Exact RP6 post-CreateDevice packet batch from ef17d47.
         std::vector<Nv2aMethod> disable;
         for(uint32_t stage=0;stage<4;++stage){
