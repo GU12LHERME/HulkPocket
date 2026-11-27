@@ -553,7 +553,11 @@ public:
         // diffuse/specular and texture registers from arbitrary declarations.
         // Only use its checked XYZ subset, not blend weights, point size,
         // tessellation, implicit attributes or pretransformed custom vertices.
-        if(capture_pixel&&!programmable&&!fvf&&flags==0){
+        // XDK FVF-tagged declarations can retain a packed normal rather than
+        // the float3 normal implied by the canonical FVF. Preserve the actual
+        // slots instead of forcing an incompatible canonical layout.
+        const bool packed_fvf=flags==0x400&&Read(uint64_t(ptr)+0x14+16*2+8)==0x16;
+        if(capture_pixel&&!programmable&&!fvf&&(flags==0||packed_fvf)){
             auto layout=std::make_shared<gpu::VertexShader>();
             layout->handle=ptr|1u;
             for(unsigned i=0;i<16;++i){

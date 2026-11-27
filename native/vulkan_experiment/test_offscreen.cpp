@@ -1140,6 +1140,39 @@ int main(int argc,char** argv){
                 bridge.AdoptLiveSetters(multi_state);
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
                 Expect("select first UV set",backend.ReadPixel(32,32),{255,0,0,255});
+                // RP6: FVF-tagged XYZ, packed normal, diffuse, two UVs.
+                // This must retain the original 36-byte layout, not float3 normals.
+                struct PackedTwoUV{float x,y,z;uint32_t normal,color;float u0,v0,u1,v1;};
+                static_assert(sizeof(PackedTwoUV)==36);
+                const PackedTwoUV packed_mesh[]={
+                    {-.75f,-.75f,.5f,0x7fc00000u,0xffffffff,.25f,.25f,.75f,.25f},
+                    {.75f,-.75f,.5f,0x7fc00000u,0xffffffff,.25f,.25f,.75f,.25f},
+                    {0,.75f,.5f,0x7fc00000u,0xffffffff,.25f,.25f,.75f,.25f}};
+                auto put_slot=[&](unsigned k,unsigned offset,unsigned type){
+                    auto at=decl+0x14+16*k;
+                    bridge_mem.Write32(at,0);bridge_mem.Write32(at+4,offset);
+                    bridge_mem.Write32(at+8,type);bridge_mem.Write32(at+12,0);
+                };
+                put_slot(2,12,0x16);put_slot(3,16,0x40);
+                put_slot(9,20,0x22);put_slot(10,28,0x22);
+                bridge_mem.Write32(decl+4,0x400);
+                bridge_mem.Write(0x80114000,packed_mesh,sizeof(packed_mesh));
+                call("D3DDevice_SetStreamSource",{0,buffer,sizeof(PackedTwoUV)});
+                if(bridge.SyncFixedDiffuseShader(device,true)!=(decl|1u)||
+                   bridge.VerifyGuestGeometry(5,0,3,0)!=3)
+                    throw std::runtime_error("FVF-tagged packed normal dual UV capture failed");
+                auto captured_packed=bridge.Snapshot().vs;
+                if(!captured_packed||captured_packed->inputs[2].type!=0x16||
+                   captured_packed->inputs[10].offset!=28||captured_packed->stream_stride[0]!=36)
+                    throw std::runtime_error("Packed normal declaration not preserved");
+                call("D3DDevice_SetStreamSource",{0,buffer,32});
+                bool short_packed=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){short_packed=true;}
+                if(!short_packed)throw std::runtime_error("Out-of-stride packed FVF accepted");
+                put_slot(2,0,0);put_slot(3,12,0x40);
+                put_slot(9,16,0x22);put_slot(10,24,0x22);
+                bridge_mem.Write(0x80114000,mesh,sizeof(mesh));
+                call("D3DDevice_SetStreamSource",{0,buffer,sizeof(TwoUV)});
                 // Same mesh expressed as a custom fixed declaration, not
                 // an FVF or the single previously observed packed layout.
                 bridge_mem.Write32(decl+4,0);
