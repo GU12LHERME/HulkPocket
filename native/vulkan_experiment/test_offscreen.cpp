@@ -327,6 +327,12 @@ int main(int argc,char** argv){
         }
         if(f.pipelines.size()!=VulkanCore::PipelineLimit)throw std::runtime_error("Vulkan pipeline cache not bounded");
         Expect("pipeline cache eviction",f.Pixel(32,32),{0,255,0,255});
+        // Warm both pipeline variants after eviction stress above. A cache
+        // miss at the capacity limit legitimately flushes pending work.
+        // Isolate the readback batching test from that eviction behavior.
+        f.Draw(argv[1],false,false,false);
+        f.Draw(argv[1],false,false,true);
+        f.FlushBatch();
         // Multiple submissions may update color without forcing host transfers.
         auto copies=f.readback_copies,readback_hits_before=f.readback_hits,draws=f.draw_submissions;
         f.ClearFrame(0xf3,0xff0000ff,1,0);
