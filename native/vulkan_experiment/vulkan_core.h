@@ -405,7 +405,7 @@ struct VulkanCore{
                 throw std::invalid_argument("Unsupported Xbox shadow sampler profile");
             constexpr uint32_t swap[]={0,4,2,6,1,5,3,7};compare=swap[fn-0x200];
         }
-        std::array<uint32_t,13> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso),address_w,uint32_t(shadow),compare,uint32_t(tex_depth_snapshot[stage])};
+        decltype(stage_sampler_keys)::value_type key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso),address_w,uint32_t(shadow),compare,uint32_t(tex_depth_snapshot[stage])};
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
         auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;case 4:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
         auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2||v==3)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
