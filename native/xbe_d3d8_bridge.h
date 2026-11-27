@@ -355,15 +355,16 @@ public:
             throw std::logic_error("NV2A program selected without supported vertex declaration");
         // Vulkan can translate multiple checked fixed or programmable
         // stages. Keep the GLES capture restrictions unchanged.
-        std::array<uint32_t,4> textures{};
+        std::array<uint32_t,4> textures{},palettes{};
         for(unsigned st=0;st<4;++st){
             textures[st]=Read(uint64_t(device)+0xf88+4*st);
-            if(Read(uint64_t(device)+0xf98+4*st)||(st&&textures[st]&&!capture_pixel))
+            const auto palette=Read(uint64_t(device)+0xf98+4*st);
+            if(!capture_pixel&&(palette||(st&&textures[st])))
                 throw std::logic_error("Unsupported original texture stage or palette");
             if(!textures[st])continue;
             gpu::TextureDesc d{};
             if(!gpu::Describe(textures[st],d)||d.depth!=1||d.cube||
-               Read(uint64_t(textures[st])+8)||!SupportedDiffuseTexture(d))
+               Read(uint64_t(textures[st])+8)||!SupportedDiffuseTexture(d,capture_pixel))
                 throw std::logic_error("Unsupported original texture resource");
             auto base=0x1b00+st*0x40;
             if(push_constants_.texture_words[st]!=3||
@@ -374,6 +375,28 @@ public:
                 if((state_.simple[(base+0x10)/4]>>16)!=d.pitch||
                    state_.simple[(base+0x1c)/4]!=((d.width<<16)|d.height))
                     throw std::logic_error("Linear texture header disagrees with NV2A pitch or extent");
+            }else if(d.format==0x0b){
+                // X_D3DPalette: Common(type 0x30000, size bits 30..31),
+                // Data, Lock. NV097_SET_TEXTURE_PALETTE: offset bits 6..31,
+                // size bits 2..3, DMA select bit 0. Admit only 256 entries
+                // in DMA A, the same physical memory domain as DMA texture 1.
+                if(!palette||!push_constants_.palette_seen.test(st))
+                    throw std::logic_error("Missing captured P8 palette");
+                gpu::CheckedGuestRange(palette,12);
+                const auto common=Read(palette),address=Read(uint64_t(palette)+4);
+                const auto raw=state_.simple[(base+0x20)/4];
+                const auto format=state_.simple[(base+4)/4],offset=state_.simple[base/4];
+                if((common&0x70000u)!=0x30000u||(common>>30)||Read(uint64_t(palette)+8)||
+                   address>=0x04000000u||address%64||raw!=address||
+                   (format&3)!=1||(format&4)||((format>>4)&15)!=2||(format>>28)||
+                   offset>=0x04000000u||offset%4||!((format>>16)&15))
+                    throw std::logic_error("Unsupported or mismatched NV2A P8 palette binding");
+                const auto bytes=gpu::TotalSize(d);
+                if(!bytes||uint64_t(offset)+bytes>0x04000000u||uint64_t(address)+1024>0x04000000u)
+                    throw std::out_of_range("P8 texture or palette exceeds physical RAM");
+                gpu::CheckedGuestRange(d.data,bytes);
+                gpu::CheckedGuestRange(gpu::PhysicalResourceAddress(address),1024);
+                palettes[st]=palette;
             }else if(gpu::Format(d.format).swizzled){
                 (void)DescribeNv2aSwizzledTexture(state_.simple[base/4],state_.simple[(base+4)/4]);
             }
@@ -482,7 +505,7 @@ public:
                 }
             }
         }
-        next.textures=textures;next.palettes.fill(0);
+        next.textures=textures;next.palettes=palettes;
         next.base_vertex=Read(uint64_t(device)+0x1c);
         // Copy the actual matrices instead of using the standalone identity.
         for(unsigned tr:{0u,1u,6u}){
@@ -594,11 +617,13 @@ public:
         }
         return true;
     }
-    static bool SupportedDiffuseTexture(const gpu::TextureDesc& d){
+    static bool SupportedDiffuseTexture(const gpu::TextureDesc& d,bool allow_palette=false){
         const auto& f=gpu::Format(d.format);
         // Color formats already decoded by the pinned XboxXBERecomp code.
-        // Exclude palette/depth/bump-map signed data and odd packed YUV.
+        // P8 is admitted only by the checked Vulkan live palette path.
+        // Depth and signed bump-map data still require separate translation.
         switch(d.format){
+            case 0x0b:if(!allow_palette)return false;break;
             case 0x00:case 0x01:case 0x02:case 0x03:case 0x04:case 0x05:
             case 0x06:case 0x07:case 0x0c:case 0x0e:case 0x0f:
             case 0x10:case 0x11:case 0x12:case 0x13:case 0x19:case 0x1a:

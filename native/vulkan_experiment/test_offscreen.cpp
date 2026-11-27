@@ -810,6 +810,41 @@ int main(int argc,char** argv){
                 bool missing_uv=false;
                 try{bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);}catch(const std::logic_error&){missing_uv=true;}
                 if(!missing_uv)throw std::runtime_error("Undeclared UV set accepted");
+                // Reuse the live dual-UV draw with a P8 second stage.
+                // Palette changes must reach the actual sampled Vulkan image.
+                constexpr uint32_t palette_header=0x20800,palette_phys=0x115400;
+                bridge_mem.Write32(palette_header,0x30001);
+                bridge_mem.Write32(palette_header+4,palette_phys);
+                bridge_mem.Write32(palette_header+8,0);
+                bridge_mem.Write32(device+0xf9c,palette_header);
+                bridge_mem.Write32(tex1+12,0x01110b29);
+                const uint8_t p8_indices[]={1,1,1,1};
+                bridge_mem.Write(0x80115100,p8_indices,sizeof(p8_indices));
+                std::array<uint32_t,256> live_palette{};live_palette[1]=0xff00ff00;
+                bridge_mem.Write(0x80000000u|palette_phys,live_palette.data(),sizeof(live_palette));
+                write_packet({{0x1b44,0x01110b29},{0x1b60,palette_phys}});
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=1;
+                bridge.AdoptLiveSetters(multi_state);
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("live P8 palette sample",backend.ReadPixel(32,32),{0,128,0,255});
+                live_palette[1]=0xff0000ff;
+                bridge_mem.Write(0x80000000u|palette_phys,live_palette.data(),sizeof(live_palette));
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("live P8 palette mutation",backend.ReadPixel(32,32),{0,0,64,255});
+                write_packet({{0x1b60,palette_phys|4}});
+                bool short_palette=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){short_palette=true;}
+                if(!short_palette)throw std::runtime_error("Unimplemented short palette accepted");
+                write_packet({{0x1b60,palette_phys+64}});
+                bool wrong_palette=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){wrong_palette=true;}
+                if(!wrong_palette)throw std::runtime_error("Mismatched raw palette accepted");
+                bridge_mem.Write32(device+0xf9c,0);
+                bridge_mem.Write32(tex1+12,0x01110629);
+                bridge_mem.Write(0x80115100,different_uv,sizeof(different_uv));
+                write_packet({{0x1b44,0x01110629}});
                 // Check every admitted count and position type with live
                 // textures bound, including even counts that lack bit 8.
                 for(uint32_t uv_count=1;uv_count<=4;++uv_count){

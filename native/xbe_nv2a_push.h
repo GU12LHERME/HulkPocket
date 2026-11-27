@@ -66,6 +66,7 @@ struct Nv2aConstantCursor {
     std::array<bool,4> texture_control{};
     std::bitset<0x800> combiner_seen{};
     std::array<uint8_t,4> bump_seen{};
+    std::bitset<4> palette_seen{};
     // Surface state writes may be split between scratch drains. Validate
     // at the next actual target-use boundary, after guest mirrors update.
     uint8_t surface_pending=0;
@@ -238,6 +239,7 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
                 next.texture_dirty[stage]|=bit;
                 simple[m>>2]=v;next.pending_raw_configuration=true;continue;
             }
+            if(off==0x20&&capture_combiner)next.palette_seen.set(stage);
             if(off==8||off==0x10||off==0x14||off==0x1c||off==0x20||off==0x24){
                 simple[m>>2]=v;next.pending_raw_configuration=true;continue;
             }
