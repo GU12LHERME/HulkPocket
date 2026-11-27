@@ -846,7 +846,7 @@ public:
             gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient})
             replay.rs[r]=state_.rs[r];
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
-                    gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
+                    gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMBlendColor,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
                     gpu::kMShadeMode,gpu::kMStencilWriteMask,gpu::kMStencilFunc,gpu::kMStencilRef,
                     gpu::kMStencilMask,gpu::kMStencilZFail,gpu::kMStencilPass,
                     gpu::kMSolidOffsetEnable,gpu::kMSlopeScale,gpu::kMDepthOffset})

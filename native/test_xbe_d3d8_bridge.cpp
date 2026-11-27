@@ -36,6 +36,8 @@ int main(){
         assert(pushed.simple[gpu::kMBlendEnable>>2]==1&&pushed.vsc[8][0]==1&&pushed.vsc[8][1]==2);
         ApplyNv2aState(pushed,cursor,{{0xb88,0x40400000},{0xb8c,0x40800000}});
         assert(cursor.reg==9&&cursor.component==0&&pushed.vsc[8][3]==4);
+        ApplyNv2aState(pushed,cursor,{{gpu::kMBlendColor,0x804080c0}},true);
+        assert(pushed.simple[gpu::kMBlendColor/4]==0x804080c0);
         // Exact RP6 post-CreateDevice packet batch from ef17d47.
         std::vector<Nv2aMethod> disable;
         for(uint32_t stage=0;stage<4;++stage){

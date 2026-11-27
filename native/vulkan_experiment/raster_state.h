@@ -24,18 +24,23 @@ inline VkStencilOp Stencil(uint32_t v) {
     default:throw std::invalid_argument("Unknown Xbox stencil operation");
     }
 }
-inline VkBlendFactor Blend(uint32_t v) {
+inline VkBlendFactor Blend(uint32_t v,bool alpha=false) {
     switch(v){
     case 0:return VK_BLEND_FACTOR_ZERO;
     case 1:return VK_BLEND_FACTOR_ONE;
-    case 0x300:return VK_BLEND_FACTOR_SRC_COLOR;
-    case 0x301:return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+    case 0x300:return alpha?VK_BLEND_FACTOR_SRC_ALPHA:VK_BLEND_FACTOR_SRC_COLOR;
+    case 0x301:return alpha?VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA:VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
     case 0x302:return VK_BLEND_FACTOR_SRC_ALPHA;
     case 0x303:return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     case 0x304:return VK_BLEND_FACTOR_DST_ALPHA;
     case 0x305:return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-    case 0x306:return VK_BLEND_FACTOR_DST_COLOR;
-    case 0x307:return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    case 0x306:return alpha?VK_BLEND_FACTOR_DST_ALPHA:VK_BLEND_FACTOR_DST_COLOR;
+    case 0x307:return alpha?VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA:VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    case 0x308:return alpha?VK_BLEND_FACTOR_ONE:VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+    case 0x8001:return alpha?VK_BLEND_FACTOR_CONSTANT_ALPHA:VK_BLEND_FACTOR_CONSTANT_COLOR;
+    case 0x8002:return alpha?VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA:VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+    case 0x8003:return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    case 0x8004:return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
     default:throw std::invalid_argument("Unknown Xbox blend factor");
     }
 }
@@ -113,8 +118,11 @@ inline RasterState TranslateRaster(const gpu::State& s){
     if(mask&0x1000000)cb.colorWriteMask|=VK_COLOR_COMPONENT_A_BIT;
     cb.blendEnable=enabled(m(kMBlendEnable));
     if(cb.blendEnable){
-        cb.srcColorBlendFactor=cb.srcAlphaBlendFactor=Blend(m(kMSrcBlend));
-        cb.dstColorBlendFactor=cb.dstAlphaBlendFactor=Blend(m(kMDestBlend));
+        if(m(kMDestBlend)==0x308)throw std::invalid_argument("Invalid Xbox destination saturation factor");
+        cb.srcColorBlendFactor=Blend(m(kMSrcBlend));
+        cb.srcAlphaBlendFactor=Blend(m(kMSrcBlend),true);
+        cb.dstColorBlendFactor=Blend(m(kMDestBlend));
+        cb.dstAlphaBlendFactor=Blend(m(kMDestBlend),true);
         cb.colorBlendOp=cb.alphaBlendOp=BlendOp(m(kMBlendOp));
     }
     return out;

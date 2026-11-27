@@ -86,7 +86,7 @@ struct VulkanCore{
     std::array<RawTexture,4> raw_textures{};
     uint64_t texture_decodes=0,raw_texture_hits=0,texture_uploads=0;
     std::array<VkSampler,4> stage_samplers{};
-    std::array<std::array<uint32_t,6>,4> stage_sampler_keys{};
+    std::array<std::array<uint32_t,9>,4> stage_sampler_keys{};
     VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
@@ -317,15 +317,32 @@ struct VulkanCore{
     void SetSampler(unsigned stage,const gpu::State& s){
         if(stage>=4)throw std::invalid_argument("Invalid sampler stage");
         const auto& t=s.tss[stage];
-        std::array<uint32_t,6> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage]};
-        if(key[4]>2||t[gpu::kTssMipLodBias]||t[gpu::kTssMaxMipLevel])throw std::invalid_argument("Unsupported Vulkan mip sampler state");
+        // SCDA StageSampler maps Xbox MAXMIPLEVEL to the most detailed
+        // allowed mip and MIPMAPLODBIAS to a float. Keep all effective
+        // fields in the descriptor cache key; never approximate border color.
+        const bool border=t[gpu::kTssAddressU]==4||t[gpu::kTssAddressV]==4;
+        const float bias=std::bit_cast<float>(t[gpu::kTssMipLodBias]);
+        if(!std::isfinite(bias)||t[gpu::kTssMipFilter]>2||!tex_levels[stage])
+            throw std::invalid_argument("Invalid Vulkan mip sampler state");
+        const auto lod=std::min(t[gpu::kTssMaxMipLevel],tex_levels[stage]-1);
+        const auto effective_bias=std::clamp(bias,-limits.maxSamplerLodBias,limits.maxSamplerLodBias);
+        std::array<uint32_t,9> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0};
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
-        FlushBatch();
-        auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
+        auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;case 4:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
         auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
         VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         ci.addressModeU=address(key[0]);ci.addressModeV=address(key[1]);ci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=key[4]==2?VK_SAMPLER_MIPMAP_MODE_LINEAR:VK_SAMPLER_MIPMAP_MODE_NEAREST;ci.maxLod=key[4]?float(key[5]-1):0.f;
+        ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=key[4]==2?VK_SAMPLER_MIPMAP_MODE_LINEAR:VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        ci.mipLodBias=effective_bias;ci.minLod=float(lod);ci.maxLod=key[4]?float(key[5]-1):ci.minLod;
+        if(border){
+            switch(key[8]){
+                case 0:ci.borderColor=VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;break;
+                case 0xff000000:ci.borderColor=VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;break;
+                case 0xffffffff:ci.borderColor=VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;break;
+                default:throw std::invalid_argument("Xbox custom border color requires extension support");
+            }
+        }
+        FlushBatch();
         VkSampler next{};Check(vkCreateSampler(dev,&ci,nullptr,&next),"guest sampler");
         VkDescriptorImageInfo im{next,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=6+stage;
@@ -473,8 +490,8 @@ struct VulkanCore{
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=guest?hulkpocket::vkexp::Topology(*guest):VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         (void)region; // viewport/scissor are dynamic command-buffer state
         VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vps.viewportCount=1;vps.scissorCount=1;
-        const VkDynamicState dynamic_states[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dyn.dynamicStateCount=2;dyn.pDynamicStates=dynamic_states;
+        const VkDynamicState dynamic_states[]={VK_DYNAMIC_STATE_VIEWPORT,VK_DYNAMIC_STATE_SCISSOR,VK_DYNAMIC_STATE_BLEND_CONSTANTS};
+        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};dyn.dynamicStateCount=3;dyn.pDynamicStates=dynamic_states;
         auto rs=hulkpocket::vkexp::TranslateWinding(override_state?*override_state:gpu::State{},
             ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP||ia.topology==VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN,depth_format);
         VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
@@ -701,6 +718,10 @@ struct VulkanCore{
         VkViewport draw_vp{0,float(H),float(W),-float(H),0,1};VkRect2D draw_sc{{0,0},{W,H}};
         if(guest_viewport){draw_vp=region.viewport;draw_sc=region.scissor;}
         vkCmdSetViewport(cmd,0,1,&draw_vp);vkCmdSetScissor(cmd,0,1,&draw_sc);
+        const uint32_t argb=state?state->simple[gpu::kMBlendColor/4]:0;
+        const float blend_constants[]={float((argb>>16)&255)/255.f,float((argb>>8)&255)/255.f,
+                                       float(argb&255)/255.f,float(argb>>24)/255.f};
+        vkCmdSetBlendConstants(cmd,blend_constants);
         vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,2,offsets);
         VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&draw_verts.b,&offset);
         if(guest){

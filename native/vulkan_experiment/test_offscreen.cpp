@@ -18,6 +18,21 @@ int main(int argc,char** argv){
         f.Draw(argv[1],true,true,false);Expect("packed directional modulate",f.Pixel(32,32),{0,0,64,255});
         f.Draw(argv[1],false,true,false,true);Expect("two-stage indexed modulation",f.Pixel(32,32),{64,255,16,255});
         using namespace gpu;
+        State constant_blend{};constant_blend.simple[kMColorWriteEnable/4]=0x01010101;
+        constant_blend.simple[kMBlendEnable/4]=1;
+        constant_blend.simple[kMSrcBlend/4]=0x8001;constant_blend.simple[kMDestBlend/4]=0;
+        constant_blend.simple[kMBlendOp/4]=0x8006;
+        constant_blend.simple[kMBlendColor/4]=0x804080c0;
+        f.Draw(argv[1],false,false,true,false,&constant_blend);
+        Expect("Xbox constant color blend",f.Pixel(32,32),{64,0,0,64});
+        auto blend_pipelines=f.pipeline_creates;
+        constant_blend.simple[kMBlendColor/4]=0x40c08040;
+        f.Draw(argv[1],false,false,true,false,&constant_blend);
+        Expect("Xbox changed blend constant",f.Pixel(32,32),{192,0,0,32});
+        if(f.pipeline_creates!=blend_pipelines)throw std::runtime_error("Blend constant recreated pipeline");
+        constant_blend.simple[kMSrcBlend/4]=0x308;
+        if(TranslateRaster(constant_blend).color.srcAlphaBlendFactor!=VK_BLEND_FACTOR_ONE)
+            throw std::runtime_error("Xbox saturation alpha mapping");
         State state{};state.simple[kMColorWriteEnable/4]=0x01010101;
         f.Draw(argv[1],false,false,false,false,&state,true);Expect("overdraw control",f.Pixel(32,32),{255,0,0,255});
         state.rs[kRsZEnable]=1;state.simple[kMZWriteEnable/4]=1;state.simple[kMZFunc/4]=0x201;
@@ -214,6 +229,24 @@ int main(int argc,char** argv){
         stage[kTssMipFilter]=1;f.SetSampler(0,guest_state);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest mip minification",f.Pixel(32,32),{255,0,0,255});
+        stage[kTssMipFilter]=0;stage[kTssMaxMipLevel]=1;
+        f.SetSampler(0,guest_state);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("Xbox maximum mip level selects lower mip",f.Pixel(32,32),{255,0,0,255});
+        stage[kTssMaxMipLevel]=0;
+        stage[kTssAddressU]=stage[kTssAddressV]=4;stage[kTssBorderColor]=0xffffffff;
+        f.SetSampler(0,guest_state);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("Xbox exact white border",f.Pixel(32,32),{255,255,255,255});
+        stage[kTssBorderColor]=0xff000000;f.SetSampler(0,guest_state);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("Xbox changed black border",f.Pixel(32,32),{0,0,0,255});
+        stage[kTssAddressU]=stage[kTssAddressV]=3;stage[kTssBorderColor]=0;
+        stage[kTssMipFilter]=1;stage[kTssMipLodBias]=std::bit_cast<uint32_t>(1.f);
+        f.SetSampler(0,guest_state);
+        if(std::bit_cast<float>(f.stage_sampler_keys[0][6])!=std::min(1.f,f.limits.maxSamplerLodBias))
+            throw std::runtime_error("Xbox mip bias cache key mismatch");
+        stage[kTssMipLodBias]=0;f.SetSampler(0,guest_state);
         raw_decodes_before=f.texture_decodes;f.UploadGuestTexture(tex);
         if(f.texture_decodes!=raw_decodes_before)throw std::runtime_error("Unchanged mip chain decoded again");
         std::fill(mips.begin()+256,mips.end(),0xff0000ff);
