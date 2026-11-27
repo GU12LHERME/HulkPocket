@@ -1256,6 +1256,32 @@ int main(int argc,char** argv){
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
                 Expect("updated latched v11 without stream",backend.ReadPixel(32,32),{32,64,128,255});
                 if(current_prepared.regs&(1u<<11))throw std::runtime_error("Latched input mutated prepared geometry");
+                // c[-38] maps to NV2A slot 58. The actual constant data
+                // must survive target mirror sync and live shader capture.
+                // First upload just X, then complete the split packet.
+                write_packet({{0x1ea4,58},{0xb80,std::bit_cast<uint32_t>(.25f)}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                auto split=bridge.Snapshot();
+                if(split.vsc[58][0]!=.25f||split.vsc[58][1]!=-32.f)
+                    throw std::runtime_error("Partial reserved constant upload lost");
+                write_packet({{0xb84,std::bit_cast<uint32_t>(.5f)},
+                    {0xb88,0},{0xb8c,std::bit_cast<uint32_t>(1.f)}});
+                write_packet({{0x1e9c,0},
+                    {0xb00,0},{0xb04,(1u<<21)|0x1b},{0xb08,2u<<26},{0xb0c,0xf800},
+                    {0xb10,0},{0xb14,(1u<<21)|(58u<<13)|0x1b},{0xb18,3u<<26},{0xb1c,0xf819}});
+                bridge_mem.Write32(device+0x1a04,surface);
+                bridge_mem.Write32(device+0x1a08,depth_surface);
+                bridge.SyncVulkanTargetMirrors(device);
+                bridge.SyncFixedDiffuseShader(device,true);
+                if(bridge.Snapshot().vsc[58]!=std::array<float,4>{.25f,.5f,0,1})
+                    throw std::runtime_error("Captured viewport constant overwritten");
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("captured reserved constant shader",backend.ReadPixel(32,32),{64,128,0,255});
+                write_packet({{0x1ea4,58},{0xb80,0}});
+                bridge.SyncVulkanTargetMirrors(device);
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("explicit zero reserved constant",backend.ReadPixel(32,32),{0,128,0,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

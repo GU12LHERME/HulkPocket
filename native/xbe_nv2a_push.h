@@ -60,6 +60,9 @@ inline bool IsPendingRawConfiguration(uint32_t m){
 struct Nv2aConstantCursor {
     uint32_t reg=0,component=0;
     bool loaded=false,pending_raw_configuration=false;
+    // Track which reserved viewport components actually came from NV2A.
+    // A zero upload is still authoritative; incomplete packets can span drains.
+    std::array<uint8_t,2> viewport_constant_seen{};
     // Offset and format may arrive in separate packets. Retain per-stage
     // presence independently of their values (physical offset zero is legal).
     std::array<uint8_t,4> texture_words{}, texture_dirty{};
@@ -194,6 +197,8 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         if(m>=0xb80&&m<0xc00){
             if(!next.loaded||next.reg>=constants.size()||next.component>=4)
                 throw std::invalid_argument("NV2A constant data without valid register");
+            if(capture_combiner&&(next.reg==58||next.reg==59))
+                next.viewport_constant_seen[next.reg-58]|=uint8_t(1u<<next.component);
             constants[next.reg][next.component++]=std::bit_cast<float>(v);
             if(next.component==4){next.component=0;++next.reg;}
             continue;

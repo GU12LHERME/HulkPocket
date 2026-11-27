@@ -53,13 +53,17 @@ class XbeD3d8Bridge {
         if((Read(h)&0x70000)!=0x50000)throw std::invalid_argument("Not an Xbox surface");
         return {h,Read(uint64_t(h)+4),Read(uint64_t(h)+12),Read(uint64_t(h)+16)};
     }
-    void ViewportConstants() {
+    void ViewportConstants(bool preserve_captured=false) {
         auto& v=state_.viewport;
         auto f=(state_.zs.format>>8)&255u;
         state_.zscale=f==0x2c||f==0x30?65535.0f:16777215.0f;
         float hw=v.w*0.5f,hh=v.h*0.5f;
-        state_.vsc[58]={hw,-hh,(v.max_z-v.min_z)*state_.zscale,0};
-        state_.vsc[59]={v.x+state_.ss_offset_x+hw,v.y+state_.ss_offset_y+hh,v.min_z*state_.zscale,0};
+        const std::array<std::array<float,4>,2> defaults{{
+            {hw,-hh,(v.max_z-v.min_z)*state_.zscale,0},
+            {v.x+state_.ss_offset_x+hw,v.y+state_.ss_offset_y+hh,v.min_z*state_.zscale,0}}};
+        for(unsigned r=0;r<2;++r)for(unsigned c=0;c<4;++c)
+            if(!preserve_captured||!(push_constants_.viewport_constant_seen[r]&(1u<<c)))
+                state_.vsc[58+r][c]=defaults[r][c];
     }
     static void Count(std::span<const uint32_t> a,unsigned n) {
         if(a.size()!=n)throw std::invalid_argument("Wrong D3D8 API argument count");
@@ -247,7 +251,7 @@ public:
         }
         if(color!=state_.rt.header||depth!=state_.zs.header)
             std::fprintf(stderr,"D3D VULKAN TARGET CHANGE color=%08X depth=%08X\n",color,depth);
-        state_.rt=rt;state_.zs=zs;ViewportConstants();
+        state_.rt=rt;state_.zs=zs;ViewportConstants(true);
     }
     // Validate captured surface register writes against the guest-owned
     // mirrors, never using raw offsets as unchecked host pointers.
@@ -623,7 +627,7 @@ public:
         if(!std::isfinite(next.viewport.min_z)||!std::isfinite(next.viewport.max_z)||
            !std::isfinite(next.ss_offset_x)||!std::isfinite(next.ss_offset_y))
             throw std::invalid_argument("Nonfinite guest viewport");
-        state_=std::move(next);ViewportConstants();return fvf;
+        state_=std::move(next);ViewportConstants(capture_pixel);return fvf;
     }
     // Prove that the real stream can be assembled, even if later raster
     // translation must stop. No backend draw or guest return is implied.
