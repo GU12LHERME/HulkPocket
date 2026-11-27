@@ -810,6 +810,34 @@ int main(int argc,char** argv){
                 bool missing_uv=false;
                 try{bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);}catch(const std::logic_error&){missing_uv=true;}
                 if(!missing_uv)throw std::runtime_error("Undeclared UV set accepted");
+                // Check every admitted count and position type with live
+                // textures bound, including even counts that lack bit 8.
+                for(uint32_t uv_count=1;uv_count<=4;++uv_count){
+                    for(uint32_t pos:{2u,4u}){
+                        const uint32_t candidate=0x40u|pos|(uv_count<<8);
+                        gpu::VertexShader layout;gpu::FvfInputs(candidate,layout);
+                        for(unsigned k=0;k<16;++k){
+                            auto at=decl+0x14+16*k;const auto in=layout.inputs[k];
+                            for(unsigned j=0;j<4;++j)bridge_mem.Write32(at+4*j,0);
+                            if(in.stream>=0){
+                                bridge_mem.Write32(at,uint32_t(in.stream));
+                                bridge_mem.Write32(at+4,in.offset);
+                                bridge_mem.Write32(at+8,in.type);
+                            }
+                        }
+                        std::vector<uint8_t> verts(3*layout.stream_stride[0],0);
+                        bridge_mem.Write(0x80114000,verts.data(),verts.size());
+                        call("D3DDevice_SetStreamSource",{0,buffer,layout.stream_stride[0]});
+                        if(bridge.SyncFixedDiffuseShader(device,true)!=candidate||
+                           bridge.VerifyGuestGeometry(5,0,3,0)!=3)
+                            throw std::runtime_error("Textured FVF count regression");
+                        if(uv_count>1){
+                            bool legacy=false;
+                            try{bridge.SyncFixedDiffuseShader(device,false);}catch(const std::logic_error&){legacy=true;}
+                            if(!legacy)throw std::runtime_error("Multi-UV capture enabled on legacy path");
+                        }
+                    }
+                }
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

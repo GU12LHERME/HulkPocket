@@ -384,7 +384,9 @@ public:
             if(flags!=0x400||(!capture_pixel&&candidate>=0x200))continue;
             // A declaration can retain UVs after SetTexture(0,null).
             // Only a bound texture requires UV; keep the original stride.
-            if(std::any_of(textures.begin(),textures.end(),[](auto t){return t!=0;})&&!(candidate&0x100u))continue;
+            // FVF texture count is a four-bit field, not a flag:
+            // TEX2 and TEX4 do not have bit 8 set.
+            if(std::any_of(textures.begin(),textures.end(),[](auto t){return t!=0;})&&!(candidate&0xf00u))continue;
             gpu::VertexShader layout;
             gpu::FvfInputs(candidate,layout);
             bool match=true;
