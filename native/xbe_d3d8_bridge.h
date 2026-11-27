@@ -519,6 +519,31 @@ public:
             }
             if(match){packed=std::move(layout);fvf=ptr|1u;}
         }
+        // The upstream fixed shader reads conventional position, normal,
+        // diffuse/specular and texture registers from arbitrary declarations.
+        // Only use its checked XYZ subset, not blend weights, point size,
+        // tessellation, implicit attributes or pretransformed custom vertices.
+        if(capture_pixel&&!programmable&&!fvf&&flags==0){
+            auto layout=std::make_shared<gpu::VertexShader>();
+            layout->handle=ptr|1u;
+            for(unsigned i=0;i<16;++i){
+                auto slot=uint64_t(ptr)+0x14+16*i;
+                auto stream=Read(slot),offset=Read(slot+4),type=Read(slot+8);
+                if(!type||type==2)continue;
+                unsigned bytes=0;
+                if(i==0&&type==0x32)bytes=12;
+                else if(i==2&&(type==0x32||type==0x16))bytes=type==0x32?12:4;
+                else if((i==3||i==4)&&type==0x40)bytes=4;
+                else if(i>=9&&i<=12&&(type==0x12||type==0x22||type==0x32||type==0x42))bytes=(type>>4)*4;
+                if(!bytes||stream>=16||!state_.streams[stream].vb||Read(slot+12)||
+                   uint64_t(offset)+bytes>state_.streams[stream].stride)
+                    throw std::logic_error("Unsupported fixed Xbox vertex declaration input");
+                layout->inputs[i]={int(stream),offset,type};
+                layout->stream_stride[stream]=state_.streams[stream].stride;
+            }
+            if(layout->inputs[0].stream<0)throw std::logic_error("Fixed Xbox declaration lacks XYZ position");
+            packed=std::move(layout);fvf=ptr|1u;
+        }
         if(programmable){
             auto layout=std::make_shared<gpu::VertexShader>();
             layout->handle=ptr|1u;layout->program_type=0x2078;
@@ -609,12 +634,11 @@ public:
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
         gpu::Assembled local;
         auto& a=prepared?*prepared:local;
-        uint32_t regs=0x205u;
-        if(!state_.vs){
-            gpu::VertexShader layout;gpu::FvfInputs(state_.vs_handle,layout);
-            regs=0;
-            for(unsigned r=0;r<16;++r)if(layout.inputs[r].stream>=0)regs|=1u<<r;
-        }
+        uint32_t regs=0;
+        gpu::VertexShader fvf_layout;
+        if(!state_.vs)gpu::FvfInputs(state_.vs_handle,fvf_layout);
+        const auto& layout=state_.vs?*state_.vs:fvf_layout;
+        for(unsigned r=0;r<16;++r)if(layout.inputs[r].stream>=0)regs|=1u<<r;
         const bool program=state_.vs&&!state_.vs->program.empty();
         if(!gpu::Assemble(state_,prim,start,count,ip,a)||(program?!(a.regs&1):a.regs!=regs))
             throw std::runtime_error("Guest diffuse geometry assembly failed");
@@ -852,13 +876,13 @@ public:
             (base_fvf==0x142||base_fvf==0x144||base_fvf==0x242||base_fvf==0x244||
              base_fvf==0x342||base_fvf==0x344||base_fvf==0x442||base_fvf==0x444);
         const bool fixed=allow_fixed&&!state_.ps&&!program;
-        const bool packed=fixed&&state_.vs;
+        const bool packed=allow_fixed&&state_.vs&&!program;
         const bool lighting=state_.rs[gpu::kRsLighting]!=0;
         if(!initialized_||(!state_.ps&&!program&&!fixed)||
            (!program&&!packed&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw&&!multi_uv)))||
            count>262144||!CapturedPrimitive(prim,count)||
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
-           (lighting&&(!packed||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
+           (lighting&&(!fixed||!packed||state_.vs->inputs[2].stream<0||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
            state_.rs[gpu::kRsFogEnable]>1||(fixed&&state_.rs[gpu::kRsRangeFogEnable])||
            (lighting&&state_.rs[gpu::kRsFogEnable])||
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])

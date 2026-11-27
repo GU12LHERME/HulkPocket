@@ -1107,6 +1107,40 @@ int main(int argc,char** argv){
                 bridge.AdoptLiveSetters(multi_state);
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
                 Expect("select first UV set",backend.ReadPixel(32,32),{255,0,0,255});
+                // Same mesh expressed as a custom fixed declaration, not
+                // an FVF or the single previously observed packed layout.
+                bridge_mem.Write32(decl+4,0);
+                if(bridge.SyncFixedDiffuseShader(device,true)!=(decl|1u)||
+                   bridge.VerifyGuestGeometry(5,0,3,0)!=3)
+                    throw std::runtime_error("Custom fixed declaration capture failed");
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("custom fixed declaration pixels",backend.ReadPixel(32,32),{255,0,0,255});
+                // Split the second UV into its own stream, with checked
+                // guest allocation and offset. Both UV sets remain live.
+                constexpr uint32_t second_vb=0x20a00;
+                bridge_mem.Write32(second_vb,0x10000);
+                bridge_mem.Write32(second_vb+4,0x114800);
+                bridge_mem.Write32(second_vb+8,0);
+                const float second_uv[]={.75f,.25f,.75f,.25f,.75f,.25f};
+                bridge_mem.Write(0x80114800,second_uv,sizeof(second_uv));
+                call("D3DDevice_SetStreamSource",{1,second_vb,8});
+                bridge_mem.Write32(decl+0x14+16*10,1);
+                bridge_mem.Write32(decl+0x14+16*10+4,0);
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=1;
+                bridge.AdoptLiveSetters(multi_state);
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("custom split-stream UV",backend.ReadPixel(32,32),{0,128,0,255});
+                bridge_mem.Write32(decl+0x14+16*10+4,4);
+                bool bad_custom=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){bad_custom=true;}
+                if(!bad_custom)throw std::runtime_error("Out-of-stride custom input accepted");
+                bridge_mem.Write32(decl+0x14+16*10,0);
+                bridge_mem.Write32(decl+0x14+16*10+4,24);
+                bridge_mem.Write32(decl+4,0x400);
+                call("D3DDevice_SetStreamSource",{1,0,0});
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=0;
+                bridge.AdoptLiveSetters(multi_state);
                 // Xbox 2-component coordinate expands to (u,v,1,0);
                 // the third row moves u from .25 to .75, changing texel.
                 const float texture_matrix[16]={1,0,0,0,0,1,0,0,.5f,0,1,0,0,0,0,1};
