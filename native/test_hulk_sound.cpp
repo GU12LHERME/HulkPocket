@@ -135,17 +135,20 @@ int main(){
     uint32_t pk2[]={0x10304,4,0x10608,0x1060c,0x88};
     mem.Write(0x10440,pk1,sizeof(pk1));mem.Write(0x10460,pk2,sizeof(pk2));
     assert(s.Stream(stream,kSoundStreamInfo,{stream,0x10700})==0&&mem.Read32(0x10704)==2);
+    assert(!s.HasPendingPlayback());
     assert(s.Stream(stream,kSoundStreamProcess,{stream,0x10440,0})==0);
     assert(s.Stream(stream,kSoundStreamProcess,{stream,0x10460,0})==0);
+    assert(s.HasPendingPlayback());
     assert(s.Stream(stream,kSoundStreamProcess,{stream,0x10460,0})==0x88780032u);
     assert(s.Stream(stream,kSoundStreamStatus,{stream,0x10700})==0&&mem.Read32(0x10700)==0);
     assert(mem.Read32(0x10604)==0x8000000au);
     assert(s.Stream(stream,kSoundStreamPause,{stream,1})==0);
+    assert(!s.HasPendingPlayback());
     got=s.Render(2);for(auto x:got)assert(x==0);
     assert(s.Stream(stream,kSoundStreamPause,{stream,0})==0);
     got=s.Render(3);assert(got[0]==1000&&got[2]==-2000&&got[4]==3000);
     assert(mem.Read32(0x10600)==4&&mem.Read32(0x10604)==0&&mem.Read32(0x1060c)==0x8000000au);
-    HulkSound::StreamDone done{};assert(s.TakeStreamDone(done)&&done.packet_context==0x77&&done.status==0);
+    HulkSound::StreamDone done{};assert(s.TakeStreamEvent(done)&&done.packet_context==0x77&&done.status==0);
     assert(s.Stream(stream,kSoundStreamFlush,{stream})==0);
     assert(mem.Read32(0x10608)==2&&mem.Read32(0x1060c)==0x80004004u);
     assert(s.TakeStreamDone(done)&&done.packet_context==0x88&&done.status==0x80004004u);
@@ -153,6 +156,26 @@ int main(){
     assert(s.Stream(stream,kSoundStreamAddRef,{stream})==2);
     assert(s.Stream(stream,kSoundStreamRelease,{stream})==1);
     assert(s.Stream(stream,kSoundStreamRelease,{stream})==0);
+    // A callback queued ahead of an event must remain for DoWork, not
+    // prevent an independent event-mode stream from waking a guest wait.
+    stream_desc[3]=0x10580;stream_desc[4]=0x99;
+    mem.Write(0x10400,stream_desc,sizeof(stream_desc));
+    assert(s.NewStream(0x10400,0x10008,0x10500,0x10510)==0);
+    auto callback_stream=mem.Read32(0x10008);
+    assert(s.Stream(callback_stream,kSoundStreamProcess,{callback_stream,0x10440,0})==0);
+    s.Render(2);
+    stream_desc[3]=stream_desc[4]=0;
+    mem.Write(0x10400,stream_desc,sizeof(stream_desc));
+    assert(s.NewStream(0x10400,0x10008,0x10500,0x10510)==0);
+    auto event_stream=mem.Read32(0x10008);
+    assert(s.Stream(event_stream,kSoundStreamProcess,{event_stream,0x10460,0})==0);
+    s.Render(2);
+    assert(s.TakeStreamEvent(done)&&!done.callback&&done.packet_context==0x88&&done.status==0);
+    assert(!s.TakeStreamEvent(done));
+    assert(s.TakeStreamDone(done)&&done.callback==0x10580&&done.context==0x99&&done.packet_context==0x77&&done.status==0);
+    assert(!s.TakeStreamDone(done)&&!s.HasPendingPlayback());
+    assert(s.Stream(callback_stream,kSoundStreamRelease,{callback_stream})==0);
+    assert(s.Stream(event_stream,kSoundStreamRelease,{event_stream})==0);
     // 3D mono source with distance, orientation and deferred updates.
     auto bits=[](float x){uint32_t b;std::memcpy(&b,&x,4);return b;};
     mem.Write(0x10100,fmt,sizeof(fmt));mem.Write(0x10300,pcm,sizeof(pcm));

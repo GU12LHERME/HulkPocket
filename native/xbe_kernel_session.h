@@ -452,8 +452,19 @@ private:
             }
         }
     }
+    bool PreviewAudioClock()const{
+#ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+        return preview_host.enabled.load()&&VulkanPreviewSelected();
+#else
+        return false;
+#endif
+    }
     Steady::time_point NextTimer(Steady::time_point deadline){
         for(const auto& item:timers_)deadline=std::min(deadline,item.second.due);
+        // If all guest threads wait for audio, no explicit DirectSound call
+        // may arrive. Schedule cooperative mixer progress, not a fake signal.
+        if(PreviewAudioClock()&&sound_.HasPendingPlayback())
+            deadline=std::min(deadline,Steady::now()+std::chrono::milliseconds(10));
         return deadline;
     }
     // Cooperative DPC delivery: execute one guest callback at a kernel safe
@@ -560,7 +571,7 @@ private:
         if(!body) return 0xc0000008u;
         const auto deadline=Deadline(timeout);
         for(;;){
-            Pause(cpu,lock);ServiceDpc(cpu,lock);
+            Pause(cpu,lock);ServiceDpc(cpu,lock);PumpPreviewAudio();
             if(Ready(body,cpu.thread_handle))break;
             if(Steady::now()>=deadline)return 0x102;
             if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
@@ -651,15 +662,24 @@ private:
                 r.ordinal,r.thread,r.ret,r.esp,r.returned?"result":"entry-eax",r.eax);
         }
     }
+    void SignalSoundEvent(const HulkSound::StreamDone& d){
+        auto e=events_.find(d.packet_context);
+        if(e==events_.end()||semaphore_limits_.count(e->second.body)||timer_types_.count(e->second.body)||mutants_.count(e->second.body))
+            throw std::runtime_error("Invalid stream completion event");
+        mem_.Write32(e->second.body+4,1);cv_.notify_all();
+    }
+    void PumpPreviewAudio(){
+        if(!PreviewAudioClock())return;
+        sound_.Pump();
+        HulkSound::StreamDone d{};
+        while(sound_.TakeStreamEvent(d))SignalSoundEvent(d);
+    }
     void ServiceSoundDone(X86Context& cpu,std::unique_lock<std::mutex>& lock){
         if(sound_callback_running_)return;
         HulkSound::StreamDone d{};
         for(unsigned i=0;i<1024&&sound_.TakeStreamDone(d);++i){
             if(!d.callback){
-                auto e=events_.find(d.packet_context);
-                if(e==events_.end()||semaphore_limits_.count(e->second.body)||timer_types_.count(e->second.body)||mutants_.count(e->second.body))
-                    throw std::runtime_error("Invalid stream completion event");
-                mem_.Write32(e->second.body+4,1);cv_.notify_all();continue;
+                SignalSoundEvent(d);continue;
             }
             if(!entry_||!mem_.IsCommitted(d.callback,1)||cpu.esp<16||!mem_.IsCommitted(cpu.esp-16,16))
                 throw std::runtime_error("Invalid stream completion callback");
@@ -689,7 +709,7 @@ private:
         // doing I/O rather than explicitly calling DirectSoundDoWork.
         // The existing session lock serializes all producers; callbacks
         // remain on the original guest sound dispatch path.
-        if(preview_host.enabled.load()&&VulkanPreviewSelected())sound_.Pump();
+        PumpPreviewAudio();
         if(live_d3d_&&live_d3d_->owner==cpu.thread_handle)
             TraceViewport(*live_d3d_,ordinal,mem_.IsCommitted(cpu.esp,4)?mem_.Read32(cpu.esp):0);
         if(ordinal==kDefaultSimple||ordinal==kDefaultRender||ordinal==kDefaultTexture||
@@ -1417,7 +1437,7 @@ private:
                 std::this_thread::sleep_until(next);
                 lock.lock();
                 Pause(cpu,lock);
-                if(live.expanded_preview)sound_.Pump();
+                if(live.expanded_preview)PumpPreviewAudio();
                 ++live.diagnostic_vblanks;
                 std::fprintf(stderr,"D3D LIVE VBLANK PASS caller=%08X (offscreen 60 Hz host pacing)\n",mem_.Read32(cpu.esp));
                 Ret(cpu,0,0);return;
@@ -1480,7 +1500,7 @@ private:
                 live.backend.ReadbackColor(state.rt);
                 auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
                 if(preview_host.enabled.load())preview_host.Present(pixels,desc.width,desc.height,desc.pitch);
-                if(live.expanded_preview)sound_.Pump();
+                if(live.expanded_preview)PumpPreviewAudio();
                 RefreshPreviewPorts();
                 if(live.compact_capture){
                     live.last_presented_pixels.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
@@ -1708,7 +1728,7 @@ private:
                 }
                 auto deadline=Deadline(timeout);
                 while(port->packets.empty()){
-                    Pause(cpu,lock);ServiceDpc(cpu,lock);
+                    Pause(cpu,lock);ServiceDpc(cpu,lock);PumpPreviewAudio();
                     if(!port->packets.empty())break;
                     if(Steady::now()>=deadline){Ret(cpu,5,0x102);return;}
                     if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
@@ -1950,7 +1970,7 @@ private:
                 if((Arg(cpu,1)&255u)||!Arg(cpu,2)) throw std::runtime_error("Unsupported alertable delay or missing interval");
                 auto deadline=Deadline(Arg(cpu,2));
                 do {
-                    Pause(cpu,lock);ServiceDpc(cpu,lock);
+                    Pause(cpu,lock);ServiceDpc(cpu,lock);PumpPreviewAudio();
                     if(Steady::now()>=deadline)break;
                     if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;
                     cv_.wait_until(lock,NextTimer(deadline));
@@ -2113,7 +2133,7 @@ private:
                                 std::all_of(bodies.begin(),bodies.end(),signal);
                 };
                 do {
-                    Pause(cpu,lock);ServiceDpc(cpu,lock);
+                    Pause(cpu,lock);ServiceDpc(cpu,lock);PumpPreviewAudio();
                     if(ready())break;
                     if(Steady::now()>=deadline){Ret(cpu,6,0x102);return;}
                     if(!dpc_running_&&!dpc_queue_.empty()&&Irql(cpu)<2)continue;

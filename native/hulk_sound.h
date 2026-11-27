@@ -633,6 +633,20 @@ public:
     bool HasStreamCallback(uint32_t id)const{
         auto it=streams_.find(id);return it!=streams_.end()&&it->second.callback;
     }
+    // Event completions are independent of title-thread callbacks. The
+    // serialized kernel scheduler may signal them without entering guest code.
+    bool TakeStreamEvent(StreamDone& out){
+        for(auto it=stream_done_.begin();it!=stream_done_.end();++it){
+            if(it->callback)continue;
+            out=*it;stream_done_.erase(it);return true;
+        }
+        return false;
+    }
+    bool HasPendingPlayback()const{
+        for(const auto& [id,v]:voices_)if(v.playing&&!v.paused&&!v.sync)return true;
+        for(const auto& [id,v]:streams_)if(!v.paused&&!v.sync&&!v.packets.empty())return true;
+        return false;
+    }
     bool TakeStreamDone(StreamDone& out){
         if(stream_done_.empty())return false;
         out=stream_done_.front();stream_done_.pop_front();return true;
