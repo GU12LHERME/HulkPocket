@@ -28,8 +28,22 @@ class VulkanBridgeBackend final:public gpu::Backend {
             throw std::logic_error("Vulkan target switching/rotation not integrated");
         target_=s;address_=d.data;pitch_=d.pitch;
     }
+    // Rotation changes color backing, not the shared depth attachment.
+    // The Vulkan images still have their initialized layouts after a swap.
+    // Restore only a backing previously written to checked guest memory.
+    void EnsureColor(){
+        if(core_.frame_valid)return;
+        if(!rotated_||std::find(saved_.begin(),saved_.end(),address_)==saved_.end())
+            throw std::logic_error("Vulkan rotation has no saved color");
+        const auto* pixels=gpu::CheckedGuestRange(address_,uint64_t(pitch_)*core_.H);
+        core_.frame_valid=true;
+        try{core_.ReplaceColor(pixels,pitch_);}
+        catch(...){core_.frame_valid=false;throw;}
+        rotated_=false;
+    }
     void Writeback(){
-        if(!target_.header||!core_.frame_valid)throw std::logic_error("No initialized Vulkan frame");
+        if(!target_.header)throw std::logic_error("No initialized Vulkan target");
+        EnsureColor();
         StoreColor(target_,core_.ColorPixels(),core_.W,core_.H);
         if(std::find(saved_.begin(),saved_.end(),address_)==saved_.end())saved_[saved_next_++%saved_.size()]=address_;
     }
@@ -45,24 +59,33 @@ public:
             if(r[2]!=r[0]&&r[3]!=r[1])regions.push_back({{{r[0],r[1]},{uint32_t(r[2]-r[0]),uint32_t(r[3]-r[1])}},0,1});
         }
         if(count&&regions.empty())return;
-        if(count&&!core_.frame_valid)throw std::logic_error("Partial Vulkan clear before full initialization");
         Target(s.rt);
         if(flags&3)Depth(s.zs);
         const auto requested=flags;
-        if(!core_.frame_valid){
-            if((flags&0xf0)!=0xf0)throw std::logic_error("Vulkan frame requires full color clear");
+        const bool full_color=!count&&(flags&0xf0)==0xf0;
+        if(!core_.frame_valid&&rotated_&&!full_color)EnsureColor();
+        if(count&&!core_.frame_valid)throw std::logic_error("Partial Vulkan clear before full initialization");
+        const bool rotated_full=!core_.frame_valid&&rotated_&&full_color;
+        if(rotated_full){
+            // No need to upload old color when all of it will be replaced.
+            // LOAD pass preserves depth/stencil unless explicitly cleared.
+            core_.frame_valid=true;
+        }else if(!core_.frame_valid){
+            if(!full_color)throw std::logic_error("Vulkan frame requires full color clear");
             if(!(flags&1))z=1;
             if(!(flags&2))stencil=0;
-            flags|=3; // initialize internal attachments, do not mark guest depth/stencil valid unless requested
+            flags|=3; // first initialization only
         }
-        core_.ClearFrame(flags,color,z,stencil,regions);rotated_=false;
+        try{core_.ClearFrame(flags,color,z,stencil,regions);}
+        catch(...){if(rotated_full)core_.frame_valid=false;throw;}
+        rotated_=false;
         // A partial clear cannot prove the untouched attachment initialized.
         if(!count&&(requested&1))depth_valid_=true;
         if(!count&&(requested&2))stencil_valid_=true;
     }
     void Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint32_t count,const uint8_t* indices)override{
         Target(s.rt);
-        if(!core_.frame_valid)throw std::logic_error("Vulkan draw before clear");
+        EnsureColor();
         const bool screen=(s.vs&&!s.vs->program.empty())||(!(s.vs_handle&1)&&(s.vs_handle&0xe)==4);
         (void)GuestViewRegion(s,core_.W,core_.H,screen);
         if(s.rs[gpu::kRsZEnable]||s.rs[gpu::kRsStencilEnable])Depth(s.zs);
@@ -128,8 +151,9 @@ public:
         };
         auto active=[&](const gpu::TextureDesc& d){
             if(!target_.header||!overlap(d.data,uint64_t(d.pitch)*d.height,address_,uint64_t(pitch_)*core_.H))return false;
-            if(d.data!=address_||d.pitch!=pitch_||d.width!=core_.W||d.height!=core_.H||!core_.frame_valid)
+            if(d.data!=address_||d.pitch!=pitch_||d.width!=core_.W||d.height!=core_.H)
                 throw std::logic_error("Unsupported Vulkan partial target alias");
+            EnsureColor();
             return true;
         };
         if(depth_header_&&(overlap(a.data,uint64_t(a.pitch)*a.height,depth_address_,uint64_t(depth_pitch_)*core_.H)||
@@ -154,12 +178,12 @@ public:
         core_.FlushBatch();
         auto old=address_;target_={};Target(s);
         if(old==address_)throw std::logic_error("Vulkan rotation did not change backing");
-        core_.frame_valid=false;core_.readback_valid=false;depth_valid_=stencil_valid_=false;rotated_=true;
+        core_.frame_valid=false;core_.readback_valid=false;rotated_=true;
+        // Depth() still rejects any changed header/backing before use.
+        // Retain validity of the shared depth/stencil image across color swaps.
     }
     void RestoreRotatedColor(const gpu::Surface& s){
-        Target(s);if(core_.frame_valid)return;
-        if(!rotated_||std::find(saved_.begin(),saved_.end(),address_)==saved_.end())throw std::logic_error("Vulkan rotation has no saved color");
-        core_.RestoreColor(gpu::CheckedGuestRange(address_,uint64_t(pitch_)*core_.H),pitch_);rotated_=false;
+        Target(s);EnsureColor();
     }
     void Present(const gpu::Surface& front)override{ReadbackColor(front);}
     void Sync(uint32_t data,uint32_t size)override{

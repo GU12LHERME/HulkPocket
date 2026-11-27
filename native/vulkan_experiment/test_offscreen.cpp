@@ -513,6 +513,36 @@ int main(int argc,char** argv){
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("stencil masked color inside",backend.ReadPixel(32,32),{128,128,64,255});
                 Expect("stencil masked color outside",backend.ReadPixel(4,4),{0,0,255,255});
+                // Preserve the shared stencil on a color-only clear after
+                // rotation, and restore old color on the next depth-only clear.
+                bridge.Present(surface);
+                bridge_mem.Write32(surface+4,0x118000);
+                bridge.BindInitialTargets(surface,depth_surface);
+                backend.BeginRotatedFrame(bridge.Snapshot().rt);
+                call("D3DDevice_Clear",{0,0,0xf0,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("rotated color-only clear preserves stencil inside",backend.ReadPixel(32,32),{128,128,64,255});
+                Expect("rotated color-only clear preserves stencil outside",backend.ReadPixel(4,4),{0,0,255,255});
+                bridge.Present(surface);
+                bridge_mem.Write32(surface+4,0x110000);
+                bridge.BindInitialTargets(surface,depth_surface);
+                backend.BeginRotatedFrame(bridge.Snapshot().rt);
+                call("D3DDevice_Clear",{0,0,1,0,std::bit_cast<uint32_t>(1.f),0});
+                Expect("rotated depth-only clear retains saved color",backend.ReadPixel(32,32),{128,128,64,255});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("rotated depth-only clear preserves stencil",backend.ReadPixel(4,4),{0,0,255,255});
+                bridge.Present(surface);
+                bridge_mem.Write32(surface+4,0x118000);
+                bridge.BindInitialTargets(surface,depth_surface);
+                backend.BeginRotatedFrame(bridge.Snapshot().rt);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("rotated draw without clear retains stencil",backend.ReadPixel(32,32),{128,128,64,255});
+                Expect("rotated draw without clear retains color",backend.ReadPixel(4,4),{0,0,255,255});
+                bridge.Present(surface);
+                bridge_mem.Write32(surface+4,0x110000);
+                bridge.BindInitialTargets(surface,depth_surface);
+                backend.BeginRotatedFrame(bridge.Snapshot().rt);
+                backend.RestoreRotatedColor(bridge.Snapshot().rt);
                 // Capture current render target to a pitched guest surface.
                 // Copy a rectangle back into the active image, preserving
                 // both untouched pixels and the previous stencil attachment.
