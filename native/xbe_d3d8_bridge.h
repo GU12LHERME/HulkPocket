@@ -430,8 +430,17 @@ public:
             next.rs[gpu::kRsPsTextureModes]=next.ps->def[54];
             for(unsigned st=0;st<4;++st){
                 auto mode=(next.ps->def[54]>>(5*st))&31;
-                if((mode==1||mode==0xf||mode==0x10)!=bool(textures[st]))
+                if((mode==1||mode==6||mode==7||mode==0xf||mode==0x10)!=bool(textures[st]))
                     throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
+                if(mode==6||mode==7){
+                    const uint8_t required=mode==7?0x3f:0x0f;
+                    if((push_constants_.bump_seen[st]&required)!=required)
+                        throw std::logic_error("Incomplete captured NV2A bump constants");
+                    constexpr unsigned fields[]={gpu::kTssBumpEnvMat00,gpu::kTssBumpEnvMat01,
+                        gpu::kTssBumpEnvMat11,gpu::kTssBumpEnvMat10,gpu::kTssBumpEnvLScale,gpu::kTssBumpEnvLOffset};
+                    for(unsigned k=0;k<(mode==7?6u:4u);++k)
+                        next.tss[st][fields[k]]=state_.simple[(0x1b28+st*0x40+4*k)/4];
+                }
             }
         }
         next.textures=textures;next.palettes.fill(0);

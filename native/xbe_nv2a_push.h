@@ -65,6 +65,7 @@ struct Nv2aConstantCursor {
     std::array<uint8_t,4> texture_words{}, texture_dirty{};
     std::array<bool,4> texture_control{};
     std::bitset<0x800> combiner_seen{};
+    std::array<uint8_t,4> bump_seen{};
     std::array<uint32_t,136*4> program{};
     std::bitset<136*4> program_seen{};
     uint32_t program_word=0,program_start=0,execution_mode=0;
@@ -106,16 +107,16 @@ inline std::shared_ptr<gpu::PixelShader> CaptureNv2aCombiner(const gpu::State& s
     // shared shader translator uses stage zero implicitly for stage one.
     for(unsigned i=0;i<4;++i){
         auto mode=(d[54]>>(5*i))&31;
-        if(mode!=0&&mode!=1&&mode!=4&&mode!=5&&mode!=0xf&&mode!=0x10)
+        if(mode!=0&&mode!=1&&mode!=4&&mode!=5&&mode!=6&&mode!=7&&mode!=0xf&&mode!=0x10)
             throw std::logic_error("Unintegrated captured pixel texture mode");
         if(mode==5)d[42]=get(kMPsCompareMode);
-        if(mode==0xf||mode==0x10){
+        if(mode==6||mode==7||mode==0xf||mode==0x10){
             if(!i)throw std::logic_error("Dependent pixel stage cannot be first");
             if(i>=2)d[56]=get(kMPsInputTexture);
             unsigned source=i==1?0:(d[56]>>(i==2?16:20))&15;
             if(source>=i)throw std::logic_error("Invalid dependent pixel source stage");
             auto previous=(d[54]>>(5*source))&31;
-            if(previous!=1&&previous!=4&&previous!=0xf&&previous!=0x10)
+            if(previous!=1&&previous!=4&&previous!=6&&previous!=7&&previous!=0xf&&previous!=0x10)
                 throw std::logic_error("Dependent pixel source has no color");
         }
     }
@@ -200,6 +201,13 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
         }
         if(capture_combiner&&IsCombinerMethod(m)){
             simple[m/4]=v;next.combiner_seen.set(m/4);next.pending_raw_configuration=true;continue;
+        }
+        // NV097 per-stage matrix register order is 00,01,11,10;
+        // scale and offset follow. Stage zero is not a bump destination.
+        if(capture_combiner&&m>=0x1b68&&m<=0x1bfc&&(m&0x3f)>=0x28&&m%4==0){
+            unsigned stage=(m-0x1b00)/0x40,field=((m&0x3f)-0x28)/4;
+            simple[m/4]=v;next.bump_seen[stage]|=uint8_t(1u<<field);
+            next.pending_raw_configuration=true;continue;
         }
         if(IsPendingRawConfiguration(m)){
             simple[m>>2]=v;next.pending_raw_configuration=true;continue;

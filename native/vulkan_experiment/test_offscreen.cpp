@@ -604,6 +604,25 @@ int main(int argc,char** argv){
                 bool invalid_dep=false;
                 try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){invalid_dep=true;}
                 if(!invalid_dep)throw std::runtime_error("Dependent stage zero silently accepted");
+                const Vertex bump_uv[]={{-.75f,-.75f,.5f,0xffffffff,.25f,.25f},
+                    {.75f,-.75f,.5f,0xffffffff,.25f,.25f},{0,.75f,.5f,0xffffffff,.25f,.25f}};
+                bridge_mem.Write(0x80114000,bump_uv,sizeof(bump_uv));
+                write_packet({{0x1e70,1|(6<<5)}});
+                bool missing_bump=false;
+                try{bridge.SyncFixedDiffuseShader(device,true);}catch(const std::logic_error&){missing_bump=true;}
+                if(!missing_bump)throw std::runtime_error("Incomplete bump matrix accepted");
+                write_packet({{0x1b68,0},{0x1b6c,0},{0x1b70,0},{0x1b74,0}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("zero bump offset",backend.ReadPixel(32,32),{255,0,0,255});
+                write_packet({{0x1b68,std::bit_cast<uint32_t>(1.f)}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("bump offset changes sampled texel",backend.ReadPixel(32,32),{0,255,0,255});
+                write_packet({{0x1e70,1|(7<<5)},{0x1b78,std::bit_cast<uint32_t>(.5f)},{0x1b7c,0}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("bump luminance modulates color",backend.ReadPixel(32,32),{0,128,0,128});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

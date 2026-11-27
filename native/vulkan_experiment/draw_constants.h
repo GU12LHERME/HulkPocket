@@ -83,6 +83,22 @@ inline void CombinerConstants(const gpu::State& s,gpu::DrawConstants& dc){
     color(s.simple[gpu::kMPsFinalConstant0/4],dc.pc[16]);
     color(s.simple[gpu::kMPsFinalConstant1/4],dc.pc[17]);
     dc.misc[3]=s.rs[gpu::kRsSpecularEnable]?1.f:0.f;
+    if(s.ps)for(unsigned i=1;i<4;++i){
+        unsigned mode=(s.rs[gpu::kRsPsTextureModes]>>(5*i))&31;
+        if(mode!=6&&mode!=7)continue;
+        const auto& t=s.tss[i];
+        constexpr unsigned matrix[]={gpu::kTssBumpEnvMat00,gpu::kTssBumpEnvMat01,gpu::kTssBumpEnvMat10,gpu::kTssBumpEnvMat11};
+        for(unsigned j=0;j<4;++j){
+            dc.bump[i][j]=std::bit_cast<float>(t[matrix[j]]);
+            if(!std::isfinite(dc.bump[i][j]))throw std::invalid_argument("Nonfinite Xbox bump matrix");
+        }
+        if(mode==7){
+            dc.bumpl[i][0]=std::bit_cast<float>(t[gpu::kTssBumpEnvLScale]);
+            dc.bumpl[i][1]=std::bit_cast<float>(t[gpu::kTssBumpEnvLOffset]);
+            if(!std::isfinite(dc.bumpl[i][0])||!std::isfinite(dc.bumpl[i][1]))
+                throw std::invalid_argument("Nonfinite Xbox bump luminance");
+        }
+    }
     if(s.rs[gpu::kRsFogEnable]){
         auto mode=s.rs[gpu::kRsFogTableMode];
         if(mode<1||mode>3)throw std::invalid_argument("Unsupported Vulkan fog mode");

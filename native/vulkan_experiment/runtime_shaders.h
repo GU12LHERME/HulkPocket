@@ -55,11 +55,11 @@ public:
         auto key=gpu::MakePixelKey(s,tex);
         if(s.ps){
             if((key.count&255)>8)throw std::invalid_argument("Invalid Xbox combiner count");
-            // Only modes with verified 2D shader translation. Dot, bump,
+            // Only modes with verified 2D shader translation. Dot,
             // cube and depth sampling still require separate integration.
             for(unsigned i=0;i<4;++i){
                 auto raw=(s.rs[gpu::kRsPsTextureModes]>>(i*5))&31;
-                bool dependent=raw==0xf||raw==0x10;
+                bool dependent=raw==6||raw==7||raw==0xf||raw==0x10;
                 if(raw!=0&&raw!=1&&raw!=4&&raw!=5&&!dependent)
                     throw std::invalid_argument("Unsupported Vulkan programmable texture mode");
                 if((raw==1||dependent)&&!tex[i].kind)
@@ -69,7 +69,7 @@ public:
                     unsigned source=i==1?0:(s.ps->def[56]>>(i==2?16:20))&15;
                     if(source>=i)throw std::invalid_argument("Invalid dependent texture source");
                     auto prior=(s.rs[gpu::kRsPsTextureModes]>>(5*source))&31;
-                    if(prior!=1&&prior!=4&&prior!=0xf&&prior!=0x10)
+                    if(prior!=1&&prior!=4&&prior!=6&&prior!=7&&prior!=0xf&&prior!=0x10)
                         throw std::invalid_argument("Dependent texture source has no color");
                 }
             }
