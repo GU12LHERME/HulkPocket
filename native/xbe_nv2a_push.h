@@ -204,6 +204,10 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
             if(v)throw std::logic_error("Unsupported vertex cache break argument");
             continue;
         }
+        if(capture_combiner&&m==gpu::kMCountEnable){
+            if(v>1)throw std::logic_error("Invalid NV2A visibility count enable");
+            simple[m/4]=v;continue;
+        }
         if(capture_combiner&&m==0x1e6c){
             if(v>7)throw std::logic_error("Invalid NV2A shadow compare");
             next.shadow_compare_seen=true;next.shadow_compare=v;simple[m/4]=v;continue;

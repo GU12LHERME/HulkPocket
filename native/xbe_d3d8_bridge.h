@@ -944,7 +944,7 @@ public:
                     gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMBlendColor,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,
                     gpu::kMShadeMode,gpu::kMStencilWriteMask,gpu::kMStencilFunc,gpu::kMStencilRef,
                     gpu::kMStencilMask,gpu::kMStencilZFail,gpu::kMStencilPass,
-                    gpu::kMSolidOffsetEnable,gpu::kMSlopeScale,gpu::kMDepthOffset})
+                    gpu::kMSolidOffsetEnable,gpu::kMSlopeScale,gpu::kMDepthOffset,gpu::kMCountEnable})
             replay.simple[m/4]=state_.simple[m/4];
         for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
@@ -960,8 +960,25 @@ public:
         // the image data decodes; sampler, shader and raster state still matter.
         auto methods=DecodeNv2aMethods(mem_,begin,end);
         auto next=state_;auto cursor=push_constants_;
-        ApplyNv2aState(next,cursor,methods,capture_pixel);
         gpu::ScopedGuestMemory scope(mem_);
+        std::vector<Nv2aMethod> reports;
+        if(capture_pixel){
+            // State-only packets cannot contain draws. Validate the entire
+            // batch before performing ordered visibility clear/report actions.
+            std::vector<Nv2aMethod> state_methods;
+            for(auto method:methods){
+                auto [m,v]=method;
+                if(m==gpu::kMClearReport){
+                    if(v!=1)throw std::logic_error("Unsupported NV2A clear report type");
+                    reports.push_back(method);
+                }else if(m==gpu::kMGetReport){
+                    if((v>>24)!=1||(v&15))throw std::logic_error("Unsupported NV2A visibility report type or alignment");
+                    gpu::CheckedGuestRange(gpu::PhysicalResourceAddress(v&0xffffffu),16);
+                    reports.push_back(method);
+                }else state_methods.push_back(method);
+            }
+            ApplyNv2aState(next,cursor,state_methods,true);
+        }else ApplyNv2aState(next,cursor,methods,false);
         for(unsigned stage=0;stage<4;++stage){
             if(!cursor.TextureReady(stage))continue;
             const auto base=0x1b00+stage*0x40;
@@ -985,6 +1002,10 @@ public:
                 std::fprintf(stderr,"D3D RAW TEXTURE PENDING stage=%u physical=%08X format=%08X\n",stage,offset,format);
             }
             cursor.TextureInspected(stage);
+        }
+        for(auto [m,v]:reports){
+            if(m==gpu::kMClearReport)backend_.ClearReport();
+            else backend_.GetReport(gpu::PhysicalResourceAddress(v&0xffffffu));
         }
         state_=std::move(next);push_constants_=cursor;
     }

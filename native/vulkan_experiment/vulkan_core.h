@@ -94,6 +94,8 @@ struct VulkanCore{
     std::array<VkSampler,4> stage_samplers{};
     std::array<std::array<uint32_t,14>,4> stage_sampler_keys{};
     bool sampler_anisotropy=false;
+    VkQueryPool visibility_query{};
+    uint32_t visible_pixels=0;
     VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
@@ -113,6 +115,7 @@ struct VulkanCore{
     ~VulkanCore(){
         if(dev){
             vkDeviceWaitIdle(dev);
+            if(visibility_query)vkDestroyQueryPool(dev,visibility_query,nullptr);
             for(const auto& entry:pipelines)vkDestroyPipeline(dev,entry.second.handle,nullptr);
             if(descriptors)vkDestroyDescriptorPool(dev,descriptors,nullptr);
             if(pipeline_layout)vkDestroyPipelineLayout(dev,pipeline_layout,nullptr);
@@ -234,10 +237,16 @@ struct VulkanCore{
         VkPhysicalDeviceFeatures supported{},enabled{};
         vkGetPhysicalDeviceFeatures(physical,&supported);
         enabled.samplerAnisotropy=supported.samplerAnisotropy;
+        enabled.occlusionQueryPrecise=supported.occlusionQueryPrecise;
         sampler_anisotropy=enabled.samplerAnisotropy==VK_TRUE;
         VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};di.queueCreateInfoCount=1;di.pQueueCreateInfos=&qi;
         di.pEnabledFeatures=&enabled;
         Check(vkCreateDevice(physical,&di,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
+        if(enabled.occlusionQueryPrecise){
+            VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qci.queryType=VK_QUERY_TYPE_OCCLUSION;qci.queryCount=1;
+            Check(vkCreateQueryPool(dev,&qci,nullptr,&visibility_query),"visibility query pool");
+        }
         VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pi.queueFamilyIndex=family;pi.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         Check(vkCreateCommandPool(dev,&pi,nullptr,&pool),"command pool");
         VkCommandBufferAllocateInfo ca{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ca.commandPool=pool;ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ca.commandBufferCount=1;
@@ -802,6 +811,11 @@ struct VulkanCore{
                 return;
             }
         }
+        const bool counted=state&&state->simple[gpu::kMCountEnable/4];
+        if(counted&&!visibility_query)throw std::logic_error("Precise Vulkan visibility query unavailable");
+        // Counted draws run alone so one query slot can be reused only
+        // after its result is consumed. Ordinary draws still batch.
+        if(counted)FlushBatch();
         Pipeline(root,packed,textured,blend,multi,state,guest,guest?&plan:nullptr,dynamic,guest_viewport?&region:nullptr);
         const VkDeviceSize vb_bytes=guest?plan.bytes:6*sizeof(Vertex);
         const VkDeviceSize ib_bytes=guest?uint64_t(guest->index_count)*(guest->index16?2:4):3*sizeof(uint16_t);
@@ -857,9 +871,11 @@ struct VulkanCore{
         if(dynamic)std::memcpy(vc,state->vsc.data(),192*16);
         std::memset(uc,0,4096);std::memcpy(uc,&dc,sizeof(dc));
         if(!pending_draws)Begin();
+        if(counted)vkCmdResetQueryPool(cmd,visibility_query,0,1);
         VkClearValue clear[2]{};clear[0].color.float32[2]=blend?1:0;clear[0].color.float32[3]=1;clear[1].depthStencil={1.0f,0};
         VkRenderPassBeginInfo ri{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};ri.renderPass=preserve?load_pass:pass;ri.framebuffer=fb;ri.renderArea={{0,0},{W,H}};ri.clearValueCount=preserve?0:2;ri.pClearValues=preserve?nullptr:clear;
         vkCmdBeginRenderPass(cmd,&ri,VK_SUBPASS_CONTENTS_INLINE);
+        if(counted)vkCmdBeginQuery(cmd,visibility_query,0,VK_QUERY_CONTROL_PRECISE_BIT);
         vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
         VkViewport draw_vp{0,float(H),float(W),-float(H),0,1};VkRect2D draw_sc{{0,0},{W,H}};
         if(guest_viewport){draw_vp=region.viewport;draw_sc=region.scissor;}
@@ -882,10 +898,17 @@ struct VulkanCore{
             vkCmdDrawIndexed(cmd,3,1,0,0,0);
         }else vkCmdDraw(cmd,3,1,0,0);
         if(second)vkCmdDraw(cmd,3,1,3,0);
+        if(counted)vkCmdEndQuery(cmd,visibility_query,0);
         vkCmdEndRenderPass(cmd);
         gpu::RenderPassBarrier(cmd);
         ++pending_draws;frame_valid=true;++draw_submissions;
-        if(pending_draws==BatchLimit||vb_bytes>ExtraSlotLimit||ib_bytes>ExtraSlotLimit)FlushBatch();
+        if(counted||pending_draws==BatchLimit||vb_bytes>ExtraSlotLimit||ib_bytes>ExtraSlotLimit)FlushBatch();
+        if(counted){
+            uint64_t pixels=0;
+            Check(vkGetQueryPoolResults(dev,visibility_query,0,1,sizeof(pixels),&pixels,sizeof(pixels),
+                VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WAIT_BIT),"visibility query result");
+            visible_pixels+=uint32_t(pixels);
+        }
         // A preserving stencil/depth-only draw cannot change color.
         if(!preserve||!state||state->simple[gpu::kMColorWriteEnable/4])readback_valid=false;
     }

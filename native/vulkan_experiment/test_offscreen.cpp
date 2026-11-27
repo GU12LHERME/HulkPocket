@@ -929,6 +929,33 @@ int main(int argc,char** argv){
                 call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
                 bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
                 Expect("fixed two-stage live HUD",backend.ReadPixel(32,32),{32,32,32,255});
+                // Actual raw visibility commands, with counted HUD draws
+                // and an uncounted draw. Use a separate checked report span.
+                constexpr uint32_t report_va=0x80115f00,report_method=0x01115f00;
+                bridge_mem.Write32(report_va+12,0xffffffff);
+                write_packet({{kMClearReport,1},{kMCountEnable,1}});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                write_packet({{kMGetReport,report_method}});
+                auto visible=bridge_mem.Read32(report_va+8);
+                if(!visible||visible>64*64||bridge_mem.Read32(report_va+12))
+                    throw std::runtime_error("Invalid precise visibility count");
+                write_packet({{kMCountEnable,0}});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                write_packet({{kMGetReport,report_method}});
+                if(bridge_mem.Read32(report_va+8)!=visible)
+                    throw std::runtime_error("Disabled visibility count changed");
+                write_packet({{kMCountEnable,1}});
+                bridge.ReplayCapturedShaderDiagnostic(8,0,4,0,true);
+                write_packet({{kMGetReport,report_method},{kMClearReport,1}});
+                if(bridge_mem.Read32(report_va+8)!=2*visible)
+                    throw std::runtime_error("Visibility count did not accumulate");
+                write_packet({{kMGetReport,report_method},{kMCountEnable,0}});
+                if(bridge_mem.Read32(report_va+8)||bridge_mem.Read32(report_va+12))
+                    throw std::runtime_error("Visibility clear did not reset count");
+                bool invalid_report=false;
+                try{write_packet({{kMGetReport,report_method+1}});}
+                catch(const std::logic_error&){invalid_report=true;}
+                if(!invalid_report)throw std::runtime_error("Unaligned visibility report accepted");
                 // Physical RP6 draw had stage 0 active, stage 1 disabled,
                 // and stale stage 2 MODULATE. Ignore later stages and their
                 // resources without mutating the guest's latent setters.

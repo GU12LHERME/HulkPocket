@@ -8,7 +8,7 @@ namespace hulkpocket::vkexp {
 class VulkanBridgeBackend final:public gpu::Backend {
     VulkanCore core_;
     gpu::Surface target_{};
-    uint32_t address_=0,pitch_=0;
+    uint32_t address_=0,pitch_=0,presented_frames_=0;
     struct DepthBacking {uint32_t header=0,address=0,pitch=0;bool depth_valid=false,stencil_valid=false;};
     std::array<DepthBacking,VulkanCore::DepthSlots> depth_backings_{};
     unsigned depth_slot_=0;
@@ -271,7 +271,7 @@ public:
     void RestoreRotatedColor(const gpu::Surface& s){
         Target(s);EnsureColor();
     }
-    void Present(const gpu::Surface& front)override{ReadbackColor(front);}
+    void Present(const gpu::Surface& front)override{ReadbackColor(front);++presented_frames_;}
     void Sync(uint32_t data,uint32_t size)override{
         if(!size)return;
         if(DepthOverlap(data,size))throw std::logic_error("Vulkan guest depth readback not integrated");
@@ -284,6 +284,25 @@ public:
     void WaitResource(uint32_t)override{Flush();}
     void WaitGpuFrame(uint64_t)override{Flush();}
     void SetGamma(const uint8_t*)override{throw std::logic_error("Vulkan gamma not integrated");}
-    void GetReport(uint32_t)override{throw std::logic_error("Vulkan visibility report not integrated");}
+    void ClearReport()override{
+        if(!core_.visibility_query)throw std::logic_error("Precise Vulkan visibility query unavailable");
+        core_.FlushBatch();core_.visible_pixels=0;
+    }
+    void GetReport(uint32_t address)override{
+        if(!core_.visibility_query)throw std::logic_error("Precise Vulkan visibility query unavailable");
+        if(address%16||address<0x80000000u||address>=0x81000000u||
+           DepthOverlap(address,16)||(target_.header&&Overlap(address,16,address_,uint64_t(pitch_)*core_.H)))
+            throw std::logic_error("Invalid Vulkan visibility report address");
+        for(const auto& color:saved_)if(color.pitch&&Overlap(address,16,color.address,uint64_t(color.pitch)*core_.H))
+            throw std::logic_error("Vulkan visibility report aliases saved color");
+        auto* out=gpu::CheckedGuestRange(address,16);
+        core_.FlushBatch();
+        // Pinned XboxXBERecomp D3D12 DeliverReports uses the presented
+        // frame epoch in the time field, not an emulated NV2A clock.
+        uint32_t words[3]={presented_frames_,0,core_.visible_pixels};
+        std::memcpy(out,words,sizeof(words));
+        std::atomic_thread_fence(std::memory_order_release);
+        const uint32_t done=0;std::memcpy(out+12,&done,4);
+    }
 };
 }
