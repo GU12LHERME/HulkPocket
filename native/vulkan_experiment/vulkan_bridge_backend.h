@@ -130,9 +130,9 @@ public:
         if(s.rs[gpu::kRsStencilEnable]&&!stencil_valid_)throw std::logic_error("Vulkan stencil requires clear");
         for(unsigned i=0;i<4;++i)if(s.textures[i]){
             gpu::TextureDesc d{};
-            if(!gpu::Describe(s.textures[i],d)||d.depth!=1||(d.cube&&(d.linear||d.width!=d.height||d.width>4096)))
-                throw std::logic_error("Vulkan bridge requires supported 2D or cube texture");
-            auto bytes=gpu::TotalSize(d);
+            if(!gpu::Describe(s.textures[i],d)||!d.depth||(d.cube&&(d.linear||d.depth!=1||d.width!=d.height||d.width>4096)))
+                throw std::logic_error("Vulkan bridge requires supported color texture");
+            auto bytes=d.depth>1?CheckedVolumeBytes(d):gpu::TotalSize(d);
             if(depth_header_&&uint64_t(d.data)<uint64_t(depth_address_)+uint64_t(depth_pitch_)*core_.H&&
                uint64_t(depth_address_)<uint64_t(d.data)+bytes)
                 throw std::logic_error("Vulkan depth texture alias needs depth translation");

@@ -208,8 +208,35 @@ int main(int argc,char** argv){
             f.UploadGuestTexture(cube_header);
             f.Draw(argv[1],false,false,false,false,&cube_state,false,&assembled,true);
             Expect("Cube face mutation",f.Pixel(32,32),{255,255,255,255});
+            // Rebind the same header as a 2x2x2 swizzled color volume.
+            // Morton order for this extent places z in bit 2.
+            memory.Write32(cube_header+12,0x11110631);
+            const uint32_t volume[]={0xffff0000,0xffff0000,0xffff0000,0xffff0000,
+                                     0xff00ff00,0xff00ff00,0xff00ff00,0xff00ff00};
+            memory.Write(0x80000000u|cube_phys,volume,sizeof(volume));
+            f.UploadGuestTexture(cube_header);cs[kTssAddressW]=3;f.SetSampler(0,cube_state);
+            auto sample_volume=[&](float z,const std::array<int,4>& expected){
+                const CubeVertex verts[]={{-.75f,-.75f,.5f,0xffffffff,.25f,.25f,z},
+                    {.75f,-.75f,.5f,0xffffffff,.25f,.25f,z},{0,.75f,.5f,0xffffffff,.25f,.25f,z}};
+                memory.Write(0x80100100,verts,sizeof(verts));
+                if(!GuestDraw(cube_state,5,0,3,0,assembled))throw std::runtime_error("Volume geometry assembly");
+                f.Draw(argv[1],false,false,false,false,&cube_state,false,&assembled,true);
+                Expect("Xbox volume slice",f.Pixel(32,32),expected);
+            };
+            sample_volume(.25f,{255,0,0,255});sample_volume(.75f,{0,255,0,255});
+            sample_volume(1.25f,{0,255,0,255});
+            cs[kTssAddressW]=1;f.SetSampler(0,cube_state);
+            sample_volume(1.25f,{255,0,0,255});
+            cube_state.ps=std::make_shared<gpu::PixelShader>();cube_state.ps->def[8]=8;cube_state.ps->def[9]=0x1800;
+            cube_state.rs[kRsPsTextureModes]=2;
+            sample_volume(.75f,{0,255,0,255});cube_state.ps.reset();
+            const auto volume_decoded=f.texture_decodes;
+            f.UploadGuestTexture(cube_header);
+            if(f.texture_decodes!=volume_decoded)throw std::runtime_error("Unchanged volume cache miss");
+            memory.Write((0x80000000u|cube_phys)+16,white,sizeof(white));f.UploadGuestTexture(cube_header);
+            sample_volume(.75f,{255,255,255,255});
             f.UploadGuestTexture(tex);
-            if(f.tex_cube[0])throw std::runtime_error("Cube view retained on 2D rebind");
+            if(f.tex_cube[0]||f.tex_depth[0]!=1)throw std::runtime_error("Volume view retained on 2D rebind");
             memory.Write(0x80100100,compact,sizeof(compact));
             if(!GuestDraw(guest_state,5,0,3,0,assembled))throw std::runtime_error("Restore compact geometry");
         }

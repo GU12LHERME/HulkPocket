@@ -363,7 +363,7 @@ public:
                 throw std::logic_error("Unsupported original texture stage or palette");
             if(!textures[st])continue;
             gpu::TextureDesc d{};
-            if(!gpu::Describe(textures[st],d)||d.depth!=1||(!capture_pixel&&d.cube)||
+            if(!gpu::Describe(textures[st],d)||(!capture_pixel&&(d.cube||d.depth!=1))||
                Read(uint64_t(textures[st])+8)||!SupportedDiffuseTexture(d,capture_pixel))
                 throw std::logic_error("Unsupported original texture resource");
             auto base=0x1b00+st*0x40;
@@ -397,6 +397,13 @@ public:
                 gpu::CheckedGuestRange(d.data,bytes);
                 gpu::CheckedGuestRange(gpu::PhysicalResourceAddress(address),1024);
                 palettes[st]=palette;
+            }else if(d.depth>1){
+                const auto format=state_.simple[(base+4)/4],offset=state_.simple[base/4];
+                const auto bytes=CheckedVolumeBytes(d);
+                if((format&3)!=1||(format&4)||((format>>4)&15)!=3||offset%4||
+                   offset>=0x04000000u||!((format>>16)&15)||uint64_t(offset)+bytes>0x04000000u)
+                    throw std::logic_error("Unsupported raw NV2A volume texture layout");
+                gpu::CheckedGuestRange(d.data,bytes);
             }else if(d.cube){
                 // Cube faces use the upstream 128-byte face stride. Verify
                 // DMA, square power-of-two dimensions and the whole span.
@@ -513,11 +520,11 @@ public:
             next.rs[gpu::kRsPsTextureModes]=next.ps->def[54];
             for(unsigned st=0;st<4;++st){
                 auto mode=(next.ps->def[54]>>(5*st))&31;
-                if((mode==1||mode==3||mode==6||mode==7||mode==0xf||mode==0x10)!=bool(textures[st]))
+                if((mode==1||mode==2||mode==3||mode==6||mode==7||mode==0xf||mode==0x10)!=bool(textures[st]))
                     throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
                 if(textures[st]){
                     gpu::TextureDesc d{};
-                    if(!gpu::Describe(textures[st],d)||d.cube!=(mode==3))
+                    if(!gpu::Describe(textures[st],d)||d.cube!=(mode==3)||(d.depth>1)!=(mode==2))
                         throw std::logic_error("Captured texture dimension disagrees with pixel stage mode");
                 }
                 if(mode==6||mode==7){
@@ -664,10 +671,10 @@ public:
             default:return false;
         }
         unsigned max_levels=1;
-        for(unsigned extent=std::max(d.width,d.height);extent>1;extent>>=1)++max_levels;
+        for(unsigned extent=std::max({d.width,d.height,d.depth});extent>1;extent>>=1)++max_levels;
         return d.width&&d.height&&d.width<=4096&&d.height<=4096&&d.levels>=1&&
             d.levels<=max_levels&&(!d.linear||d.levels==1)&&
-            d.depth==1&&(!d.cube||(allow_palette&&!d.linear&&d.width==d.height&&d.format!=0x0b))&&d.linear==(!f.swizzled&&!f.compressed)&&
+            (d.depth==1||(allow_palette&&d.depth>1&&!d.linear&&!d.cube&&f.swizzled&&!f.compressed&&f.host==gpu::Host::BGRA8&&d.format!=0x0b))&&(!d.cube||(allow_palette&&!d.linear&&d.width==d.height&&d.depth==1&&d.format!=0x0b))&&d.linear==(!f.swizzled&&!f.compressed)&&
             (!d.linear||d.pitch>=uint64_t(d.width)*f.bits/8)&&
             ((d.format!=0x24&&d.format!=0x25)||!(d.width&1));
     }
@@ -869,10 +876,10 @@ public:
                 if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0)
                     throw std::logic_error("Captured fixed vertex path requires declared UV set");
                 gpu::TextureDesc d{};
-                if(replay.textures[st]&&gpu::Describe(replay.textures[st],d)&&d.cube){
+                if(replay.textures[st]&&gpu::Describe(replay.textures[st],d)&&(d.cube||d.depth>1)){
                     const auto type=layout.inputs[9+set].type;
-                    if((!flags&&type!=0x32&&type!=0x42)||(flags&&components<3))
-                        throw std::logic_error("Cube texture requires three-dimensional coordinates");
+                    if((!flags&&type!=0x32&&type!=0x42)||(flags&&components<3)||(!state_.ps&&(flags&0x100)))
+                        throw std::logic_error("Unsupported cube or volume coordinate layout");
                 }
             }
         }

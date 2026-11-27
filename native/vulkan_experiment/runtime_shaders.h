@@ -50,20 +50,22 @@ public:
     }
     std::vector<uint32_t> Pixel(const gpu::State& s,const gpu::TexInfo (&tex)[4]){
         for(unsigned i=0;i<4;++i)
-            if(bool(s.textures[i])!=bool(tex[i].kind)||(tex[i].kind!=gpu::kTexNone&&tex[i].kind!=gpu::kTex2D&&tex[i].kind!=gpu::kTexCube)||tex[i].shadow||tex[i].flags)
+            if(bool(s.textures[i])!=bool(tex[i].kind)||(tex[i].kind!=gpu::kTexNone&&tex[i].kind!=gpu::kTex2D&&tex[i].kind!=gpu::kTex3D&&tex[i].kind!=gpu::kTexCube)||tex[i].shadow||tex[i].flags)
                 throw std::invalid_argument("Unsupported runtime texture binding");
         auto key=gpu::MakePixelKey(s,tex);
         if(s.ps){
             if((key.count&255)>8)throw std::invalid_argument("Invalid Xbox combiner count");
-            // Only modes with verified 2D shader translation. Dot,
-            // cube and depth sampling still require separate integration.
+            // Direct 2D, 3D and cube sampling, plus the checked dependent
+            // modes. Dot-product and depth modes remain guarded.
             for(unsigned i=0;i<4;++i){
                 auto raw=(s.rs[gpu::kRsPsTextureModes]>>(i*5))&31;
                 bool dependent=raw==6||raw==7||raw==0xf||raw==0x10;
-                if(raw!=0&&raw!=1&&raw!=3&&raw!=4&&raw!=5&&!dependent)
+                if(raw!=0&&raw!=1&&raw!=2&&raw!=3&&raw!=4&&raw!=5&&!dependent)
                     throw std::invalid_argument("Unsupported Vulkan programmable texture mode");
                 if((raw==1||dependent)&&tex[i].kind!=gpu::kTex2D)
                     throw std::invalid_argument("Missing programmable 2D texture");
+                if(raw==2&&tex[i].kind!=gpu::kTex3D)
+                    throw std::invalid_argument("Missing programmable volume texture");
                 if(raw==3&&tex[i].kind!=gpu::kTexCube)
                     throw std::invalid_argument("Missing programmable cube texture");
                 if(dependent){
@@ -71,7 +73,7 @@ public:
                     unsigned source=i==1?0:(s.ps->def[56]>>(i==2?16:20))&15;
                     if(source>=i)throw std::invalid_argument("Invalid dependent texture source");
                     auto prior=(s.rs[gpu::kRsPsTextureModes]>>(5*source))&31;
-                    if(prior!=1&&prior!=3&&prior!=4&&prior!=6&&prior!=7&&prior!=0xf&&prior!=0x10)
+                    if(prior!=1&&prior!=2&&prior!=3&&prior!=4&&prior!=6&&prior!=7&&prior!=0xf&&prior!=0x10)
                         throw std::invalid_argument("Dependent texture source has no color");
                 }
             }
