@@ -26,8 +26,15 @@ inline void FixedTransforms(const gpu::State& s,gpu::DrawConstants& dc){
     const auto wvp=Multiply(wv,s.transforms[3]);
     CopyMatrix(wv,dc.wv);CopyMatrix(wvp,dc.wvp);
     for(unsigned i=0;i<4;++i)CopyMatrix(s.transforms[16+i],dc.tm[i]);
-    // Inverse transpose of the linear part, for row-vector normals.
-    if(s.rs[gpu::kRsLighting]){
+    // SCDA FillTransformConstants supplies inverse-transpose normals
+    // independently of lighting. Only require an invertible matrix when
+    // lighting or a generated normal/reflection coordinate consumes it.
+    bool need_normal=s.rs[gpu::kRsLighting]!=0;
+    for(const auto& t:s.tss){
+        const auto gen=(t[gpu::kTssTexCoordIndex]>>16)&7;
+        need_normal=need_normal||gen==1||gen==3;
+    }
+    if(need_normal){
         float a=wv[0],b=wv[1],c=wv[2],d=wv[4],e=wv[5],f=wv[6],g=wv[8],h=wv[9],i=wv[10];
         const float cof[]={e*i-f*h,f*g-d*i,d*h-e*g,c*h-b*i,a*i-c*g,b*g-a*h,b*f-c*e,c*d-a*f,a*e-b*d};
         const float det=a*cof[0]+b*cof[1]+c*cof[2];

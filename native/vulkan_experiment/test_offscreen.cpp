@@ -247,6 +247,19 @@ int main(int argc,char** argv){
         if(std::bit_cast<float>(f.stage_sampler_keys[0][6])!=std::min(1.f,f.limits.maxSamplerLodBias))
             throw std::runtime_error("Xbox mip bias cache key mismatch");
         stage[kTssMipLodBias]=0;f.SetSampler(0,guest_state);
+        stage[kTssMinFilter]=3;stage[kTssMaxAnisotropy]=4;
+        if(f.sampler_anisotropy){
+            f.SetSampler(0,guest_state);
+            if(std::bit_cast<float>(f.stage_sampler_keys[0][9])!=std::min(4.f,f.limits.maxSamplerAnisotropy))
+                throw std::runtime_error("Anisotropy cache key mismatch");
+            f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+            (void)f.Pixel(32,32); // driver accepts actual sampling
+        }else{
+            bool unavailable=false;
+            try{f.SetSampler(0,guest_state);}catch(const std::invalid_argument&){unavailable=true;}
+            if(!unavailable)throw std::runtime_error("Unsupported anisotropy accepted");
+        }
+        stage[kTssMinFilter]=2;stage[kTssMaxAnisotropy]=1;f.SetSampler(0,guest_state);
         raw_decodes_before=f.texture_decodes;f.UploadGuestTexture(tex);
         if(f.texture_decodes!=raw_decodes_before)throw std::runtime_error("Unchanged mip chain decoded again");
         std::fill(mips.begin()+256,mips.end(),0xff0000ff);
@@ -270,6 +283,15 @@ int main(int argc,char** argv){
         light[18]=std::bit_cast<uint32_t>(1.f);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest reversed light",f.Pixel(32,32),{0,0,0,255});
+        // Reflection coordinates consume the normal matrix even with lighting off.
+        State reflection{};reflection.transforms[2][0]=reflection.transforms[2][5]=reflection.transforms[2][10]=reflection.transforms[2][15]=1;
+        reflection.transforms[3]=reflection.transforms[2];reflection.transforms[256]=reflection.transforms[2];
+        reflection.transforms[256][0]=2;reflection.transforms[256][5]=4;
+        reflection.tss[0][kTssTexCoordIndex]=0x30000;
+        gpu::DrawConstants reflection_constants{};
+        FixedTransforms(reflection,reflection_constants);
+        if(reflection_constants.wvn[0]!=.5f||reflection_constants.wvn[5]!=.25f||reflection_constants.wvn[10]!=1.f)
+            throw std::runtime_error("Unlit reflection normal matrix missing");
         // Synthetic Xbox vertex microcode: mov oPos,v0; mov oD0,c[96].
         // Position is already in guest screen units, including depth scale.
         guest_state.rs[kRsLighting]=0;guest_state.light_enable=0;
@@ -884,7 +906,22 @@ int main(int argc,char** argv){
                 bridge.AdoptLiveSetters(multi_state);
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
                 Expect("select first UV set",backend.ReadPixel(32,32),{255,0,0,255});
-                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=2;
+                // Xbox 2-component coordinate expands to (u,v,1,0);
+                // the third row moves u from .25 to .75, changing texel.
+                const float texture_matrix[16]={1,0,0,0,0,1,0,0,.5f,0,1,0,0,0,0,1};
+                bridge_mem.Write(device+0xc60+3*64,texture_matrix,sizeof(texture_matrix));
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTextureTransformFlags]=2;
+                bridge.AdoptLiveSetters(multi_state);
+                bridge.SyncFixedDiffuseShader(device,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("live texture matrix translated UV",backend.ReadPixel(32,32),{0,128,0,255});
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTextureTransformFlags]=0x102;
+                bridge.AdoptLiveSetters(multi_state);
+                bool invalid_projection=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);}catch(const std::logic_error&){invalid_projection=true;}
+                if(!invalid_projection)throw std::runtime_error("Unsupported one-dimensional projected coordinates accepted");
+                multi_state=bridge.Snapshot();multi_state.tss[1][kTssTextureTransformFlags]=0;
+                multi_state.tss[1][kTssTexCoordIndex]=2;
                 bridge.AdoptLiveSetters(multi_state);
                 bool missing_uv=false;
                 try{bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);}catch(const std::logic_error&){missing_uv=true;}

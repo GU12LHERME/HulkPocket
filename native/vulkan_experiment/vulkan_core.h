@@ -86,7 +86,8 @@ struct VulkanCore{
     std::array<RawTexture,4> raw_textures{};
     uint64_t texture_decodes=0,raw_texture_hits=0,texture_uploads=0;
     std::array<VkSampler,4> stage_samplers{};
-    std::array<std::array<uint32_t,9>,4> stage_sampler_keys{};
+    std::array<std::array<uint32_t,10>,4> stage_sampler_keys{};
+    bool sampler_anisotropy=false;
     VkPipelineCache pipeline_cache{};
     VkPhysicalDeviceLimits limits{};
     VkFormat depth_format=VK_FORMAT_UNDEFINED;
@@ -222,7 +223,12 @@ struct VulkanCore{
         vkGetPhysicalDeviceMemoryProperties(physical,&mem);
         float priority=1;VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
         qi.queueFamilyIndex=family;qi.queueCount=1;qi.pQueuePriorities=&priority;
+        VkPhysicalDeviceFeatures supported{},enabled{};
+        vkGetPhysicalDeviceFeatures(physical,&supported);
+        enabled.samplerAnisotropy=supported.samplerAnisotropy;
+        sampler_anisotropy=enabled.samplerAnisotropy==VK_TRUE;
         VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};di.queueCreateInfoCount=1;di.pQueueCreateInfos=&qi;
+        di.pEnabledFeatures=&enabled;
         Check(vkCreateDevice(physical,&di,nullptr,&dev),"device");vkGetDeviceQueue(dev,family,0,&queue);
         VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pi.queueFamilyIndex=family;pi.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
         Check(vkCreateCommandPool(dev,&pi,nullptr,&pool),"command pool");
@@ -326,14 +332,20 @@ struct VulkanCore{
             throw std::invalid_argument("Invalid Vulkan mip sampler state");
         const auto lod=std::min(t[gpu::kTssMaxMipLevel],tex_levels[stage]-1);
         const auto effective_bias=std::clamp(bias,-limits.maxSamplerLodBias,limits.maxSamplerLodBias);
-        std::array<uint32_t,9> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0};
+        const bool anisotropic=t[gpu::kTssMinFilter]==3||t[gpu::kTssMagFilter]==3;
+        const auto requested_aniso=anisotropic?std::max(1u,t[gpu::kTssMaxAnisotropy]):1u;
+        if(requested_aniso>1&&!sampler_anisotropy)
+            throw std::invalid_argument("Xbox anisotropic filter requires Vulkan samplerAnisotropy");
+        const float aniso=requested_aniso>1?std::min(float(requested_aniso),limits.maxSamplerAnisotropy):1.f;
+        std::array<uint32_t,10> key={t[gpu::kTssAddressU],t[gpu::kTssAddressV],t[gpu::kTssMinFilter],t[gpu::kTssMagFilter],t[gpu::kTssMipFilter],tex_levels[stage],std::bit_cast<uint32_t>(effective_bias),lod,border?t[gpu::kTssBorderColor]:0,std::bit_cast<uint32_t>(aniso)};
         if(stage_samplers[stage]&&key==stage_sampler_keys[stage])return;
         auto address=[](uint32_t v){switch(v){case 1:return VK_SAMPLER_ADDRESS_MODE_REPEAT;case 2:return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;case 3:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;case 4:return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;default:throw std::invalid_argument("Unsupported Vulkan address mode");}};
-        auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
+        auto filter=[](uint32_t v){if(v==1)return VK_FILTER_NEAREST;if(v==2||v==3)return VK_FILTER_LINEAR;throw std::invalid_argument("Unsupported Vulkan texture filter");};
         VkSamplerCreateInfo ci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         ci.addressModeU=address(key[0]);ci.addressModeV=address(key[1]);ci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         ci.minFilter=filter(key[2]);ci.magFilter=filter(key[3]);ci.mipmapMode=key[4]==2?VK_SAMPLER_MIPMAP_MODE_LINEAR:VK_SAMPLER_MIPMAP_MODE_NEAREST;
         ci.mipLodBias=effective_bias;ci.minLod=float(lod);ci.maxLod=key[4]?float(key[5]-1):ci.minLod;
+        ci.anisotropyEnable=aniso>1.f;ci.maxAnisotropy=aniso;
         if(border){
             switch(key[8]){
                 case 0:ci.borderColor=VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;break;

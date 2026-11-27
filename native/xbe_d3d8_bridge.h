@@ -508,8 +508,11 @@ public:
         next.textures=textures;next.palettes=palettes;
         next.base_vertex=Read(uint64_t(device)+0x1c);
         // Copy the actual matrices instead of using the standalone identity.
-        for(unsigned tr:{0u,1u,6u}){
-            auto pc=tr<2?tr+2:tr+250;
+        // XDK device matrix mirror: view/projection, texture 0..3,
+        // world. Match pinned SCDA D3DDevice_SetTransform.
+        for(unsigned tr=0;tr<=6;++tr){
+            if(!capture_pixel&&tr>=2&&tr<=5)continue;
+            auto pc=tr<2?tr+2:tr<6?tr+14:tr+250;
             std::memcpy(next.transforms[pc].data(),gpu::CheckedGuestRange(uint64_t(device)+0xc60+64*tr,64),64);
             for(float v:next.transforms[pc])if(!std::isfinite(v))
                 throw std::invalid_argument("Nonfinite guest transform");
@@ -755,8 +758,7 @@ public:
             check_op(color,t[kTssColorArg0],t[kTssColorArg1],t[kTssColorArg2],bound,false);
             check_op(alpha,t[kTssAlphaArg0],t[kTssAlphaArg1],t[kTssAlphaArg2],bound,true);
             if(t[kTssColorKeyOp]||t[kTssColorSign]||
-               (t[kTssAlphaKill]&&t[kTssAlphaKill]!=4)||
-               t[kTssMaxAnisotropy]>1)
+               (t[kTssAlphaKill]&&t[kTssAlphaKill]!=4))
                 throw std::logic_error("Unsupported fixed texture sampling state");
         }
     }
@@ -820,20 +822,24 @@ public:
                 const auto mode=(state_.rs[gpu::kRsPsTextureModes]>>(5*st))&31;
                 if(!replay.textures[st]&&!(state_.ps&&generated&&(mode==4||mode==5)))continue;
                 auto& t=replay.tss[st];const auto set=t[gpu::kTssTexCoordIndex];
+                const auto flags=t[gpu::kTssTextureTransformFlags],components=flags&0xff;
+                // Shared shader supports row-vector texture matrices and
+                // projected 2D coordinates with a third/fourth q component.
+                if(flags&&(!allow_fixed||rhw||(flags&~0x1ffu)||
+                   components<2||components>4||((flags&0x100)&&components<3)))
+                    throw std::logic_error("Unsupported captured texture transform profile");
                 if(generated){
                     // Shared FixedVertexHlsl already implements camera-space
                     // reflection vectors. Require the full S/T/R profile,
-                    // position/normal inputs and no texture transform.
+                    // position/normal inputs and a supported texture transform.
                     if(!allow_fixed||rhw||raw[0]!=0x8512||raw[1]!=0x8512||
-                       raw[2]!=0x8512||raw[3]!=0||layout.inputs[2].stream<0||
-                       t[gpu::kTssTextureTransformFlags])
+                       raw[2]!=0x8512||raw[3]!=0||layout.inputs[2].stream<0)
                         throw std::logic_error("Unsupported active NV2A reflection coordinate profile");
                     t[gpu::kTssTexCoordIndex]=(set&3u)|0x30000u;
                     continue;
                 }
-                if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0||
-                   t[gpu::kTssTextureTransformFlags])
-                    throw std::logic_error("Captured fixed vertex path requires declared UV set without transform");
+                if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0)
+                    throw std::logic_error("Captured fixed vertex path requires declared UV set");
             }
         }
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
