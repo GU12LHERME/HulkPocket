@@ -211,6 +211,25 @@ private:
         }
         live.buffers.RewindScratch();
     }
+    void SyncLiveTargets(LiveD3dDevice& live){
+        if(!VulkanPreviewSelected()){
+            live.buffers.VerifyInitialTargets();return;
+        }
+        // Original guest code owns the device mirrors. Do not fabricate
+        // SetRenderTarget returns or modify its resource reference counts.
+        auto dev=live.buffers.DeviceAddress();
+        auto color=mem_.Read32(dev+0x1a04),depth=mem_.Read32(dev+0x1a08);
+        if(!color||!mem_.IsCommitted(color,20)||mem_.Read32(color+8)||
+           (depth&&(!mem_.IsCommitted(depth,20)||mem_.Read32(depth+8))))
+            throw std::logic_error("Invalid or locked live render target");
+        if(depth&&depth!=live.buffers.Depth())
+            throw std::logic_error("Live Vulkan depth target switching not integrated");
+        auto state=live.bridge.Snapshot();
+        if(color!=state.rt.header||depth!=state.zs.header){
+            live.bridge.BindInitialTargets(color,depth);
+            std::fprintf(stderr,"D3D VULKAN TARGET CHANGE color=%08X depth=%08X\n",color,depth);
+        }
+    }
     void ReleaseD3dOwner(uint32_t thread){
         if(live_d3d_&&live_d3d_->owner==thread){
             live_d3d_->SaveLastPresented();
@@ -1114,8 +1133,8 @@ private:
                 if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
                     throw std::runtime_error("D3D clear without owned live device");
                 auto& live=*live_d3d_;
-                live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
+                SyncLiveTargets(live);
                 std::fprintf(stderr,"D3D LIVE CLEAR caller=%08X rects=%u flags=%08X color=%08X z=%08X stencil=%08X\n",
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,2),Arg(cpu,3),Arg(cpu,4),Arg(cpu,5));
                 live.bridge.Call("D3DDevice_Clear",cpu,D3dAbi::Stdcall(6));
@@ -1137,7 +1156,7 @@ private:
                 if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
                     throw std::runtime_error("D3D draw without owned live device");
                 auto& live=*live_d3d_;
-                live.buffers.VerifyInitialTargets();
+                if(!VulkanPreviewSelected())live.buffers.VerifyInitialTargets();
                 auto dev=live.buffers.DeviceAddress();
                 if(live.TraceGraphics())std::fprintf(stderr,"D3D FIRST DRAW caller=%08X prim=%u arg1=%08X arg2=%08X streams=%08X rs=%08X tss=%08X\n",
                     mem_.Read32(cpu.esp),Arg(cpu,0),Arg(cpu,1),Arg(cpu,2),cpu.eax,cpu.ecx,cpu.edx);
@@ -1170,6 +1189,7 @@ private:
                 if(full_capture)for(unsigned st=0;st<4;++st)for(unsigned i=0;i<gpu::kTssCount;++i)
                     std::fprintf(stderr,"D3D DRAW TSS %u %u=%08X\n",st,i,state.tss[st][i]);
                 DrainLivePush(live);
+                SyncLiveTargets(live);
                 auto fvf=live.bridge.SyncFixedDiffuseShader(dev,VulkanPreviewSelected());
                 bool indexed=ordinal==(kGraphicsDrawIndexed|0x1000u);
                 auto vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
@@ -1355,8 +1375,8 @@ private:
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.WaitLimitReached(true))
                     throw std::runtime_error("D3D vertical wait diagnostic continuation not enabled");
-                live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
+                SyncLiveTargets(live);
                 live.backend.Flush();
                 // Offscreen targets have no physical scanout. Pace on a
                 // monotonic 60 Hz clock, not a fabricated hardware event.
@@ -1390,8 +1410,8 @@ private:
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.WaitLimitReached(false))
                     throw std::runtime_error("D3D initial wait diagnostic continuation not enabled");
-                live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
+                SyncLiveTargets(live);
                 live.bridge.CompleteInitialGpuWait(target,current,flags,callback);
                 ++live.diagnostic_gpu_waits;
                 std::fprintf(stderr,"D3D LIVE WAIT PASS: GPU completed synchronous work, initial timeline only\n");
@@ -1418,6 +1438,7 @@ private:
                     throw std::runtime_error("Unsupported diagnostic swap request");
                 live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
+                SyncLiveTargets(live);
                 gpu::ScopedGuestMemory scope(mem_);
                 const auto state=live.bridge.Snapshot();
                 gpu::TextureDesc desc{};

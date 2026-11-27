@@ -10,22 +10,44 @@ class VulkanBridgeBackend final:public gpu::Backend {
     gpu::Surface target_{};
     uint32_t address_=0,pitch_=0,depth_header_=0,depth_address_=0,depth_pitch_=0;
     bool depth_valid_=false,stencil_valid_=false,rotated_=false;
-    std::array<uint32_t,2> saved_{};unsigned saved_next_=0;
+    struct SavedColor {uint32_t address=0,pitch=0;};
+    std::array<SavedColor,16> saved_{};unsigned saved_next_=0;
+    bool Saved(uint32_t address,uint32_t pitch)const{
+        return std::any_of(saved_.begin(),saved_.end(),[&](const auto& e){return e.address==address&&e.pitch==pitch;});
+    }
+    static bool Overlap(uint32_t a,uint64_t n,uint32_t b,uint64_t m){
+        return uint64_t(a)<uint64_t(b)+m&&uint64_t(b)<uint64_t(a)+n;
+    }
     void Depth(const gpu::Surface& s){
         gpu::TextureDesc d{};
         if(!s.header||!gpu::DescribeSurface(s,d)||!d.linear||d.format!=0x2e||d.width!=core_.W||d.height!=core_.H||d.pitch<uint64_t(d.width)*4)
             throw std::logic_error("Unsupported Vulkan depth target");
         gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
-        if(depth_header_&&(depth_header_!=s.header||depth_address_!=d.data))throw std::logic_error("Vulkan depth target switching not integrated");
+        if(depth_header_&&(depth_header_!=s.header||depth_address_!=d.data||depth_pitch_!=d.pitch))
+            throw std::logic_error("Vulkan depth target switching not integrated");
+        if(target_.header&&Overlap(d.data,uint64_t(d.pitch)*core_.H,address_,uint64_t(pitch_)*core_.H))
+            throw std::logic_error("Vulkan color/depth target overlap");
         depth_header_=s.header;depth_address_=d.data;depth_pitch_=d.pitch;
     }
     void Target(const gpu::Surface& s){
         gpu::TextureDesc d{};
-        if(!gpu::DescribeSurface(s,d)||!d.linear||d.format!=0x12||d.width!=core_.W||d.height!=core_.H)
+        if(!s.header||!gpu::DescribeSurface(s,d)||!d.linear||d.format!=0x12||
+           d.width!=core_.W||d.height!=core_.H||d.depth!=1||d.levels!=1||d.pitch<uint64_t(d.width)*4)
             throw std::invalid_argument("Unsupported Vulkan bridge target");
         gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
-        if(target_.header&&(target_.header!=s.header||address_!=d.data))
-            throw std::logic_error("Vulkan target switching/rotation not integrated");
+        if(depth_header_&&Overlap(d.data,uint64_t(d.pitch)*core_.H,depth_address_,uint64_t(depth_pitch_)*core_.H))
+            throw std::logic_error("Vulkan color target aliases depth");
+        if(target_.header&&(address_!=d.data||pitch_!=d.pitch)){
+            if(target_.header==s.header)
+                throw std::logic_error("Vulkan same-header backing change requires verified rotation");
+            if(Overlap(d.data,uint64_t(d.pitch)*core_.H,address_,uint64_t(pitch_)*core_.H))
+                throw std::logic_error("Vulkan partial color target alias");
+            // Finish and store the previous target before reusing the image.
+            // An untouched rotated backing already resides in guest memory.
+            if(core_.frame_valid)Writeback();
+            core_.FlushBatch();
+            core_.frame_valid=false;core_.readback_valid=false;rotated_=true;
+        }
         target_=s;address_=d.data;pitch_=d.pitch;
     }
     // Rotation changes color backing, not the shared depth attachment.
@@ -33,7 +55,7 @@ class VulkanBridgeBackend final:public gpu::Backend {
     // Restore only a backing previously written to checked guest memory.
     void EnsureColor(){
         if(core_.frame_valid)return;
-        if(!rotated_||std::find(saved_.begin(),saved_.end(),address_)==saved_.end())
+        if(!rotated_||!Saved(address_,pitch_))
             throw std::logic_error("Vulkan rotation has no saved color");
         const auto* pixels=gpu::CheckedGuestRange(address_,uint64_t(pitch_)*core_.H);
         core_.frame_valid=true;
@@ -45,7 +67,12 @@ class VulkanBridgeBackend final:public gpu::Backend {
         if(!target_.header)throw std::logic_error("No initialized Vulkan target");
         EnsureColor();
         StoreColor(target_,core_.ColorPixels(),core_.W,core_.H);
-        if(std::find(saved_.begin(),saved_.end(),address_)==saved_.end())saved_[saved_next_++%saved_.size()]=address_;
+        if(!Saved(address_,pitch_)){
+            // Invalidate overlapping older layouts; never restore a
+            // differently pitched or partially aliased saved backing.
+            for(auto& e:saved_)if(e.pitch&&Overlap(e.address,uint64_t(e.pitch)*core_.H,address_,uint64_t(pitch_)*core_.H))e={};
+            saved_[saved_next_++%saved_.size()]={address_,pitch_};
+        }
     }
 public:
     bool Init(uint32_t w,uint32_t h)override{core_.Init(w,h);return true;}

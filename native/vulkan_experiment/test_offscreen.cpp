@@ -726,6 +726,34 @@ int main(int argc,char** argv){
                 bool legacy_rejected=false;
                 try{bridge.ReplayCapturedShaderDiagnostic(8,0,4);}catch(const std::logic_error&){legacy_rejected=true;}
                 if(!legacy_rejected)throw std::runtime_error("Fixed extension enabled without opt-in");
+                // Switch between two independent 64x64 guest color
+                // surfaces using the same depth attachment. The first
+                // switch flushes the main target, the second restores it.
+                call("D3DDevice_SetRenderTarget",{copy_surface,depth_surface});
+                call("D3DDevice_Clear",{0,0,0xf0,0xff102030,std::bit_cast<uint32_t>(1.f),0});
+                Expect("secondary target clear",backend.ReadPixel(32,32),{16,32,48,255});
+                if(bridge_mem.Read32(0x80110000+(32*64+32)*4)!=0xffffc0c0)
+                    throw std::runtime_error("Main target not stored on switch");
+                call("D3DDevice_SetRenderTarget",{surface,depth_surface});
+                backend.ReadbackColor(bridge.Snapshot().rt);
+                Expect("main target restored",backend.ReadPixel(32,32),{255,192,192,255});
+                if(bridge_mem.Read32(0x80116000)!=0xff102030)
+                    throw std::runtime_error("Secondary target not stored on switch");
+                call("D3DDevice_SetRenderTarget",{copy_surface,depth_surface});
+                uint32_t small_rect[4]={30,30,34,34};bridge_mem.Write(rect,small_rect,sizeof(small_rect));
+                call("D3DDevice_Clear",{1,rect,0xf0,0xff00ff00,std::bit_cast<uint32_t>(1.f),0});
+                Expect("secondary restored for partial clear",backend.ReadPixel(32,32),{0,255,0,255});
+                Expect("secondary outside retained",backend.ReadPixel(0,0),{16,32,48,255});
+                // Reject a partially overlapping color backing before
+                // corrupting the previously valid active target.
+                constexpr uint32_t alias_surface=0x20700;
+                bridge_mem.Write32(alias_surface,0x50000);bridge_mem.Write32(alias_surface+4,0x116100);
+                bridge_mem.Write32(alias_surface+12,0x00011221);bridge_mem.Write32(alias_surface+16,63|(63<<12)|(3<<24));
+                call("D3DDevice_SetRenderTarget",{alias_surface,depth_surface});
+                bool rejected_alias=false;
+                try{backend.ReadbackColor(bridge.Snapshot().rt);}catch(const std::logic_error&){rejected_alias=true;}
+                if(!rejected_alias)throw std::runtime_error("Partial color target alias accepted");
+                Expect("active target unchanged after rejected alias",backend.ReadPixel(32,32),{0,255,0,255});
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }
