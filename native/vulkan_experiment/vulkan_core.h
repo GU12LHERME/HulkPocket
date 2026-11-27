@@ -75,6 +75,16 @@ struct VulkanCore{
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1};
     std::array<bool,4> tex_rect{};
     std::array<std::vector<uint8_t>,4> last_pixels{};
+    // Exact byte snapshots avoid repeated unswizzling/BC expansion.
+    // No guest dirty flag is required: compare all source bytes on every bind.
+    static constexpr size_t RawTextureLimit=4*1024*1024;
+    struct RawTexture {
+        std::array<uint32_t,10> key{};
+        std::vector<uint8_t> bytes;
+        std::array<uint8_t,1024> palette{};
+    };
+    std::array<RawTexture,4> raw_textures{};
+    uint64_t texture_decodes=0,raw_texture_hits=0,texture_uploads=0;
     std::array<VkSampler,4> stage_samplers{};
     std::array<std::array<uint32_t,6>,4> stage_sampler_keys{};
     VkPipelineCache pipeline_cache{};
@@ -338,7 +348,7 @@ struct VulkanCore{
         }
         tex_rect[stage]=true;
         // GPU copies are not represented by the CPU decoded-pixel cache.
-        last_pixels[stage].clear();
+        last_pixels[stage].clear();raw_textures[stage]={};
         Begin();
         Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -360,6 +370,41 @@ struct VulkanCore{
         unsigned max_levels=1;for(unsigned n=std::max(desc.width,desc.height);n>1;n>>=1)++max_levels;
         if(!desc.levels||desc.levels>max_levels||desc.width>limits.maxImageDimension2D||desc.height>limits.maxImageDimension2D)
             throw std::invalid_argument("Invalid Vulkan mip extent");
+        // Bound arithmetic before asking for a checked guest span. Only
+        // layouts already successfully decoded can ever hit this cache.
+        auto& raw=raw_textures[stage];
+        std::array<uint32_t,10> raw_key={desc.data,desc.format,desc.width,desc.height,desc.depth,desc.levels,
+            desc.pitch,uint32_t(desc.cube),uint32_t(desc.linear),desc.format==0x0b?palette:0};
+        const uint8_t* source=nullptr;const uint8_t* colors=nullptr;
+        size_t source_bytes=0;
+        if(desc.width&&desc.height&&desc.width<=4096&&desc.height<=4096&&desc.depth==1&&!desc.cube&&desc.levels<=13){
+            const auto& fmt=gpu::Format(desc.format);
+            uint64_t total=0;
+            for(unsigned l=0;l<desc.levels;++l){
+                uint64_t w=std::max(1u,desc.width>>l),h=std::max(1u,desc.height>>l);
+                total+=desc.linear?uint64_t(desc.pitch)*desc.height:
+                    fmt.compressed?((w+3)/4)*((h+3)/4)*fmt.bits:w*h*fmt.bits/8;
+            }
+            if(total&&total<=RawTextureLimit){
+                source_bytes=size_t(total);
+                source=gpu::CheckedGuestRange(desc.data,total);
+                if(desc.format==0x0b){
+                    if(!palette)throw std::invalid_argument("Missing Xbox texture palette");
+                    colors=gpu::CheckedGuestRange(palette,1024);
+                }
+                if(raw.key==raw_key&&raw.bytes.size()==source_bytes&&
+                   !std::memcmp(raw.bytes.data(),source,source_bytes)&&
+                   (!colors||!std::memcmp(raw.palette.data(),colors,1024))){
+                    ++raw_texture_hits;return;
+                }
+            }
+        }
+        auto remember=[&](){
+            if(!source){raw={};return;}
+            raw.key=raw_key;raw.bytes.assign(source,source+source_bytes);
+            if(colors)std::memcpy(raw.palette.data(),colors,1024);
+        };
+        ++texture_decodes;
         std::vector<uint8_t> pixels;std::vector<VkBufferImageCopy> copies;
         for(unsigned level=0;level<desc.levels;++level){
             auto p=hulkpocket::vkexp::GuestTexture(header,palette,level);
@@ -370,7 +415,7 @@ struct VulkanCore{
         }
         tex_rect[stage]=desc.linear;
         bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels;
-        if(!resize&&last_pixels[stage]==pixels)return;
+        if(!resize&&last_pixels[stage]==pixels){remember();return;}
         FlushBatch();
         EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         std::memcpy(staging.data,pixels.data(),pixels.size());
@@ -391,7 +436,7 @@ struct VulkanCore{
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
         wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
-        last_pixels[stage]=std::move(pixels);
+        last_pixels[stage]=std::move(pixels);remember();++texture_uploads;
     }
     std::vector<uint32_t> ShaderWords(const std::filesystem::path& path){
         std::ifstream f(path,std::ios::binary|std::ios::ate);

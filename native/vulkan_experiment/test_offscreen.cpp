@@ -63,6 +63,26 @@ int main(int argc,char** argv){
         f.UploadGuestTexture(tex);
         f.Draw(argv[1],false,true,false,false,&guest_state,false,&assembled);
         Expect("guest BGRA texture and indexed geometry",f.Pixel(32,32),{64,128,255,255});
+        auto raw_decodes_before=f.texture_decodes,raw_hits_before=f.raw_texture_hits,uploads_before=f.texture_uploads;
+        f.UploadGuestTexture(tex);f.UploadGuestTexture(tex);
+        if(f.texture_decodes!=raw_decodes_before||f.raw_texture_hits!=raw_hits_before+2||f.texture_uploads!=uploads_before)
+            throw std::runtime_error("Identical texture was decoded again");
+        // A same-address paletted texture must be invalidated on palette
+        // changes, even when none of the texture indices change.
+        memory.Write32(tex+12,0x01110b20);
+        const uint8_t palette_indices[]={1,1,1,1};memory.Write(0x80100000,palette_indices,sizeof(palette_indices));
+        std::array<uint32_t,256> pal{};pal[1]=0xff00ff00;
+        constexpr uint32_t palette_address=0x80104000;
+        memory.Write(palette_address,pal.data(),sizeof(pal));
+        f.UploadGuestTexture(tex,0,palette_address);
+        f.Draw(argv[1],false,true,false,false,&guest_state,false,&assembled);
+        Expect("paletted texture initial color",f.Pixel(32,32),{0,255,0,255});
+        raw_decodes_before=f.texture_decodes;f.UploadGuestTexture(tex,0,palette_address);
+        if(f.texture_decodes!=raw_decodes_before)throw std::runtime_error("Palette cache missed");
+        pal[1]=0xff0000ff;memory.Write(palette_address,pal.data(),sizeof(pal));
+        f.UploadGuestTexture(tex,0,palette_address);
+        f.Draw(argv[1],false,true,false,false,&guest_state,false,&assembled);
+        Expect("palette-only mutation",f.Pixel(32,32),{0,0,255,255});
         // Replace the same resource with a DXT1 red block, exercising
         // decoding and staging upload again, not a constant GPU clear.
         memory.Write32(tex+12,0x01110c20);
@@ -176,6 +196,13 @@ int main(int argc,char** argv){
         stage[kTssMipFilter]=1;f.SetSampler(0,guest_state);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest mip minification",f.Pixel(32,32),{255,0,0,255});
+        raw_decodes_before=f.texture_decodes;f.UploadGuestTexture(tex);
+        if(f.texture_decodes!=raw_decodes_before)throw std::runtime_error("Unchanged mip chain decoded again");
+        std::fill(mips.begin()+256,mips.end(),0xff0000ff);
+        memory.Write(0x80200000,mips.data(),mips.size()*4);
+        f.UploadGuestTexture(tex);
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        Expect("lower mip mutation invalidates raw cache",f.Pixel(32,32),{0,0,255,255});
         // Fixed-function packed Xbox normal declaration, actual guest material and light.
         guest_state.textures[0]=0;stage[kTssColorOp]=stage[kTssAlphaOp]=1;
         guest_state.vs_handle=1;guest_state.vs=std::make_shared<gpu::VertexShader>();
