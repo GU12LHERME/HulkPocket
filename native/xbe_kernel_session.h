@@ -222,20 +222,7 @@ private:
         if(!VulkanPreviewSelected()){
             live.buffers.VerifyInitialTargets();return;
         }
-        // Original guest code owns the device mirrors. Do not fabricate
-        // SetRenderTarget returns or modify its resource reference counts.
-        auto dev=live.buffers.DeviceAddress();
-        auto color=mem_.Read32(dev+0x1a04),depth=mem_.Read32(dev+0x1a08);
-        if(!color||!mem_.IsCommitted(color,20)||mem_.Read32(color+8)||
-           (depth&&(!mem_.IsCommitted(depth,20)||mem_.Read32(depth+8))))
-            throw std::logic_error("Invalid or locked live render target");
-        if(depth&&depth!=live.buffers.Depth())
-            throw std::logic_error("Live Vulkan depth target switching not integrated");
-        auto state=live.bridge.Snapshot();
-        if(color!=state.rt.header||depth!=state.zs.header){
-            live.bridge.BindInitialTargets(color,depth);
-            std::fprintf(stderr,"D3D VULKAN TARGET CHANGE color=%08X depth=%08X\n",color,depth);
-        }
+        live.bridge.SyncVulkanTargetMirrors(live.buffers.DeviceAddress());
         live.bridge.ValidateCapturedTargets();
     }
     void ReleaseD3dOwner(uint32_t thread){
@@ -1478,7 +1465,7 @@ private:
                 if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||Arg(cpu,0)!=0||
                     (no_draw&&(!live.diagnostic_swap_returns||caller!=0x0031b1d4||live.buffers.BufferCount()!=2)))
                     throw std::runtime_error("Unsupported diagnostic swap request");
-                live.buffers.VerifyInitialTargets();
+                if(!VulkanPreviewSelected())live.buffers.VerifyInitialTargets();
                 DrainLivePush(live);
                 SyncLiveTargets(live);
                 gpu::ScopedGuestMemory scope(mem_);
@@ -1535,7 +1522,8 @@ private:
                 const auto n=live.buffers.Rotate();
                 if(n!=presented||mem_.Read32(front+4)!=old_back||mem_.Read32(back+4)!=old_front)
                     throw std::runtime_error("D3D swap rotation verification failed");
-                live.bridge.BindInitialTargets(back,live.buffers.Depth());
+                if(VulkanPreviewSelected())live.bridge.SyncVulkanTargetMirrors(dev);
+                else live.bridge.BindInitialTargets(back,live.buffers.Depth());
                 live.backend.BeginRotatedFrame(live.bridge.Snapshot().rt);
                 live.draws_at_swap=live.diagnostic_draw_returns;
                 live.setters_at_swap=live.setter_calls;

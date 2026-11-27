@@ -674,7 +674,24 @@ int main(int argc,char** argv){
                 bridge_mem.Commit(0x80120000,0x4000);
                 bridge_mem.Write32(depth2,0x50000);bridge_mem.Write32(depth2+4,0x120000);
                 bridge_mem.Write32(depth2+12,0x00012e21);bridge_mem.Write32(depth2+16,63|(63<<12)|(3<<24));
-                call("D3DDevice_SetRenderTarget",{surface,depth2});
+                // Exercise the live mirror path, rather than only the
+                // standalone SetRenderTarget dispatcher.
+                bridge_mem.Write32(device+0x1a04,surface);
+                bridge_mem.Write32(device+0x1a08,depth2);
+                write_packet({{0x0208,0x128},{0x020c,0x01000100},{0x0210,0x110000},{0x0214,0x120000}});
+                bridge.SyncVulkanTargetMirrors(device);
+                bridge.ValidateCapturedTargets();
+                bridge_mem.Write32(depth2+8,1);
+                bool locked_depth=false;
+                try{bridge.SyncVulkanTargetMirrors(device);}catch(const std::logic_error&){locked_depth=true;}
+                if(!locked_depth)throw std::runtime_error("Locked depth mirror accepted");
+                bridge_mem.Write32(depth2+8,0);
+                bridge_mem.Write32(depth2+16,31|(63<<12)|(3<<24));
+                bool different_extent=false;
+                try{bridge.SyncVulkanTargetMirrors(device);}catch(const std::logic_error&){different_extent=true;}
+                if(!different_extent)throw std::runtime_error("Different depth extent accepted");
+                bridge_mem.Write32(depth2+16,63|(63<<12)|(3<<24));
+                bridge.SyncVulkanTargetMirrors(device);
                 bool depth_uncleared=false;
                 try{bridge.ReplayCapturedShaderDiagnostic(5,0,3);}catch(const std::logic_error&){depth_uncleared=true;}
                 if(!depth_uncleared)throw std::runtime_error("New depth inherited original stencil validity");
@@ -682,7 +699,13 @@ int main(int argc,char** argv){
                 call("D3DDevice_Clear",{0,0,0xf3,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("independent empty stencil rejects",backend.ReadPixel(32,32),{0,0,255,255});
-                call("D3DDevice_SetRenderTarget",{surface,depth_surface});
+                bridge_mem.Write32(device+0x1a08,0);
+                bridge.SyncVulkanTargetMirrors(device);
+                if(bridge.Snapshot().zs.header)throw std::runtime_error("Null depth mirror not applied");
+                bridge_mem.Write32(device+0x1a08,depth_surface);
+                write_packet({{0x0214,0x11c000}});
+                bridge.SyncVulkanTargetMirrors(device);
+                bridge.ValidateCapturedTargets();
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("restored original stencil mask inside",backend.ReadPixel(32,32),{128,128,64,255});
                 Expect("restored original stencil mask outside",backend.ReadPixel(4,4),{0,0,255,255});

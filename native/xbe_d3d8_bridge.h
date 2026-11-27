@@ -44,7 +44,7 @@ class XbeD3d8Bridge {
     bool initialized_=false;
     bool material_captured_=false;
     uint32_t light_defined_=0,light_enable_seen_=0;
-    uint32_t presents_=0;
+    uint32_t presents_=0,framebuffer_w_=0,framebuffer_h_=0;
     static float Float(uint32_t x){return std::bit_cast<float>(x);}
     uint32_t Read(uint64_t a){return gpu::ReadGuest32(a);}
     gpu::Surface Surface(uint32_t h) {
@@ -201,6 +201,7 @@ public:
         if(!w||!h||w>4096||h>4096)throw std::invalid_argument("Invalid framebuffer size");
         gpu::ScopedGuestMemory scope(mem_);
         if(!backend_.Init(w,h))throw std::runtime_error("D3D backend initialization failed");
+        framebuffer_w_=w;framebuffer_h_=h;
         state_.viewport={0,0,w,h,0,1};
         // Initial identity transforms and ARGB write mask for this standalone bridge.
         // The actual game's XDK default state must replace these on device creation.
@@ -214,6 +215,38 @@ public:
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!initialized_||!color)throw std::logic_error("Invalid initial render targets");
         auto rt=Surface(color),zs=Surface(depth);
+        state_.rt=rt;state_.zs=zs;ViewportConstants();
+    }
+    // Read the guest-owned device mirrors without inventing a SetRenderTarget
+    // return or touching the title's resource reference counts.
+    // Restrict the live Vulkan path to the existing backend's same-size
+    // linear color and depth support, including a null depth attachment.
+    void SyncVulkanTargetMirrors(uint32_t device){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!initialized_||!device)throw std::logic_error("Invalid live Vulkan device");
+        gpu::CheckedGuestRange(uint64_t(device)+0x1a04,8);
+        auto color=Read(uint64_t(device)+0x1a04),depth=Read(uint64_t(device)+0x1a08);
+        auto rt=Surface(color),zs=Surface(depth);
+        if(!color||Read(uint64_t(color)+8)||(depth&&Read(uint64_t(depth)+8)))
+            throw std::logic_error("Invalid or locked live render target");
+        auto check=[&](const gpu::Surface& s,uint32_t format){
+            gpu::TextureDesc d{};
+            if(!gpu::DescribeSurface(s,d)||!d.linear||d.format!=format||
+               d.depth!=1||d.levels!=1||d.width!=framebuffer_w_||d.height!=framebuffer_h_||
+               d.pitch<uint64_t(d.width)*4)
+                throw std::logic_error("Unsupported live Vulkan surface layout");
+            gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
+            return d;
+        };
+        const auto c=check(rt,0x12);
+        if(depth){
+            const auto z=check(zs,0x2e);
+            if(uint64_t(c.data)<uint64_t(z.data)+uint64_t(z.pitch)*z.height&&
+               uint64_t(z.data)<uint64_t(c.data)+uint64_t(c.pitch)*c.height)
+                throw std::logic_error("Live Vulkan color/depth overlap");
+        }
+        if(color!=state_.rt.header||depth!=state_.zs.header)
+            std::fprintf(stderr,"D3D VULKAN TARGET CHANGE color=%08X depth=%08X\n",color,depth);
         state_.rt=rt;state_.zs=zs;ViewportConstants();
     }
     // Validate captured surface register writes against the guest-owned
