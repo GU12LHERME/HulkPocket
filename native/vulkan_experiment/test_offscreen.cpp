@@ -171,6 +171,48 @@ int main(int argc,char** argv){
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("runtime alpha threshold update",f.Pixel(32,32),{255,0,255,128});
         if(f.shaders.Compiled()!=before+3)throw std::runtime_error("Uniform change recompiled shader");
+        // Cube upload, actual six face samples, and mutation of the last
+        // face at the same guest address. Restore the existing 2D fixture.
+        {
+            constexpr uint32_t cube_header=0x10400,cube_phys=0x106000;
+            memory.Write32(cube_header,0x40000);memory.Write32(cube_header+4,cube_phys);
+            memory.Write32(cube_header+12,0x01110624);memory.Write32(cube_header+16,0);
+            const uint32_t face_colors[]={0xffff0000,0xff00ff00,0xff0000ff,0xffffff00,0xffff00ff,0xff00ffff};
+            const std::array<int,4> expected[]={{255,0,0,255},{0,255,0,255},{0,0,255,255},{255,255,0,255},{255,0,255,255},{0,255,255,255}};
+            for(unsigned face=0;face<6;++face){
+                uint32_t px[4];std::fill_n(px,4,face_colors[face]);memory.Write(0x80000000u|cube_phys|(face*128),px,sizeof(px));
+            }
+            auto cube_state=guest_state;
+            cube_state.simple[kMAlphaTestEnable/4]=0;cube_state.vs_handle=0x10142;
+            struct CubeVertex{float x,y,z;uint32_t color;float u,v,w;};
+            cube_state.streams[0].stride=sizeof(CubeVertex);cube_state.textures[0]=cube_header;
+            auto& cs=cube_state.tss[0];cs[kTssColorOp]=cs[kTssAlphaOp]=2;
+            cs[kTssColorArg1]=cs[kTssAlphaArg1]=2;cs[kTssResultArg]=1;
+            cs[kTssAddressU]=cs[kTssAddressV]=3;cs[kTssMagFilter]=cs[kTssMinFilter]=1;
+            const float dirs[6][3]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
+            f.UploadGuestTexture(cube_header);f.SetSampler(0,cube_state);
+            for(unsigned face=0;face<6;++face){
+                const auto* d=dirs[face];
+                const CubeVertex verts[]={{-.75f,-.75f,.5f,0xffffffff,d[0],d[1],d[2]},
+                    {.75f,-.75f,.5f,0xffffffff,d[0],d[1],d[2]},{0,.75f,.5f,0xffffffff,d[0],d[1],d[2]}};
+                memory.Write(0x80100100,verts,sizeof(verts));
+                if(!GuestDraw(cube_state,5,0,3,0,assembled))throw std::runtime_error("Cube geometry assembly");
+                f.Draw(argv[1],false,false,false,false,&cube_state,false,&assembled,true);
+                Expect("Xbox cube face",f.Pixel(32,32),expected[face]);
+            }
+            const auto decoded=f.texture_decodes;
+            f.UploadGuestTexture(cube_header);
+            if(f.texture_decodes!=decoded)throw std::runtime_error("Unchanged cube cache miss");
+            const uint32_t white[4]={0xffffffff,0xffffffff,0xffffffff,0xffffffff};
+            memory.Write(0x80000000u|cube_phys|(5*128),white,sizeof(white));
+            f.UploadGuestTexture(cube_header);
+            f.Draw(argv[1],false,false,false,false,&cube_state,false,&assembled,true);
+            Expect("Cube face mutation",f.Pixel(32,32),{255,255,255,255});
+            f.UploadGuestTexture(tex);
+            if(f.tex_cube[0])throw std::runtime_error("Cube view retained on 2D rebind");
+            memory.Write(0x80100100,compact,sizeof(compact));
+            if(!GuestDraw(guest_state,5,0,3,0,assembled))throw std::runtime_error("Restore compact geometry");
+        }
         // Separate submissions, changed guest matrix and geometry, same color
         // and depth attachments. Verify preservation and explicit reset.
         guest_state.simple[kMAlphaTestEnable/4]=0;

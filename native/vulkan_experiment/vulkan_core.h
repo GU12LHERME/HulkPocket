@@ -73,7 +73,7 @@ struct VulkanCore{
     Image target,depth;
     std::array<Image,4> textures{};
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1};
-    std::array<bool,4> tex_rect{};
+    std::array<bool,4> tex_rect{},tex_cube{};
     std::array<std::vector<uint8_t>,4> last_pixels{};
     // Exact byte snapshots avoid repeated unswizzling/BC expansion.
     // No guest dirty flag is required: compare all source bytes on every bind.
@@ -153,9 +153,10 @@ struct VulkanCore{
         if(!size||size>64ull*1024*1024)throw std::invalid_argument("Invalid Vulkan upload size");
         if(b.capacity<size){Destroy(b);CreateBuffer(b,size,usage);}
     }
-    void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage,VkFormat format=Format,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT,uint32_t levels=1){
+    void CreateImage(Image& out,uint32_t width,uint32_t height,VkImageUsageFlags usage,VkFormat format=Format,VkImageAspectFlags aspect=VK_IMAGE_ASPECT_COLOR_BIT,uint32_t levels=1,bool cube=false){
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};ci.imageType=VK_IMAGE_TYPE_2D;
-        ci.format=format;ci.extent={width,height,1};ci.mipLevels=levels;ci.arrayLayers=1;
+        ci.format=format;ci.extent={width,height,1};ci.mipLevels=levels;ci.arrayLayers=cube?6:1;
+        if(cube)ci.flags=VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
         ci.samples=VK_SAMPLE_COUNT_1_BIT;ci.tiling=VK_IMAGE_TILING_OPTIMAL;ci.usage=usage;
         Check(vkCreateImage(dev,&ci,nullptr,&out.image),"vkCreateImage");
         VkImageMemoryRequirementsInfo2 ri{VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2};ri.image=out.image;
@@ -167,7 +168,7 @@ struct VulkanCore{
             throw std::runtime_error("SCDA image pool allocation failed");
         Check(vkBindImageMemory(dev,out.image,out.alloc.memory,out.alloc.offset),"bind image");
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vi.image=out.image;
-        vi.viewType=VK_IMAGE_VIEW_TYPE_2D;vi.format=format;vi.subresourceRange={aspect,0,levels,0,1};
+        vi.viewType=cube?VK_IMAGE_VIEW_TYPE_CUBE:VK_IMAGE_VIEW_TYPE_2D;vi.format=format;vi.subresourceRange={aspect,0,levels,0,cube?6u:1u};
         Check(vkCreateImageView(dev,&vi,nullptr,&out.view),"image view");
     }
     void Destroy(Image& x){
@@ -193,10 +194,10 @@ struct VulkanCore{
         ++queue_submissions;
     }
     void Transition(VkImage im,VkImageLayout old,VkImageLayout next,VkAccessFlags src,VkAccessFlags dst,
-                    VkPipelineStageFlags before,VkPipelineStageFlags after,uint32_t levels=1){
+                    VkPipelineStageFlags before,VkPipelineStageFlags after,uint32_t levels=1,uint32_t layers=1){
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.image=im;b.oldLayout=old;b.newLayout=next;
         b.srcAccessMask=src;b.dstAccessMask=dst;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
-        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,levels,0,1};
+        b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,levels,0,layers};
         vkCmdPipelineBarrier(cmd,before,after,0,0,nullptr,0,nullptr,1,&b);
     }
     void Init(uint32_t width=64,uint32_t height=64){
@@ -368,14 +369,14 @@ struct VulkanCore{
     void SnapshotColorTexture(unsigned stage){
         if(stage>=textures.size()||!frame_valid)throw std::invalid_argument("Invalid framebuffer texture snapshot");
         FlushBatch();
-        bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1;
+        bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1||tex_cube[stage];
         auto& texture=textures[stage];
         if(resize){
             Destroy(texture);
             CreateImage(texture,W,H,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,1);
             tex_width[stage]=W;tex_height[stage]=H;tex_levels[stage]=1;
         }
-        tex_rect[stage]=true;
+        tex_rect[stage]=true;tex_cube[stage]=false;
         // GPU copies are not represented by the CPU decoded-pixel cache.
         last_pixels[stage].clear();raw_textures[stage]={};
         Begin();
@@ -397,8 +398,10 @@ struct VulkanCore{
         if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
         gpu::TextureDesc desc{};if(!gpu::Describe(header,desc))throw std::invalid_argument("Invalid Xbox texture header");
         unsigned max_levels=1;for(unsigned n=std::max(desc.width,desc.height);n>1;n>>=1)++max_levels;
-        if(!desc.levels||desc.levels>max_levels||desc.width>limits.maxImageDimension2D||desc.height>limits.maxImageDimension2D)
-            throw std::invalid_argument("Invalid Vulkan mip extent");
+        if(!desc.levels||desc.levels>max_levels||desc.width>limits.maxImageDimension2D||desc.height>limits.maxImageDimension2D||
+           (desc.cube&&(desc.linear||desc.depth!=1||desc.width!=desc.height||desc.width>limits.maxImageDimensionCube||limits.maxImageArrayLayers<6)))
+            throw std::invalid_argument("Invalid Vulkan mip or cube extent");
+        const unsigned faces=desc.cube?6:1;
         // Bound arithmetic before asking for a checked guest span. Only
         // layouts already successfully decoded can ever hit this cache.
         auto& raw=raw_textures[stage];
@@ -406,7 +409,7 @@ struct VulkanCore{
             desc.pitch,uint32_t(desc.cube),uint32_t(desc.linear),desc.format==0x0b?palette:0};
         const uint8_t* source=nullptr;const uint8_t* colors=nullptr;
         size_t source_bytes=0;
-        if(desc.width&&desc.height&&desc.width<=4096&&desc.height<=4096&&desc.depth==1&&!desc.cube&&desc.levels<=13){
+        if(desc.width&&desc.height&&desc.width<=4096&&desc.height<=4096&&desc.depth==1&&desc.levels<=13){
             const auto& fmt=gpu::Format(desc.format);
             uint64_t total=0;
             for(unsigned l=0;l<desc.levels;++l){
@@ -414,6 +417,7 @@ struct VulkanCore{
                 total+=desc.linear?uint64_t(desc.pitch)*desc.height:
                     fmt.compressed?((w+3)/4)*((h+3)/4)*fmt.bits:w*h*fmt.bits/8;
             }
+            if(desc.cube)total=((total+127)&~uint64_t(127))*6;
             if(total&&total<=RawTextureLimit){
                 source_bytes=size_t(total);
                 source=gpu::CheckedGuestRange(desc.data,total);
@@ -435,15 +439,15 @@ struct VulkanCore{
         };
         ++texture_decodes;
         std::vector<uint8_t> pixels;std::vector<VkBufferImageCopy> copies;
-        for(unsigned level=0;level<desc.levels;++level){
-            auto p=hulkpocket::vkexp::GuestTexture(header,palette,level);
+        for(unsigned face=0;face<faces;++face)for(unsigned level=0;level<desc.levels;++level){
+            auto p=hulkpocket::vkexp::GuestTexture(header,palette,level,face);
             if(p.rgba.size()!=size_t(p.width)*p.height*4||p.rgba.size()>64ull*1024*1024-pixels.size())
                 throw std::invalid_argument("Decoded Vulkan mip chain exceeds bound");
-            VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,0,1};copy.imageExtent={p.width,p.height,1};
+            VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,level,face,1};copy.imageExtent={p.width,p.height,1};
             copies.push_back(copy);pixels.insert(pixels.end(),p.rgba.begin(),p.rgba.end());
         }
         tex_rect[stage]=desc.linear;
-        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels;
+        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube;
         if(!resize&&last_pixels[stage]==pixels){remember();return;}
         FlushBatch();
         EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
@@ -451,15 +455,15 @@ struct VulkanCore{
         auto& texture=textures[stage];
         if(resize){
             Destroy(texture);
-            CreateImage(texture,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,desc.levels);
-            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;
+            CreateImage(texture,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,VK_IMAGE_ASPECT_COLOR_BIT,desc.levels,desc.cube);
+            tex_width[stage]=desc.width;tex_height[stage]=desc.height;tex_levels[stage]=desc.levels;tex_cube[stage]=desc.cube;
         }
         Begin();
         Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
-                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,desc.levels);
+                   resize?VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT:VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,desc.levels,faces);
         vkCmdCopyBufferToImage(cmd,staging.b,texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,uint32_t(copies.size()),copies.data());
-        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,desc.levels);
+        Transition(texture.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,desc.levels,faces);
         Submit();
         VkDescriptorImageInfo im{VK_NULL_HANDLE,texture.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
@@ -485,7 +489,7 @@ struct VulkanCore{
         if(dynamic){
             if(!override_state||!guest)throw std::invalid_argument("Missing dynamic draw state");
             gpu::TexInfo tex[4]{};
-            for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=gpu::kTex2D;tex[i].rect=tex_rect[i];}
+            for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=tex_cube[i]?gpu::kTexCube:gpu::kTex2D;tex[i].rect=tex_rect[i];}
             vertex=shaders.Vertex(*override_state,*guest);
             fragment=shaders.Pixel(*override_state,tex);
         }else{

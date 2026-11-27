@@ -11,15 +11,15 @@ struct TexturePixels {
     uint32_t width=0,height=0;
     std::vector<uint8_t> rgba;
 };
-inline TexturePixels GuestTexture(uint32_t header,uint32_t palette=0,uint32_t level=0){
+inline TexturePixels GuestTexture(uint32_t header,uint32_t palette=0,uint32_t level=0,uint32_t face=0){
     gpu::TextureDesc d{};
-    if(!gpu::Describe(header,d)||d.cube||d.depth!=1||!d.width||!d.height||d.width>4096||d.height>4096)
+    if(!gpu::Describe(header,d)||d.depth!=1||(d.cube&&(d.linear||d.width!=d.height))||!d.width||!d.height||d.width>4096||d.height>4096)
         throw std::invalid_argument("Unsupported Xbox 2D texture");
     const auto& fmt=gpu::Format(d.format);
     if(fmt.depth||fmt.host==gpu::Host::None)throw std::invalid_argument("Unsupported Xbox color texture format");
     if(d.format==0x0b&&!palette)throw std::invalid_argument("Missing Xbox P8 palette");
     std::vector<uint8_t> decoded;uint32_t pitch=0;
-    gpu::DecodeGuestLevel(d,level,0,palette,decoded,pitch);
+    gpu::DecodeGuestLevel(d,level,face,palette,decoded,pitch);
     d.width=std::max(1u,d.width>>level);d.height=std::max(1u,d.height>>level);
     if(fmt.compressed)decoded=DecodeXboxBc(d.width,d.height,fmt.host,decoded);
     else{

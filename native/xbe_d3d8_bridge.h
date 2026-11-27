@@ -363,7 +363,7 @@ public:
                 throw std::logic_error("Unsupported original texture stage or palette");
             if(!textures[st])continue;
             gpu::TextureDesc d{};
-            if(!gpu::Describe(textures[st],d)||d.depth!=1||d.cube||
+            if(!gpu::Describe(textures[st],d)||d.depth!=1||(!capture_pixel&&d.cube)||
                Read(uint64_t(textures[st])+8)||!SupportedDiffuseTexture(d,capture_pixel))
                 throw std::logic_error("Unsupported original texture resource");
             auto base=0x1b00+st*0x40;
@@ -397,13 +397,34 @@ public:
                 gpu::CheckedGuestRange(d.data,bytes);
                 gpu::CheckedGuestRange(gpu::PhysicalResourceAddress(address),1024);
                 palettes[st]=palette;
+            }else if(d.cube){
+                // Cube faces use the upstream 128-byte face stride. Verify
+                // DMA, square power-of-two dimensions and the whole span.
+                const auto format=state_.simple[(base+4)/4],offset=state_.simple[base/4];
+                const auto bytes=gpu::TotalSize(d);
+                if((format&3)!=1||!(format&4)||((format>>4)&15)!=2||(format>>28)||
+                   offset%4||offset>=0x04000000u||!((format>>16)&15)||
+                   !bytes||uint64_t(offset)+bytes>0x04000000u)
+                    throw std::logic_error("Unsupported raw NV2A cube texture layout");
+                gpu::CheckedGuestRange(d.data,bytes);
             }else if(gpu::Format(d.format).swizzled){
                 (void)DescribeNv2aSwizzledTexture(state_.simple[base/4],state_.simple[(base+4)/4]);
             }
         }
         uint32_t fvf=0;
-        for(uint32_t candidate:{0x42u,0x44u,0x142u,0x144u,
-                                0x242u,0x244u,0x342u,0x344u,0x442u,0x444u}){
+        std::vector<uint32_t> candidates={0x42u,0x44u,0x142u,0x144u,0x242u,0x244u,0x342u,0x344u,0x442u,0x444u};
+        // XDK FVF size codes: derive the candidate from each actual
+        // declaration, then retain the existing exact slot/stride checks.
+        if(capture_pixel&&flags==0x400){
+            uint32_t sizes=0;
+            for(unsigned st=0;st<4;++st){
+                const auto type=Read(uint64_t(ptr)+0x14+16*(9+st)+8);
+                const unsigned code=type==0x32?1:type==0x42?2:type==0x12?3:0;
+                sizes|=code<<(16+2*st);
+                if(sizes)for(uint32_t pos:{2u,4u})candidates.push_back(sizes|0x40u|pos|((st+1)<<8));
+            }
+        }
+        for(uint32_t candidate:candidates){
             if(flags!=0x400||(!capture_pixel&&candidate>=0x200))continue;
             // A declaration can retain UVs after SetTexture(0,null).
             // Only a bound texture requires UV; keep the original stride.
@@ -492,8 +513,13 @@ public:
             next.rs[gpu::kRsPsTextureModes]=next.ps->def[54];
             for(unsigned st=0;st<4;++st){
                 auto mode=(next.ps->def[54]>>(5*st))&31;
-                if((mode==1||mode==6||mode==7||mode==0xf||mode==0x10)!=bool(textures[st]))
+                if((mode==1||mode==3||mode==6||mode==7||mode==0xf||mode==0x10)!=bool(textures[st]))
                     throw std::logic_error("Captured texture binding disagrees with pixel stage mode");
+                if(textures[st]){
+                    gpu::TextureDesc d{};
+                    if(!gpu::Describe(textures[st],d)||d.cube!=(mode==3))
+                        throw std::logic_error("Captured texture dimension disagrees with pixel stage mode");
+                }
                 if(mode==6||mode==7){
                     const uint8_t required=mode==7?0x3f:0x0f;
                     if((push_constants_.bump_seen[st]&required)!=required)
@@ -641,7 +667,7 @@ public:
         for(unsigned extent=std::max(d.width,d.height);extent>1;extent>>=1)++max_levels;
         return d.width&&d.height&&d.width<=4096&&d.height<=4096&&d.levels>=1&&
             d.levels<=max_levels&&(!d.linear||d.levels==1)&&
-            d.depth==1&&!d.cube&&d.linear==(!f.swizzled&&!f.compressed)&&
+            d.depth==1&&(!d.cube||(allow_palette&&!d.linear&&d.width==d.height&&d.format!=0x0b))&&d.linear==(!f.swizzled&&!f.compressed)&&
             (!d.linear||d.pitch>=uint64_t(d.width)*f.bits/8)&&
             ((d.format!=0x24&&d.format!=0x25)||!(d.width&1));
     }
@@ -770,9 +796,11 @@ public:
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         const bool program=state_.vs&&!state_.vs->program.empty();
         const auto fvf=state_.vs_handle;
-        const bool rhw=!state_.vs&&(fvf==0x44||fvf==0x144);
+        const auto base_fvf=fvf&0xffffu;
+        const bool rhw=!state_.vs&&(base_fvf==0x44||base_fvf==0x144)&&(!(fvf>>16)||allow_fixed);
         const bool multi_uv=allow_fixed&&!state_.vs&&
-            (fvf==0x242||fvf==0x244||fvf==0x342||fvf==0x344||fvf==0x442||fvf==0x444);
+            (base_fvf==0x142||base_fvf==0x144||base_fvf==0x242||base_fvf==0x244||
+             base_fvf==0x342||base_fvf==0x344||base_fvf==0x442||base_fvf==0x444);
         const bool fixed=allow_fixed&&!state_.ps&&!program;
         const bool packed=fixed&&state_.vs;
         const bool lighting=state_.rs[gpu::kRsLighting]!=0;
@@ -840,6 +868,12 @@ public:
                 }
                 if(set>=4||(!allow_fixed&&set)||layout.inputs[9+set].stream<0)
                     throw std::logic_error("Captured fixed vertex path requires declared UV set");
+                gpu::TextureDesc d{};
+                if(replay.textures[st]&&gpu::Describe(replay.textures[st],d)&&d.cube){
+                    const auto type=layout.inputs[9+set].type;
+                    if((!flags&&type!=0x32&&type!=0x42)||(flags&&components<3))
+                        throw std::logic_error("Cube texture requires three-dimensional coordinates");
+                }
             }
         }
         for(auto r:{gpu::kRsZEnable,gpu::kRsPsTextureModes,gpu::kRsSpecularEnable,
