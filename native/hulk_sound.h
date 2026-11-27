@@ -20,6 +20,19 @@
 #include <limits>
 #include <vector>
 namespace hulkpocket {
+// Integer wall-clock mixer scheduling. Preserve fractional sample time
+// across calls; discard only elapsed time beyond the explicit catch-up cap.
+struct HulkAudioClock {
+    static constexpr uint64_t Rate=48000, NsPerSecond=1000000000, MaxNs=100000000;
+    uint64_t remainder=0,dropped_ns=0;
+    uint32_t Advance(uint64_t elapsed_ns){
+        auto bounded=std::min(elapsed_ns,MaxNs);
+        dropped_ns+=elapsed_ns-bounded;
+        auto scaled=bounded*Rate+remainder;
+        remainder=scaled%NsPerSecond;
+        return uint32_t(scaled/NsPerSecond);
+    }
+};
 // Diagnostic software DirectSound subset. All calls execute under the
 // session lock. No APU MMIO, no synthetic completion for unimplemented APIs.
 // Headless by default; Android diagnostic output is explicitly opt-in.
@@ -130,6 +143,8 @@ private:
     }
     uint64_t rendered_=0,nonzero_=0;
     std::chrono::steady_clock::time_point last_{};
+    HulkAudioClock mixer_clock_{};
+    uint64_t pump_calls_=0;
     int capture_=-1;
     bool capture_attempted_=false;
     static constexpr uint32_t bad=0x88780032u,oom=0x8007000eu;
@@ -292,15 +307,16 @@ public:
         if(capture_>=0)close(capture_);
         for(unsigned b=10;b<32;++b)if(send_peak_[b]>0)std::fprintf(stderr,"HULK DSP SEND UNPROCESSED bin=%u peak=%g\n",b,double(send_peak_[b]));
         std::fprintf(stderr,"HULK MIXBINS SUMMARY accepted=%u rejected=%u\n",routing_logs_,routing_rejections_);
-        if(device_||rendered_)std::fprintf(stderr,"HULK AUDIO SUMMARY frames=%llu nonzero_frames=%llu voices=%zu (software mixer)\n",
-            static_cast<unsigned long long>(rendered_),static_cast<unsigned long long>(nonzero_),voices_.size());
+        if(device_||rendered_)std::fprintf(stderr,"HULK AUDIO SUMMARY frames=%llu nonzero_frames=%llu voices=%zu pumps=%llu capped_ms=%llu (software mixer)\n",
+            static_cast<unsigned long long>(rendered_),static_cast<unsigned long long>(nonzero_),voices_.size(),
+            static_cast<unsigned long long>(pump_calls_),static_cast<unsigned long long>(mixer_clock_.dropped_ns/1000000));
     }
     uint32_t Create(uint32_t guid,uint32_t out,uint32_t outer){
         if(guid||outer||!Range(out,4))return bad;
         if(!device_){
             device_=pool_.Allocate(0x40);
             if(!device_)return oom;
-            last_=std::chrono::steady_clock::now();
+            last_=std::chrono::steady_clock::now();mixer_clock_.remainder=0;
 #ifdef HULK_HAS_AAUDIO_OUTPUT
             if(const char* mode=std::getenv("HULK_AUDIO_OUTPUT");mode&&std::strcmp(mode,"1")==0&&!output_){
                 android_audio_=std::make_unique<HulkAndroidAudio>();
@@ -799,15 +815,14 @@ public:
         for(unsigned i=0;i<frames;++i)if(pcm[2*i]||pcm[2*i+1])++nonzero_;
         rendered_+=frames;return pcm;
     }
-    void Pump(){
+    void PumpAt(std::chrono::steady_clock::time_point now){
         if(!device_)return;
-        auto now=std::chrono::steady_clock::now();
-        auto elapsed=std::chrono::duration_cast<std::chrono::microseconds>(now-last_).count();
-        if(elapsed<1000)return;
-        // Limit catchup and total capture duration; no invented progress
-        // after a long pause. Diagnostic stops rather than consuming RAM.
-        uint32_t frames=uint32_t(std::min<int64_t>(elapsed,100000)*kRate/1000000);
-        last_=now;
+        auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(now-last_).count();
+        if(elapsed<1000000)return;
+        // Preserve fractional frames between irregular guest calls. Bound
+        // catch-up after a long pause rather than producing unbounded audio.
+        uint32_t frames=mixer_clock_.Advance(uint64_t(elapsed));
+        last_=now;++pump_calls_;
         if(rendered_+frames>uint64_t(kRate)*DiagnosticAudioSeconds())throw std::runtime_error("Audio diagnostic capture budget reached");
         if(!voices_.empty()||!streams_.empty()||output_||reverb_){
             auto pcm=Render(frames);
@@ -820,5 +835,6 @@ public:
 #endif
         }
     }
+    void Pump(){PumpAt(std::chrono::steady_clock::now());}
 };
 }

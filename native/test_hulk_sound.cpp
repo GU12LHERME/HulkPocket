@@ -2,6 +2,17 @@
 #include <cassert>
 using namespace hulkpocket;
 int main(){
+    // Deterministic irregular scheduling: exactly one second of guest
+    // progress without the fractional-frame loss of integer truncation.
+    HulkAudioClock clock;
+    uint64_t frames=0;
+    for(unsigned i=0;i<333;++i)frames+=clock.Advance(3000003);
+    frames+=clock.Advance(999001);
+    assert(frames==48000&&clock.remainder==0&&clock.dropped_ns==0);
+    assert(clock.Advance(250000000)==4800&&clock.dropped_ns==150000000);
+    assert(clock.Advance(16666667)==800);
+    assert(clock.Advance(16666667)==800);
+    assert(clock.Advance(16666666)==800&&clock.remainder==0);
     XboxGuestAddressSpace mem;
     mem.Commit(0x10000,0x10000);
     XbeKernelPool pool(mem,0x200000,0x100000);

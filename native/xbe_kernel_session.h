@@ -666,6 +666,11 @@ private:
             throw std::runtime_error("Android preview stop requested");
         Pause(cpu,lock);
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
+        // Advance wall-clock audio even while the guest is rendering or
+        // doing I/O rather than explicitly calling DirectSoundDoWork.
+        // The existing session lock serializes all producers; callbacks
+        // remain on the original guest sound dispatch path.
+        if(preview_host.enabled.load()&&VulkanPreviewSelected())sound_.Pump();
         if(live_d3d_&&live_d3d_->owner==cpu.thread_handle)
             TraceViewport(*live_d3d_,ordinal,mem_.IsCommitted(cpu.esp,4)?mem_.Read32(cpu.esp):0);
         if(ordinal==kDefaultSimple||ordinal==kDefaultRender||ordinal==kDefaultTexture||
@@ -1363,6 +1368,7 @@ private:
                 std::this_thread::sleep_until(next);
                 lock.lock();
                 Pause(cpu,lock);
+                if(live.expanded_preview)sound_.Pump();
                 ++live.diagnostic_vblanks;
                 std::fprintf(stderr,"D3D LIVE VBLANK PASS caller=%08X (offscreen 60 Hz host pacing)\n",mem_.Read32(cpu.esp));
                 Ret(cpu,0,0);return;
@@ -1424,6 +1430,7 @@ private:
                 live.backend.ReadbackColor(state.rt);
                 auto* pixels=gpu::CheckedGuestRange(desc.data,uint64_t(desc.pitch)*desc.height);
                 if(preview_host.enabled.load())preview_host.Present(pixels,desc.width,desc.height,desc.pitch);
+                if(live.expanded_preview)sound_.Pump();
                 RefreshPreviewPorts();
                 if(live.compact_capture){
                     live.last_presented_pixels.assign(pixels,pixels+size_t(desc.pitch)*desc.height);
