@@ -669,7 +669,10 @@ int main(int argc,char** argv){
                 // Independent depth/stencil surfaces: selecting another
                 // backing cannot inherit the original stencil mask.
                 constexpr uint32_t depth2=0x20900;
-                bridge_mem.Write32(depth2,0x50000);bridge_mem.Write32(depth2+4,0x11a000);
+                // The rotated color backing occupies 0x118000..0x11bfff.
+                // Use a separate committed span for independent depth.
+                bridge_mem.Commit(0x80120000,0x4000);
+                bridge_mem.Write32(depth2,0x50000);bridge_mem.Write32(depth2+4,0x120000);
                 bridge_mem.Write32(depth2+12,0x00012e21);bridge_mem.Write32(depth2+16,63|(63<<12)|(3<<24));
                 call("D3DDevice_SetRenderTarget",{surface,depth2});
                 bool depth_uncleared=false;
@@ -684,7 +687,7 @@ int main(int argc,char** argv){
                 Expect("restored original stencil mask inside",backend.ReadPixel(32,32),{128,128,64,255});
                 Expect("restored original stencil mask outside",backend.ReadPixel(4,4),{0,0,255,255});
                 bool inactive_depth_sync=false;
-                try{backend.Sync(0x8011a000,4);}catch(const std::logic_error&){inactive_depth_sync=true;}
+                try{backend.Sync(0x80120000,4);}catch(const std::logic_error&){inactive_depth_sync=true;}
                 if(!inactive_depth_sync)throw std::runtime_error("Inactive depth backing read allowed");
                 // Preserve the shared stencil on a color-only clear after
                 // rotation, and restore old color on the next depth-only clear.
