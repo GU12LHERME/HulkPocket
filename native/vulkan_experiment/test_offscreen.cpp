@@ -1224,6 +1224,38 @@ int main(int argc,char** argv){
                         }
                     }
                 }
+                // Replay actual NV097 SET_VERTEX_DATA4UB v11 with a
+                // program reading it as diffuse color and no v11 stream.
+                bridge_mem.Write32(decl+4,0x10);
+                bridge_mem.Write32(decl+8,2);bridge_mem.Write32(decl+12,2);
+                for(unsigned k=0;k<16;++k)
+                    for(unsigned j=0;j<4;++j)bridge_mem.Write32(decl+0x14+16*k+4*j,0);
+                bridge_mem.Write32(decl+0x14+8,0x42);
+                bridge_mem.Write32(device+0x784,0);
+                for(unsigned st=0;st<4;++st)bridge_mem.Write32(device+0xf88+4*st,0);
+                auto current_state=bridge.Snapshot();current_state.rs.fill(0);
+                for(auto& stage:current_state.tss){stage.fill(0);stage[kTssColorOp]=stage[kTssAlphaOp]=1;}
+                current_state.simple[kMColorWriteEnable/4]=0x01010101;
+                current_state.simple[kMBlendEnable/4]=0;
+                bridge.AdoptLiveSetters(current_state);
+                const float positions[3][4]={{8,56,8388608.f,1},{56,56,8388608.f,1},{32,8,8388608.f,1}};
+                bridge_mem.Write(0x80114000,positions,sizeof(positions));
+                call("D3DDevice_SetStreamSource",{0,buffer,16});
+                write_packet({{0x1e94,2},{0x1e9c,0},{0x1ea0,0},
+                    {0xb00,0},{0xb04,(1u<<21)|0x1b},{0xb08,2u<<26},{0xb0c,0xf800},
+                    {0xb10,0},{0xb14,(1u<<21)|(11u<<9)|0x1b},{0xb18,2u<<26},{0xb1c,0xf819},
+                    {0x196c,0xff20a040}});
+                bridge.SyncFixedDiffuseShader(device,true);
+                gpu::Assembled current_prepared;
+                bridge.VerifyGuestGeometry(5,0,3,0,&current_prepared);
+                if(current_prepared.regs&(1u<<11))throw std::runtime_error("Unexpected v11 stream in fixture");
+                call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true,&current_prepared);
+                Expect("latched v11 diffuse from raw bytes",backend.ReadPixel(32,32),{64,160,32,255});
+                write_packet({{0x196c,0xff804020}});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                Expect("updated latched v11 without stream",backend.ReadPixel(32,32),{32,64,128,255});
+                if(current_prepared.regs&(1u<<11))throw std::runtime_error("Latched input mutated prepared geometry");
             }
             std::puts("PASS D3D8 bridge Clear/Draw/Present -> Vulkan -> Xbox memory and rotation");
         }

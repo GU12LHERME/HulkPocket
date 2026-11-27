@@ -905,14 +905,15 @@ public:
                 replay.textures[st]=0;replay.palettes[st]=0;
             }
         }
+        bool current_v11=false;
         if(program&&push_constants_.current_v11_seen&&state_.vs->inputs[11].stream<0){
-            // Reject only programs that reference the missing latched input.
-            // Operand mux 2 = vertex input; shared input selector is word1[12:9].
+            // Operand mux 2 = vertex input; shared input selector word1[12:9].
             const auto& words=state_.vs->program;
             for(size_t n=0;n+4<=words.size();n+=4)
                 if(((words[n+1]>>9)&15)==11&&
                    (((words[n+2]>>26)&3)==2||((words[n+2]>>11)&3)==2||((words[n+3]>>28)&3)==2))
-                    throw std::logic_error("Current NV2A v11 attribute requires vertex input translation");
+                    current_v11=true;
+            if(current_v11&&!allow_fixed)throw std::logic_error("Current NV2A v11 requires Vulkan replay");
         }
         if(!program){
             gpu::VertexShader fvf_layout;
@@ -972,7 +973,31 @@ public:
             replay.simple[m/4]=state_.simple[m/4];
         for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
-        if(prepared)backend_.DrawAssembled(replay,prim,start,count,ip,*prepared);
+        if(current_v11){
+            gpu::Assembled local;
+            const auto* source=prepared;
+            if(!source){
+                if(!gpu::Assemble(replay,prim,start,count,ip,local))
+                    throw std::logic_error("Cannot assemble latched NV2A vertex input");
+                source=&local;
+            }
+            if(!source->vertex_count||source->vertex_count>262144||
+               source->buffer_count>=source->buffers.size()||(source->regs&(1u<<11)))
+                throw std::logic_error("Invalid current NV2A vertex input assembly");
+            // XboxXBERecomp ApplyImmediate decodes SET_VERTEX_DATA4UB as
+            // low byte X, then Y,Z,W normalized by 255. R8G8B8A8_UNORM
+            // provides exactly that ordering, unlike D3DCOLOR BGRA.
+            // Repeat for every assembled vertex (including dense indexed
+            // spans); original indices and source buffers stay untouched.
+            std::vector<uint32_t> values(source->vertex_count,push_constants_.current_v11);
+            auto expanded=*source; // source owns original pointed-to storage
+            const auto slot=expanded.buffer_count++;
+            expanded.buffers[slot]={reinterpret_cast<const uint8_t*>(values.data()),uint32_t(values.size()*4),4};
+            expanded.elements[11]={gpu::kVertexR8G8B8A8_UNORM,uint8_t(slot),0};
+            expanded.regs|=1u<<11;
+            expanded.decode&=~(uint64_t(15)<<(11*4));
+            backend_.DrawAssembled(replay,prim,start,count,ip,expanded);
+        }else if(prepared)backend_.DrawAssembled(replay,prim,start,count,ip,*prepared);
         else backend_.Draw(replay,prim,start,count,ip);
         if(!defer_draw_flush_)backend_.Flush();
     }
