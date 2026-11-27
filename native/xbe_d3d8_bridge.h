@@ -216,6 +216,42 @@ public:
         auto rt=Surface(color),zs=Surface(depth);
         state_.rt=rt;state_.zs=zs;ViewportConstants();
     }
+    // Validate captured surface register writes against the guest-owned
+    // mirrors, never using raw offsets as unchecked host pointers.
+    // Consume only successfully matched writes; verified swap changes the
+    // backing independently, so old writes must not be replayed as new ones.
+    void ValidateCapturedTargets(){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        const auto pending=push_constants_.surface_pending;
+        if(!pending)return;
+        if(!initialized_)throw std::logic_error("Surface configuration before device init");
+        gpu::TextureDesc color{},depth{};
+        if(!gpu::DescribeSurface(state_.rt,color)||!color.linear||color.format!=0x12||
+           color.depth!=1||color.levels!=1||!color.width||!color.height||
+           color.pitch<uint64_t(color.width)*4)
+            throw std::logic_error("Captured NV2A color surface disagrees with guest layout");
+        gpu::CheckedGuestRange(color.data,uint64_t(color.pitch)*color.height);
+        const bool has_depth=state_.zs.header!=0;
+        if(has_depth){
+            if(!gpu::DescribeSurface(state_.zs,depth)||!depth.linear||depth.format!=0x2e||
+               depth.depth!=1||depth.levels!=1||depth.width!=color.width||depth.height!=color.height||
+               depth.pitch<uint64_t(depth.width)*4)
+                throw std::logic_error("Captured NV2A depth surface disagrees with guest layout");
+            gpu::CheckedGuestRange(depth.data,uint64_t(depth.pitch)*depth.height);
+        }
+        const auto& r=state_.simple;
+        if((pending&1)&&has_depth&&((r[0x0208/4]>>4)&15)!=2)
+            throw std::logic_error("NV2A depth format disagrees with guest target");
+        if((pending&2)&&((r[0x020c/4]&0xffffu)!=color.pitch||
+           (has_depth&&(r[0x020c/4]>>16)!=depth.pitch)))
+            throw std::logic_error("NV2A surface pitch disagrees with guest target");
+        if((pending&4)&&gpu::PhysicalResourceAddress(r[0x0210/4])!=color.data)
+            throw std::logic_error("NV2A color offset disagrees with guest target");
+        if((pending&8)&&((has_depth&&gpu::PhysicalResourceAddress(r[0x0214/4])!=depth.data)||
+           (!has_depth&&r[0x0214/4])))
+            throw std::logic_error("NV2A depth offset disagrees with guest target");
+        push_constants_.surface_pending=0;
+    }
     // Transfer the real initializer's state into the live bridge. The observed
     // NV2A packets are retained verbatim in the method-indexed state; storing
     // them is not a claim that the GLES draw path implements their semantics.

@@ -233,6 +233,7 @@ private:
             live.bridge.BindInitialTargets(color,depth);
             std::fprintf(stderr,"D3D VULKAN TARGET CHANGE color=%08X depth=%08X\n",color,depth);
         }
+        live.bridge.ValidateCapturedTargets();
     }
     void ReleaseD3dOwner(uint32_t thread){
         if(live_d3d_&&live_d3d_->owner==thread){

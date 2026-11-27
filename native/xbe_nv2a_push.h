@@ -66,6 +66,9 @@ struct Nv2aConstantCursor {
     std::array<bool,4> texture_control{};
     std::bitset<0x800> combiner_seen{};
     std::array<uint8_t,4> bump_seen{};
+    // Surface state writes may be split between scratch drains. Validate
+    // at the next actual target-use boundary, after guest mirrors update.
+    uint8_t surface_pending=0;
     std::array<uint32_t,136*4> program{};
     std::bitset<136*4> program_seen{};
     uint32_t program_word=0,program_start=0,execution_mode=0;
@@ -198,6 +201,18 @@ inline void ApplyNv2aState(gpu::State& state,Nv2aConstantCursor& cursor,
            m==gpu::kMStencilMask||m==gpu::kMStencilZFail||m==gpu::kMStencilPass||
            m==gpu::kMSolidOffsetEnable||m==gpu::kMSlopeScale||m==gpu::kMDepthOffset)){
             simple[m/4]=v;continue;
+        }
+        // NV097_SET_SURFACE_{FORMAT,PITCH,COLOR_OFFSET,ZETA_OFFSET}.
+        // Retain only the supported single-sample pitched color profile.
+        // The bridge checks exact guest resource layout before use.
+        if(capture_combiner&&m>=0x0208&&m<=0x0214&&m%4==0){
+            if(m==0x0208&&((v&0xf)!=8||((v>>8)&0xff)!=1||
+               (((v>>4)&15)!=0&&((v>>4)&15)!=2)))
+                throw std::logic_error("Unsupported NV2A surface format");
+            if((m==0x0210||m==0x0214)&&(v>=0x04000000u||v%4))
+                throw std::logic_error("Invalid NV2A surface offset");
+            simple[m/4]=v;next.surface_pending|=uint8_t(1u<<((m-0x0208)/4));
+            next.pending_raw_configuration=true;continue;
         }
         if(capture_combiner&&IsCombinerMethod(m)){
             simple[m/4]=v;next.combiner_seen.set(m/4);next.pending_raw_configuration=true;continue;

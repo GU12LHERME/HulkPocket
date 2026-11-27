@@ -730,11 +730,29 @@ int main(int argc,char** argv){
                 // surfaces using the same depth attachment. The first
                 // switch flushes the main target, the second restores it.
                 call("D3DDevice_SetRenderTarget",{copy_surface,depth_surface});
+                // The original SetRenderTarget emits these NV097 words
+                // as well as updating device mirrors. Test both halves.
+                write_packet({{0x0208,0x128},{0x020c,0x01000100},{0x0210,0x116000}});
+                write_packet({{0x0214,0x11c000}});
+                bridge.ValidateCapturedTargets();
                 call("D3DDevice_Clear",{0,0,0xf0,0xff102030,std::bit_cast<uint32_t>(1.f),0});
                 Expect("secondary target clear",backend.ReadPixel(32,32),{16,32,48,255});
                 if(bridge_mem.Read32(0x80110000+(32*64+32)*4)!=0xffffc0c0)
                     throw std::runtime_error("Main target not stored on switch");
                 call("D3DDevice_SetRenderTarget",{surface,depth_surface});
+                write_packet({{0x0210,0x116000}});
+                bool stale_offset=false;
+                try{bridge.ValidateCapturedTargets();}catch(const std::logic_error&){stale_offset=true;}
+                if(!stale_offset)throw std::runtime_error("Stale raw surface address accepted");
+                write_packet({{0x0210,0x110000},{0x020c,0x01000200}});
+                bool wrong_pitch=false;
+                try{bridge.ValidateCapturedTargets();}catch(const std::logic_error&){wrong_pitch=true;}
+                if(!wrong_pitch)throw std::runtime_error("Wrong raw surface pitch accepted");
+                write_packet({{0x020c,0x01000100}});
+                bridge.ValidateCapturedTargets();
+                bool bad_surface_format=false;
+                try{write_packet({{0x0208,0x1128}});}catch(const std::logic_error&){bad_surface_format=true;}
+                if(!bad_surface_format)throw std::runtime_error("Multisampled surface silently accepted");
                 backend.ReadbackColor(bridge.Snapshot().rt);
                 Expect("main target restored",backend.ReadPixel(32,32),{255,192,192,255});
                 if(bridge_mem.Read32(0x80116000)!=0xff102030)
