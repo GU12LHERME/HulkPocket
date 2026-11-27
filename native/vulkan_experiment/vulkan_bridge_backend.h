@@ -110,7 +110,17 @@ public:
         if(!count&&(requested&1))depth_valid_=true;
         if(!count&&(requested&2))stencil_valid_=true;
     }
+    // The bridge and core execute on the owning thread. Core copies the
+    // vertex/index bytes into its per-draw upload slot before returning.
+    // Do not retain any pointers into the caller's Assembled.
     void Draw(const gpu::State& s,uint32_t prim,uint32_t start,uint32_t count,const uint8_t* indices)override{
+        gpu::Assembled a{};
+        if(!gpu::Assemble(s,prim,start,count,indices,a))return;
+        DrawAssembled(s,prim,start,count,indices,a);
+    }
+    void DrawAssembled(const gpu::State& s,uint32_t,uint32_t,uint32_t,const uint8_t*,const gpu::Assembled& a)override{
+        if(!a.vertex_count||!(a.regs&1)||!a.buffer_count)
+            throw std::invalid_argument("Invalid prepared Vulkan geometry");
         Target(s.rt);
         EnsureColor();
         const bool screen=(s.vs&&!s.vs->program.empty())||(!(s.vs_handle&1)&&(s.vs_handle&0xe)==4);
@@ -118,8 +128,6 @@ public:
         if(s.rs[gpu::kRsZEnable]||s.rs[gpu::kRsStencilEnable])Depth(s.zs);
         if(s.rs[gpu::kRsZEnable]&&!depth_valid_)throw std::logic_error("Vulkan depth requires clear");
         if(s.rs[gpu::kRsStencilEnable]&&!stencil_valid_)throw std::logic_error("Vulkan stencil requires clear");
-        gpu::Assembled a{};
-        if(!gpu::Assemble(s,prim,start,count,indices,a))return;
         for(unsigned i=0;i<4;++i)if(s.textures[i]){
             gpu::TextureDesc d{};
             if(!gpu::Describe(s.textures[i],d)||d.cube||d.depth!=1)

@@ -1230,8 +1230,12 @@ private:
                 SyncLiveTargets(live);
                 auto fvf=live.bridge.SyncFixedDiffuseShader(dev,VulkanPreviewSelected());
                 bool indexed=ordinal==(kGraphicsDrawIndexed|0x1000u);
+                // Keep prepared storage alive throughout this serialized
+                // draw. State replay only filters raster/shader constants,
+                // not the validated stream declaration or indices.
+                gpu::Assembled prepared;
                 auto vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
-                    indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0);
+                    indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0,VulkanPreviewSelected()?&prepared:nullptr);
                 if(live.TraceGraphics())std::fprintf(stderr,"D3D ORIGINAL GEOMETRY ASSEMBLED: fvf=%08X vertices=%u (not rendered)\n",fvf,vertices);
                 auto synced=live.bridge.Snapshot();
                 if(full_capture)for(auto slot:{2,3,256}){
@@ -1269,7 +1273,7 @@ private:
                     // No hardcoded callsite or one-texture profile for
                     // nonzero-view Vulkan draws. The bridge validates the
                     // captured declaration, primitive, states and resources.
-                    try{live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices,true);}
+                    try{live.bridge.ReplayCapturedShaderDiagnostic(Arg(cpu,0),start,count,indices,true,&prepared);}
                     catch(...){
                         std::fprintf(stderr,"D3D VULKAN DRAW FAILURE frame=%u draw=%u caller=%08X prim=%u start=%u count=%u indices=%08X fvf=%08X ps=%08X\n",
                             live.diagnostic_swap_returns+1,frame_draws,caller,Arg(cpu,0),start,count,indices,fvf,synced.ps?synced.ps->handle:0);

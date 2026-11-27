@@ -22,6 +22,9 @@ public:
     bool Init(uint32_t w,uint32_t h)override{return B().Init(w,h);}
     void Clear(const gpu::State& s,uint32_t n,const uint8_t* p,uint32_t f,uint32_t c,float z,uint32_t t)override{B().Clear(s,n,p,f,c,z,t);}
     void Draw(const gpu::State& s,uint32_t p,uint32_t a,uint32_t n,const uint8_t* i)override{B().Draw(s,p,a,n,i);}
+    void DrawAssembled(const gpu::State& s,uint32_t p,uint32_t a,uint32_t n,const uint8_t* i,const gpu::Assembled& v)override{
+        B().DrawAssembled(s,p,a,n,i,v);
+    }
     void Copy(const gpu::Surface& s,const gpu::Surface& d,uint32_t n,uint32_t r,uint32_t p,float x,float y)override{B().Copy(s,d,n,r,p,x,y);}
     void Present(const gpu::Surface& s)override{B().Present(s);}
     void Sync(uint32_t a,uint32_t n)override{B().Sync(a,n);}

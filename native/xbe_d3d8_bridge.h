@@ -525,12 +525,13 @@ public:
     }
     // Prove that the real stream can be assembled, even if later raster
     // translation must stop. No backend draw or guest return is implied.
-    uint32_t VerifyGuestGeometry(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices){
+    uint32_t VerifyGuestGeometry(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices,gpu::Assembled* prepared=nullptr){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         if(!count||count>262144||prim<1||prim>10)
             throw std::invalid_argument("Invalid guest geometry request");
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
-        gpu::Assembled a;
+        gpu::Assembled local;
+        auto& a=prepared?*prepared:local;
         uint32_t regs=0x205u;
         if(!state_.vs){
             gpu::VertexShader layout;gpu::FvfInputs(state_.vs_handle,layout);
@@ -761,7 +762,9 @@ public:
     }
     // Validated captured shader path; fixed-function extension is explicitly
     // selected by the live Vulkan hook, never the legacy GLES caller.
-    void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0,bool allow_fixed=false){
+    // prepared is optional and may only be supplied by the same
+    // serialized live draw immediately after VerifyGuestGeometry.
+    void ReplayCapturedShaderDiagnostic(uint32_t prim,uint32_t start,uint32_t count,uint32_t indices=0,bool allow_fixed=false,const gpu::Assembled* prepared=nullptr){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
         const bool program=state_.vs&&!state_.vs->program.empty();
         const auto fvf=state_.vs_handle;
@@ -814,7 +817,9 @@ public:
             replay.simple[m/4]=state_.simple[m/4];
         for(uint32_t m=0;m<0x2000;m+=4)if(IsCombinerMethod(m))replay.simple[m/4]=state_.simple[m/4];
         auto* ip=indices?gpu::CheckedGuestRange(indices,uint64_t(count)*2):nullptr;
-        backend_.Draw(replay,prim,start,count,ip);if(!defer_draw_flush_)backend_.Flush();
+        if(prepared)backend_.DrawAssembled(replay,prim,start,count,ip,*prepared);
+        else backend_.Draw(replay,prim,start,count,ip);
+        if(!defer_draw_flush_)backend_.Flush();
     }
     void ApplyPush(uint32_t begin,uint32_t end,bool capture_pixel=false,bool compact=false){
         std::lock_guard guard(lock_);

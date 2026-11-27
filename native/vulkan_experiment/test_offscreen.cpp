@@ -795,11 +795,12 @@ int main(int argc,char** argv){
                 multi_state.tss[1][kTssTexCoordIndex]=1;
                 multi_state.tss[1][kTssColorOp]=4;
                 bridge.AdoptLiveSetters(multi_state);
+                gpu::Assembled prepared;
                 if(bridge.SyncFixedDiffuseShader(device,true)!=0x242||
-                   bridge.VerifyGuestGeometry(5,0,3,0)!=3)
+                   bridge.VerifyGuestGeometry(5,0,3,0,&prepared)!=3)
                     throw std::runtime_error("Multi UV declaration capture failed");
                 call("D3DDevice_Clear",{0,0,0xf0,0xff000000,std::bit_cast<uint32_t>(1.f),0});
-                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true);
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3,0,true,&prepared);
                 Expect("independent second UV set",backend.ReadPixel(32,32),{0,128,0,255});
                 multi_state=bridge.Snapshot();multi_state.tss[1][kTssTexCoordIndex]=0;
                 bridge.AdoptLiveSetters(multi_state);
