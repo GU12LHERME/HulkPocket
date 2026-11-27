@@ -8,7 +8,10 @@ namespace hulkpocket::vkexp {
 class VulkanBridgeBackend final:public gpu::Backend {
     VulkanCore core_;
     gpu::Surface target_{};
-    uint32_t address_=0,pitch_=0,depth_header_=0,depth_address_=0,depth_pitch_=0;
+    uint32_t address_=0,pitch_=0;
+    struct DepthBacking {uint32_t header=0,address=0,pitch=0;bool depth_valid=false,stencil_valid=false;};
+    std::array<DepthBacking,VulkanCore::DepthSlots> depth_backings_{};
+    unsigned depth_slot_=0;
     bool depth_valid_=false,stencil_valid_=false,rotated_=false;
     struct SavedColor {uint32_t address=0,pitch=0;};
     std::array<SavedColor,16> saved_{};unsigned saved_next_=0;
@@ -18,16 +21,45 @@ class VulkanBridgeBackend final:public gpu::Backend {
     static bool Overlap(uint32_t a,uint64_t n,uint32_t b,uint64_t m){
         return uint64_t(a)<uint64_t(b)+m&&uint64_t(b)<uint64_t(a)+n;
     }
+    bool DepthOverlap(uint32_t address,uint64_t bytes)const{
+        return std::any_of(depth_backings_.begin(),depth_backings_.end(),[&](const auto& d){
+            return d.header&&Overlap(address,bytes,d.address,uint64_t(d.pitch)*core_.H);
+        });
+    }
     void Depth(const gpu::Surface& s){
         gpu::TextureDesc d{};
         if(!s.header||!gpu::DescribeSurface(s,d)||!d.linear||d.format!=0x2e||d.width!=core_.W||d.height!=core_.H||d.pitch<uint64_t(d.width)*4)
             throw std::logic_error("Unsupported Vulkan depth target");
         gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
-        if(depth_header_&&(depth_header_!=s.header||depth_address_!=d.data||depth_pitch_!=d.pitch))
-            throw std::logic_error("Vulkan depth target switching not integrated");
         if(target_.header&&Overlap(d.data,uint64_t(d.pitch)*core_.H,address_,uint64_t(pitch_)*core_.H))
             throw std::logic_error("Vulkan color/depth target overlap");
-        depth_header_=s.header;depth_address_=d.data;depth_pitch_=d.pitch;
+        for(const auto& color:saved_)if(color.pitch&&Overlap(d.data,uint64_t(d.pitch)*core_.H,color.address,uint64_t(color.pitch)*core_.H))
+            throw std::logic_error("Vulkan depth target aliases saved color");
+        unsigned slot=VulkanCore::DepthSlots,unused=VulkanCore::DepthSlots;
+        for(unsigned i=0;i<depth_backings_.size();++i){
+            const auto& e=depth_backings_[i];
+            if(!e.header){if(unused==VulkanCore::DepthSlots)unused=i;continue;}
+            if(e.address==d.data&&e.pitch==d.pitch){slot=i;continue;}
+            if(e.header==s.header||Overlap(e.address,uint64_t(e.pitch)*core_.H,d.data,uint64_t(d.pitch)*core_.H))
+                throw std::logic_error("Vulkan depth backing mutation or partial alias");
+        }
+        if(slot==VulkanCore::DepthSlots){
+            if(unused==VulkanCore::DepthSlots)throw std::logic_error("Vulkan depth attachment pool exhausted");
+            slot=unused;
+        }
+        if(slot!=depth_slot_){
+            core_.SelectDepthAttachment(slot);
+            auto& previous=depth_backings_[depth_slot_];
+            previous.depth_valid=depth_valid_;previous.stencil_valid=stencil_valid_;
+            depth_slot_=slot;
+            depth_valid_=depth_backings_[slot].depth_valid;
+            stencil_valid_=depth_backings_[slot].stencil_valid;
+        }
+        auto& backing=depth_backings_[slot];
+        if(!backing.header){
+            backing={s.header,d.data,d.pitch,false,false};
+            depth_valid_=stencil_valid_=false;
+        }
     }
     void Target(const gpu::Surface& s){
         gpu::TextureDesc d{};
@@ -35,7 +67,7 @@ class VulkanBridgeBackend final:public gpu::Backend {
            d.width!=core_.W||d.height!=core_.H||d.depth!=1||d.levels!=1||d.pitch<uint64_t(d.width)*4)
             throw std::invalid_argument("Unsupported Vulkan bridge target");
         gpu::CheckedGuestRange(d.data,uint64_t(d.pitch)*d.height);
-        if(depth_header_&&Overlap(d.data,uint64_t(d.pitch)*core_.H,depth_address_,uint64_t(depth_pitch_)*core_.H))
+        if(DepthOverlap(d.data,uint64_t(d.pitch)*core_.H))
             throw std::logic_error("Vulkan color target aliases depth");
         if(target_.header&&(address_!=d.data||pitch_!=d.pitch)){
             if(target_.header==s.header)
@@ -133,8 +165,7 @@ public:
             if(!gpu::Describe(s.textures[i],d)||!d.depth||(d.cube&&(d.linear||d.depth!=1||d.width!=d.height||d.width>4096)))
                 throw std::logic_error("Vulkan bridge requires supported color texture");
             auto bytes=d.depth>1?CheckedVolumeBytes(d):gpu::TotalSize(d);
-            if(depth_header_&&uint64_t(d.data)<uint64_t(depth_address_)+uint64_t(depth_pitch_)*core_.H&&
-               uint64_t(depth_address_)<uint64_t(d.data)+bytes)
+            if(DepthOverlap(d.data,bytes))
                 throw std::logic_error("Vulkan depth texture alias needs depth translation");
             bool alias=uint64_t(d.data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&
                        uint64_t(address_)<uint64_t(d.data)+bytes;
@@ -191,8 +222,7 @@ public:
             EnsureColor();
             return true;
         };
-        if(depth_header_&&(overlap(a.data,uint64_t(a.pitch)*a.height,depth_address_,uint64_t(depth_pitch_)*core_.H)||
-                          overlap(b.data,uint64_t(b.pitch)*b.height,depth_address_,uint64_t(depth_pitch_)*core_.H)))
+        if(DepthOverlap(a.data,uint64_t(a.pitch)*a.height)||DepthOverlap(b.data,uint64_t(b.pitch)*b.height))
             throw std::logic_error("Vulkan copy aliases depth");
         bool from_target=active(a),to_target=active(b);
         if(from_target||to_target)Writeback();
@@ -219,8 +249,7 @@ public:
         auto old=address_;target_={};Target(s);
         if(old==address_)throw std::logic_error("Vulkan rotation did not change backing");
         core_.frame_valid=false;core_.readback_valid=false;rotated_=true;
-        // Depth() still rejects any changed header/backing before use.
-        // Retain validity of the shared depth/stencil image across color swaps.
+        // Retain the selected depth/stencil image across color swaps.
     }
     void RestoreRotatedColor(const gpu::Surface& s){
         Target(s);EnsureColor();
@@ -228,7 +257,7 @@ public:
     void Present(const gpu::Surface& front)override{ReadbackColor(front);}
     void Sync(uint32_t data,uint32_t size)override{
         if(!size)return;
-        if(depth_header_&&uint64_t(data)<uint64_t(depth_address_)+uint64_t(depth_pitch_)*core_.H&&uint64_t(depth_address_)<uint64_t(data)+size)throw std::logic_error("Vulkan guest depth readback not integrated");
+        if(DepthOverlap(data,size))throw std::logic_error("Vulkan guest depth readback not integrated");
         if(target_.header&&uint64_t(data)<uint64_t(address_)+uint64_t(pitch_)*core_.H&&uint64_t(address_)<uint64_t(data)+size)Writeback();
     }
     void SyncLate(uint32_t data)override{Sync(data,1);}

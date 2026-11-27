@@ -71,6 +71,9 @@ struct VulkanCore{
     unsigned pending_draws=0;
     uint64_t queue_submissions=0,draw_batches=0;
     Image target,depth;
+    static constexpr unsigned DepthSlots=4;
+    std::array<Image,DepthSlots> parked_depth{};
+    unsigned active_depth_slot=0;
     std::array<Image,4> textures{};
     std::array<uint32_t,4> tex_width{},tex_height{},tex_levels{1,1,1,1},tex_depth{1,1,1,1};
     std::array<bool,4> tex_rect{},tex_cube{};
@@ -119,6 +122,7 @@ struct VulkanCore{
             if(load_pass)vkDestroyRenderPass(dev,load_pass,nullptr);
             if(pass)vkDestroyRenderPass(dev,pass,nullptr);
             Destroy(target);for(auto& t:textures)Destroy(t);Destroy(depth);
+            for(auto& d:parked_depth)Destroy(d);
             Destroy(verts);Destroy(indices);
             for(auto& b:extra_verts)Destroy(b);
             for(auto& b:extra_indices)Destroy(b);
@@ -320,6 +324,47 @@ struct VulkanCore{
             if(i<2)x.pBufferInfo=&ub[i];else x.pImageInfo=i<6?&im[i-2]:&sm;
         }
         vkUpdateDescriptorSets(dev,writes.size(),writes.data(),0,nullptr);
+    }
+    // Independent same-extent depth attachments, modeled after SCDA's
+    // per-address targets. Keep parked images alive until destruction.
+    // The guest-visible validity of depth and stencil lives in the bridge.
+    void SelectDepthAttachment(unsigned slot){
+        if(slot>=DepthSlots)throw std::invalid_argument("Invalid Vulkan depth slot");
+        if(slot==active_depth_slot)return;
+        FlushBatch();
+        auto& next=parked_depth[slot];
+        if(!next.image){
+            if(uint64_t(W)*H*8*DepthSlots>128ull*1024*1024)
+                throw std::invalid_argument("Vulkan depth attachment pool exceeds bound");
+            VkFormatProperties properties{};vkGetPhysicalDeviceFormatProperties(physical,depth_format,&properties);
+            if(!(properties.optimalTilingFeatures&VK_FORMAT_FEATURE_TRANSFER_DST_BIT))
+                throw std::invalid_argument("Vulkan depth attachment initialization unavailable");
+            const VkImageAspectFlags aspect=VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT;
+            CreateImage(next,W,H,VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,depth_format,aspect);
+            // Initialize layouts for LOAD render passes without discarding
+            // the current color. These defaults are not guest-valid until
+            // the title explicitly clears the corresponding aspect.
+            Begin();
+            Transition(next.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,
+                       VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,1,1,aspect);
+            VkClearDepthStencilValue clear{1.f,0};
+            VkImageSubresourceRange range{aspect,0,1,0,1};
+            vkCmdClearDepthStencilImage(cmd,next.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&clear,1,&range);
+            Transition(next.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                       VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,1,1,aspect);
+            Submit();
+        }
+        VkImageView views[]={target.view,next.view};
+        VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fi.renderPass=pass;fi.attachmentCount=2;fi.pAttachments=views;fi.width=W;fi.height=H;fi.layers=1;
+        VkFramebuffer replacement{};
+        Check(vkCreateFramebuffer(dev,&fi,nullptr,&replacement),"depth switch framebuffer");
+        vkDestroyFramebuffer(dev,fb,nullptr);fb=replacement;
+        parked_depth[active_depth_slot]=depth;
+        depth=next;next={};active_depth_slot=slot;
+        // Render-pass compatibility and color image are unchanged. The
+        // existing pipeline cache and color readback remain valid.
     }
     // Synchronous resource replacement: previous draws have completed.
     void SetSampler(unsigned stage,const gpu::State& s){

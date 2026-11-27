@@ -666,6 +666,26 @@ int main(int argc,char** argv){
                 bridge.ReplayCapturedShaderDiagnostic(5,0,3);
                 Expect("stencil masked color inside",backend.ReadPixel(32,32),{128,128,64,255});
                 Expect("stencil masked color outside",backend.ReadPixel(4,4),{0,0,255,255});
+                // Independent depth/stencil surfaces: selecting another
+                // backing cannot inherit the original stencil mask.
+                constexpr uint32_t depth2=0x20900;
+                bridge_mem.Write32(depth2,0x50000);bridge_mem.Write32(depth2+4,0x11a000);
+                bridge_mem.Write32(depth2+12,0x00012e21);bridge_mem.Write32(depth2+16,63|(63<<12)|(3<<24));
+                call("D3DDevice_SetRenderTarget",{surface,depth2});
+                bool depth_uncleared=false;
+                try{bridge.ReplayCapturedShaderDiagnostic(5,0,3);}catch(const std::logic_error&){depth_uncleared=true;}
+                if(!depth_uncleared)throw std::runtime_error("New depth inherited original stencil validity");
+                Expect("depth switch preserves color",backend.ReadPixel(32,32),{128,128,64,255});
+                call("D3DDevice_Clear",{0,0,0xf3,0xff0000ff,std::bit_cast<uint32_t>(1.f),0});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("independent empty stencil rejects",backend.ReadPixel(32,32),{0,0,255,255});
+                call("D3DDevice_SetRenderTarget",{surface,depth_surface});
+                bridge.ReplayCapturedShaderDiagnostic(5,0,3);
+                Expect("restored original stencil mask inside",backend.ReadPixel(32,32),{128,128,64,255});
+                Expect("restored original stencil mask outside",backend.ReadPixel(4,4),{0,0,255,255});
+                bool inactive_depth_sync=false;
+                try{backend.Sync(0x8011a000,4);}catch(const std::logic_error&){inactive_depth_sync=true;}
+                if(!inactive_depth_sync)throw std::runtime_error("Inactive depth backing read allowed");
                 // Preserve the shared stencil on a color-only clear after
                 // rotation, and restore old color on the next depth-only clear.
                 bridge.Present(surface);
