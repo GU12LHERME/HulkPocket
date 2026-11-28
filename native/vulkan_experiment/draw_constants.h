@@ -47,8 +47,11 @@ inline void FixedTransforms(const gpu::State& s,gpu::DrawConstants& dc){
 // Constant layout follows the shared fixed-function shader and the verified GLES lighting model.
 inline void FixedLighting(const gpu::State& s,gpu::DrawConstants& dc){
     if(!s.rs[gpu::kRsLighting])return;
+    // Fog is independent of lighting in the shared fixed shaders: the vertex
+    // stage derives fogamt from clip depth and the pixel stage blends fog
+    // after lighting. Its constants are validated in CombinerConstants.
     if(s.rs[gpu::kRsLighting]!=1||s.rs[gpu::kRsTwoSidedLighting]||s.rs[gpu::kRsVertexBlend]||
-       s.rs[gpu::kRsFogEnable]||(s.light_enable&~255u))throw std::logic_error("Unsupported Vulkan lighting state");
+       (s.light_enable&~255u))throw std::logic_error("Unsupported Vulkan lighting state");
     for(float x:s.material)if(!std::isfinite(x))throw std::invalid_argument("Invalid Vulkan material");
     if(s.material[16]<0)throw std::invalid_argument("Invalid Vulkan material power");
     for(unsigned n=0;n<4;++n)for(unsigned j=0;j<4;++j)dc.mat[n][j]=s.material[n*4+j];

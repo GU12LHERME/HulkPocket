@@ -368,6 +368,20 @@ int main(int argc,char** argv){
         if(!GuestDraw(guest_state,5,0,3,0,assembled))throw std::runtime_error("Packed lighting assembly failed");
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest directional light",f.Pixel(32,32),{255,0,0,255});
+        // Lit draw with linear table fog (as captured on RP6): fog blends
+        // after lighting; clip z 0.5 in [0,1] gives an even mix with blue.
+        guest_state.rs[kRsFogEnable]=1;guest_state.rs[kRsFogTableMode]=3;
+        guest_state.rs[kRsFogStart]=std::bit_cast<uint32_t>(0.f);guest_state.rs[kRsFogEnd]=std::bit_cast<uint32_t>(1.f);
+        guest_state.rs[kRsFogDensity]=std::bit_cast<uint32_t>(1.f);guest_state.rs[kRsFogColor]=0xff0000ff;
+        f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+        {
+            const auto fogged=f.Pixel(32,32);
+            if(fogged[0]<126||fogged[0]>129||fogged[1]!=0||fogged[2]<126||fogged[2]>129||fogged[3]!=255){
+                std::fprintf(stderr,"lit linear fog got %d,%d,%d,%d\n",fogged[0],fogged[1],fogged[2],fogged[3]);
+                throw std::runtime_error("lit linear fog");
+            }
+        }
+        guest_state.rs[kRsFogEnable]=0;guest_state.rs[kRsFogTableMode]=0;
         light[18]=std::bit_cast<uint32_t>(1.f);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest reversed light",f.Pixel(32,32),{0,0,0,255});

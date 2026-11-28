@@ -920,7 +920,8 @@ public:
            state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
            (lighting&&(!fixed||!normal||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
            state_.rs[gpu::kRsFogEnable]>1||(fixed&&state_.rs[gpu::kRsRangeFogEnable])||
-           (lighting&&state_.rs[gpu::kRsFogEnable])||
+           // Lit fixed draws may use table fog (RP6 first-phase draw, mode 3);
+           // range fog stays unsupported via the clause above.
            state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
             throw std::logic_error("Unsupported captured shader replay profile");
         gpu::TextureDesc desc{};
