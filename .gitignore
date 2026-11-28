@@ -1,11 +1,89 @@
+# ---------------------------------------------------------------------------
+# Original game media and data: user-owned, never commit or upload.
+# ---------------------------------------------------------------------------
 *.iso
 *.xiso
 *.xbe
 *.chd
-*.apk
-/build/
+*.cso
+*.xbx
+*.xmv
+*.xpr
+*.xwb
+*.xsb
+*.xwm
+*.bik
 /isos/
 /game-data/
+default.xbe
+TDATA/
+UDATA/
+hulk-partition*/
+
+# ---------------------------------------------------------------------------
+# Recompiled / generated game code and native modules derived from the XBE.
+# ---------------------------------------------------------------------------
+private_generated/
+hulk-generated/
+hulk-object-cache/
+generated/x86_recomp.*.cpp
+generated/x86_func_mapping.cpp
+image_symbols.h
+*.so
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.dylib
+*.apk
+*.aab
+*.ap_
+*.dex
+HulkPocket-*.txt
+HulkPocket-*.zip
+
+# ---------------------------------------------------------------------------
+# Credentials and machine-local configuration.
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.keystore
+*.jks
+*.pem
+*.p12
+key.properties
+keystore.properties
+local.properties
+google-services.json
+.claude/settings.local.json
+
+# ---------------------------------------------------------------------------
+# Build outputs and caches.
+# ---------------------------------------------------------------------------
+/build/
+/build-*/
+/out/
 /upstream/
-/.gradle/
-/local.properties
+.gradle/
+android/build/
+android/app/build/
+android/app/.cxx/
+.externalNativeBuild/
+/android/app/src/main/cpp/sdk/
+.cache/
+.ccache/
+__pycache__/
+*.py[cod]
+/compile_commands.json
+CMakeUserPresets.json
+
+# ---------------------------------------------------------------------------
+# Editors and OS noise.
+# ---------------------------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini

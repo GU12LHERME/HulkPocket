@@ -9,6 +9,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - name: Refuse game media, recompiled modules, binaries and secrets
+        run: |
+          python3 tools/check_publish_safety.py --self-test
+          python3 tools/check_publish_safety.py --tree
+      - name: Test cross-platform NDK tool resolution
+        run: python3 -m unittest discover -s tools -p 'test_ndk_tools.py' -v
       - name: Test XISO extraction
         run: python3 -m unittest discover -s tools -p 'test_xiso.py' -v
       - name: Test native engine packaging gate

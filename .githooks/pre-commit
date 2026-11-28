@@ -1,0 +1,11 @@
+#!/bin/sh
+# Block game media, recompiled modules, binaries and secrets from commits.
+# Enable once per clone: git config core.hooksPath .githooks
+root=$(git rev-parse --show-toplevel) || exit 1
+for py in python3 python py; do
+    if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+        exec "$py" -B "$root/tools/check_publish_safety.py" --staged
+    fi
+done
+echo "pre-commit: Python 3.9+ not found; refusing to commit unchecked files." >&2
+exit 1
