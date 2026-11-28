@@ -9,6 +9,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           repository: matthewfcarlson/thunderclap
+          ref: f6ead5c8ad63fde00786aad0aeaacba0e8000f9a
           path: upstream
           persist-credentials: false
       - name: Install host tools

@@ -229,8 +229,14 @@ class Job:
         if action == "actions/checkout":
             if "repository" in options:
                 dest = self.workspace / options.get("path", ".")
-                subprocess.run(["git", "clone", "--depth", "1",
-                                f"https://github.com/{options['repository']}.git", str(dest)], check=True)
+                url = f"https://github.com/{options['repository']}.git"
+                ref = options.get("ref")
+                if ref:
+                    subprocess.run(["git", "init", "-q", str(dest)], check=True)
+                    subprocess.run(["git", "-C", str(dest), "fetch", "-q", "--depth", "1", url, ref], check=True)
+                    subprocess.run(["git", "-C", str(dest), "checkout", "-q", "--detach", "FETCH_HEAD"], check=True)
+                else:
+                    subprocess.run(["git", "clone", "--depth", "1", url, str(dest)], check=True)
             return
         if action == "actions/setup-java":
             version = subprocess.run(["java", "-version"], capture_output=True, text=True).stderr

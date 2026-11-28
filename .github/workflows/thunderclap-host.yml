@@ -23,7 +23,12 @@ jobs:
       - name: Clone Thunderclap for isolated host compilation
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/matthewfcarlson/thunderclap.git "$RUNNER_TEMP/thunderclap"
+          # Pinned upstream revision validated locally (tools/run_ci_local.py).
+          THUNDERCLAP_REV=f6ead5c8ad63fde00786aad0aeaacba0e8000f9a
+          git init -q "$RUNNER_TEMP/thunderclap"
+          git -C "$RUNNER_TEMP/thunderclap" fetch -q --depth 1 https://github.com/matthewfcarlson/thunderclap.git "$THUNDERCLAP_REV"
+          git -C "$RUNNER_TEMP/thunderclap" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$RUNNER_TEMP/thunderclap" rev-parse HEAD)" = "$THUNDERCLAP_REV"
           git -C "$RUNNER_TEMP/thunderclap" rev-parse HEAD
       - name: Compile upstream native host objects for Android ARM64
         working-directory: ${{ runner.temp }}/thunderclap
