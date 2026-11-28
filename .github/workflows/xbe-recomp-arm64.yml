@@ -44,6 +44,15 @@ jobs:
           set -euo pipefail
           clang++ -std=c++20 -O2 -Wall -Wextra -Werror native/test_hulk_adpcm.cpp -o "$RUNNER_TEMP/hulk-adpcm"
           "$RUNNER_TEMP/hulk-adpcm"
+      - name: Validate per-present frame hash and window swizzle
+        run: |
+          set -euo pipefail
+          clang++ -std=c++20 -O2 -Wall -Wextra -Werror -I native native/test_hulk_frame_present.cpp -o "$RUNNER_TEMP/hulk-frame-present"
+          "$RUNNER_TEMP/hulk-frame-present"
+          ndk="$ANDROID_HOME/ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          "$ndk/aarch64-linux-android29-clang++" -std=c++20 -O2 -Wall -Wextra -Werror -I native \
+            native/test_hulk_frame_present.cpp -o "$RUNNER_TEMP/hulk-frame-present-android"
+          "$ndk/llvm-readelf" -h "$RUNNER_TEMP/hulk-frame-present-android" | grep AArch64 >/dev/null
       - name: Validate native ARM64 cooperative stack switching
         run: |
           set -euo pipefail

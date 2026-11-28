@@ -15,6 +15,7 @@
 #include "hulk_sound.h"
 #include "hulk_pad_script.h"
 #include "hulk_preview_host.h"
+#include "hulk_frame_present.h"
 #include "xbe_resident_sections.h"
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
 #include "xbe_d3d8_create_probe.h"
@@ -1582,10 +1583,7 @@ private:
                 }
                 // Hash visible BGRA bytes, excluding pitch padding, so the
                 // report distinguishes repeated frames from actual changes.
-                uint64_t hash=14695981039346656037ull;
-                for(unsigned y=0;y<desc.height;++y)for(unsigned x=0;x<desc.width*4;++x){
-                    hash^=pixels[size_t(y)*desc.pitch+x];hash*=1099511628211ull;
-                }
+                const uint64_t hash=HashVisibleBgra(pixels,desc.width,desc.height,desc.pitch);
                 if(!vk)presented=live.bridge.Present(state.rt.header);
                 live.RecordPresentPerf(perf_begin,perf_readback,perf_window,LiveD3dDevice::PerfClock::now());
                 if(presented>1&&hash==live.last_frame_hash)++live.identical_frames;
