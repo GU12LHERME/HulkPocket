@@ -140,21 +140,40 @@ private:
         using PerfClock=std::chrono::steady_clock;
         PerfClock::time_point perf_start{};
         uint64_t perf_readback_us=0,perf_window_us=0,perf_diag_us=0;
-        unsigned perf_frames=0;
+        // Host time inside guest-visible D3D hooks between presents: draw
+        // translation/submission, GPU completion waits and 60 Hz vblank
+        // sleeps. The remainder of a frame is recompiled guest code and
+        // other kernel services.
+        uint64_t perf_draw_us=0,perf_wait_us=0,perf_vblank_us=0;
+        unsigned perf_frames=0,perf_draws=0;
+        struct PerfScope {
+            uint64_t& sink;PerfClock::time_point begin=PerfClock::now();
+            ~PerfScope(){sink+=uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(PerfClock::now()-begin).count());}
+        };
         void RecordPresentPerf(PerfClock::time_point begin,PerfClock::time_point readback,
                                PerfClock::time_point window,PerfClock::time_point end){
             if(!expanded_preview)return;
-            if(perf_start==PerfClock::time_point{})perf_start=begin;
+            if(perf_start==PerfClock::time_point{}){
+                // Start the first window at this present; startup hook time
+                // before it is not part of any measured frame.
+                perf_start=begin;perf_draw_us=perf_wait_us=perf_vblank_us=0;perf_draws=0;
+            }
             auto us=[](auto a,auto b){return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(b-a).count());};
             perf_readback_us+=us(begin,readback);
             perf_window_us+=us(readback,window);
             perf_diag_us+=us(window,end);
             if(++perf_frames==60){
                 const auto elapsed=us(perf_start,end);
-                std::fprintf(stderr,"D3D PERF frames=%u elapsed_ms=%.3f fps=%.2f frame_ms=%.3f readback_ms=%.3f window_ms=%.3f post_ms=%.3f\n",
-                    perf_frames,elapsed/1000.0,elapsed?perf_frames*1000000.0/elapsed:0.0,elapsed/1000.0/perf_frames,
-                    perf_readback_us/1000.0/perf_frames,perf_window_us/1000.0/perf_frames,perf_diag_us/1000.0/perf_frames);
+                const double n=perf_frames;
+                const auto hooks=perf_readback_us+perf_window_us+perf_diag_us+perf_draw_us+perf_wait_us+perf_vblank_us;
+                std::fprintf(stderr,"D3D PERF frames=%u elapsed_ms=%.3f fps=%.2f frame_ms=%.3f readback_ms=%.3f window_ms=%.3f post_ms=%.3f"
+                    " draw_ms=%.3f draws=%.1f gpu_wait_ms=%.3f vblank_sleep_ms=%.3f guest_ms=%.3f\n",
+                    perf_frames,elapsed/1000.0,elapsed?n*1000000.0/elapsed:0.0,elapsed/1000.0/n,
+                    perf_readback_us/1000.0/n,perf_window_us/1000.0/n,perf_diag_us/1000.0/n,
+                    perf_draw_us/1000.0/n,perf_draws/n,perf_wait_us/1000.0/n,perf_vblank_us/1000.0/n,
+                    elapsed>hooks?(elapsed-hooks)/1000.0/n:0.0);
                 perf_start=end;perf_frames=0;perf_readback_us=perf_window_us=perf_diag_us=0;
+                perf_draw_us=perf_wait_us=perf_vblank_us=0;perf_draws=0;
             }
         }
         const bool compact_capture=std::getenv("HULK_COMPACT_REPORT")&&
@@ -1234,6 +1253,7 @@ private:
                 if(default_trace_||!live_d3d_||live_d3d_->owner!=cpu.thread_handle)
                     throw std::runtime_error("D3D draw without owned live device");
                 auto& live=*live_d3d_;
+                LiveD3dDevice::PerfScope draw_perf{live.perf_draw_us};++live.perf_draws;
                 if(!VulkanPreviewSelected())live.buffers.VerifyInitialTargets();
                 auto dev=live.buffers.DeviceAddress();
                 if(live.TraceGraphics())std::fprintf(stderr,"D3D FIRST DRAW caller=%08X prim=%u arg1=%08X arg2=%08X streams=%08X rs=%08X tss=%08X\n",
@@ -1489,7 +1509,10 @@ private:
                 auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
                 auto next=now+std::chrono::nanoseconds(period_ns-elapsed%period_ns);
                 lock.unlock();
-                std::this_thread::sleep_until(next);
+                {
+                    LiveD3dDevice::PerfScope vblank_perf{live.perf_vblank_us};
+                    std::this_thread::sleep_until(next);
+                }
                 lock.lock();
                 Pause(cpu,lock);
                 if(live.expanded_preview)PumpPreviewAudio();
@@ -1514,6 +1537,7 @@ private:
                 const char* allow=std::getenv("HULK_CONTINUE_DRAW");
                 if(!allow||std::strcmp(allow,"1")||!live.diagnostic_draw_returns||live.WaitLimitReached(false))
                     throw std::runtime_error("D3D initial wait diagnostic continuation not enabled");
+                LiveD3dDevice::PerfScope wait_perf{live.perf_wait_us};
                 DrainLivePush(live);
                 SyncLiveTargets(live);
                 live.bridge.CompleteInitialGpuWait(target,current,flags,callback);
@@ -2364,15 +2388,16 @@ public:
         auto& session=*active_;
         // Pure observation: do not pause, service DPCs, consume stack args
         // or touch the original CPU context while a guest routine is active.
-        if(ordinal==kLightingMaterialTrace||ordinal==kLightingLightTrace||ordinal==kLightingEnableTrace){
+        if(ordinal==kLightingMaterialTrace||ordinal==kLightingBackMaterialTrace||ordinal==kLightingLightTrace||ordinal==kLightingEnableTrace){
 #ifdef HULK_ENABLE_GLES_DEVICE_PROBE
             auto* live=session.live_d3d_.get();
             if(live&&live->owner==cpu.thread_handle){
                 auto& mem=session.mem_;
-                auto n=ordinal==kLightingMaterialTrace?1u:2u;
+                auto n=ordinal==kLightingMaterialTrace||ordinal==kLightingBackMaterialTrace?1u:2u;
                 if(mem.IsCommitted(cpu.esp,4+4*n)){
                     auto a=mem.Read32(cpu.esp+4),b=n==2?mem.Read32(cpu.esp+8):0u;
                     bool ok=ordinal==kLightingMaterialTrace?live->bridge.ObserveMaterial(a):
+                        ordinal==kLightingBackMaterialTrace?live->bridge.ObserveBackMaterial(a):
                         ordinal==kLightingLightTrace?live->bridge.ObserveLight(a,b):live->bridge.ObserveLightEnable(a,b);
                     std::fprintf(stderr,"D3D LIGHT OBSERVE id=%08X a=%08X b=%08X accepted=%u\n",ordinal,a,b,unsigned(ok));
                 }
