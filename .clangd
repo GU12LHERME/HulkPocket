@@ -1,0 +1,14 @@
+# clangd configuration for HulkPocket.
+# Flags come from compile_commands.json (generate it with
+#   python tools/gen_compile_commands.py
+# after an Android Gradle build). Headers inherit flags from a nearby source.
+CompileFlags:
+  CompilationDatabase: .
+  Remove:
+    - -fno-limit-debug-info
+    - -Werror*
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+Index:
+  Background: Build

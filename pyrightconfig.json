@@ -1,0 +1,13 @@
+{
+  "include": ["tools", "native/vulkan_experiment"],
+  "exclude": ["**/__pycache__", "build", "android", "third_party"],
+  "extraPaths": ["tools"],
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingModuleSource": "none",
+  "reportOptionalMemberAccess": "warning",
+  "reportOptionalSubscript": "warning",
+  "reportArgumentType": "warning",
+  "reportReturnType": "warning"
+}
