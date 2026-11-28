@@ -14,6 +14,7 @@ import subprocess
 import sys
 
 from check_game_version import verify as verify_game_version
+from ndk_tools import has_ndk_clang
 
 
 def snapshot_ready(snapshot: Path) -> bool:
@@ -69,10 +70,7 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
         "upstream_crt_table": (upstream / "src/platform/sdl/crt/native_crt_table.h").is_file(),
         "generated_snapshot": snapshot_ready(snapshot),
         "generated_bindings": bindings.is_file(),
-        "ndk_clang": any(
-            (ndk / "toolchains/llvm/prebuilt" / host / "bin/clang").is_file()
-            for host in ("linux-x86_64", "darwin-x86_64", "darwin-arm64")
-        ),
+        "ndk_clang": has_ndk_clang(ndk),
         "sdl_app_static_library": (sdl / "lib/libSDL3.a").is_file(),
         "ffmpeg_avcodec": (ffmpeg / "lib/libavcodec.so").is_file(),
         "ffmpeg_avformat": (ffmpeg / "lib/libavformat.so").is_file(),
@@ -104,9 +102,11 @@ def make_plan(upstream, snapshot, bindings, ndk, sdl, ffmpeg, output_dir, apk, j
         "HULK_ANDROID_FFMPEG": str(ffmpeg),
         "HULK_NATIVE_CRT_TABLE": str(upstream / "src/platform/sdl/crt/native_crt_table.h"),
     })
-    py = str(upstream / "build/venv/bin/python")
-    if not Path(py).is_file():
-        py = sys.executable
+    py = sys.executable
+    for venv_python in ("build/venv/bin/python", "build/venv/Scripts/python.exe"):
+        if (upstream / venv_python).is_file():
+            py = str(upstream / venv_python)
+            break
     native = str(upstream / "tools/native_elf.py")
     commands = [
         [py, native, "compile", "--target", "android-arm64", "--jobs", str(jobs)],

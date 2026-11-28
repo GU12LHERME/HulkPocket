@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 import subprocess
 
+from ndk_tools import tool
+
 def parse_undefined(output: str) -> list[str]:
     result: list[str] = []
     for raw in output.splitlines():
@@ -48,7 +50,7 @@ def audit(nm: Path, objects: list[Path]) -> dict:
         definitions = subprocess.check_output([str(nm), "--defined-only", "--extern-only", "--format=posix", str(obj)], text=True)
         defined.update(line.split()[0] for line in definitions.splitlines() if len(line.split()) >= 2)
     remaining = {name: count for name, count in counts.items() if name not in defined}
-    demangled = subprocess.run([str(nm.parent / "llvm-cxxfilt")], input="\n".join(remaining)+"\n", text=True, capture_output=True, check=True).stdout.splitlines() if remaining else []
+    demangled = subprocess.run([str(tool(nm.parent, "llvm-cxxfilt"))], input="\n".join(remaining)+"\n", text=True, capture_output=True, check=True).stdout.splitlines() if remaining else []
     if len(demangled) != len(remaining):
         raise RuntimeError("unexpected demangler output")
     return {

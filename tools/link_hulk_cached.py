@@ -7,6 +7,7 @@ import tempfile
 import hashlib
 from prepare_xbe_elf import prepare
 from build_xbe_android import generated_sources
+from ndk_tools import tool
 from supplemental_guest_mapping import generate
 from discover_hulk_viewport_writer import generate_writer
 from discover_hulk_block_on_time import generate_block_on_time
@@ -19,7 +20,7 @@ def main():
         p.add_argument("--"+name, required=True, type=pathlib.Path)
     a = p.parse_args()
     root = pathlib.Path(__file__).resolve().parent.parent
-    compiler = a.ndk_bin / "clang++"
+    compiler = tool(a.ndk_bin, "clang++")
     target = subprocess.check_output([str(compiler), "-dumpmachine"], text=True).strip()
     if not target.startswith("aarch64") or "android" not in target:
         raise RuntimeError("Android AArch64 compiler required")
@@ -71,10 +72,10 @@ def main():
             subprocess.run([str(compiler), "-shared", "-Wl,-z,defs",
                             "-Wl,-z,max-page-size=16384", *map(str, objects),
                             "-lm", "-o", str(pending)], check=True)
-            header = subprocess.check_output([str(a.ndk_bin / "llvm-readelf"), "-h", str(pending)], text=True)
+            header = subprocess.check_output([str(tool(a.ndk_bin, "llvm-readelf")), "-h", str(pending)], text=True)
             if "AArch64" not in header or "ELF64" not in header:
                 raise RuntimeError("Unexpected ELF architecture")
-            symbols = subprocess.check_output([str(a.ndk_bin / "llvm-nm"), "-D", "--defined-only", str(pending)], text=True)
+            symbols = subprocess.check_output([str(tool(a.ndk_bin, "llvm-nm")), "-D", "--defined-only", str(pending)], text=True)
             names = {line.split()[-1] for line in symbols.splitlines() if line.split()}
             for name in ("X86FuncMappings", "X86CodeBase", "X86CodeEnd", "X86EntryPoint", "hulk_entry_probe", "hulk_entry_execute", "hulk_entry_execute_with_kernel"):
                 if name not in names:

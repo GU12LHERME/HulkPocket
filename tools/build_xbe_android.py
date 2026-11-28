@@ -16,6 +16,7 @@ import hashlib
 
 from prepare_xbe_elf import prepare
 from audit_xbe_elf import audit
+from ndk_tools import tool as ndk_tool
 import json
 
 VALID_PART = re.compile(r"x86_recomp\.[0-9]+\.cpp\Z")
@@ -33,15 +34,15 @@ def build(
     termux: bool = False, audit_only: bool = False,
     cache: pathlib.Path | None = None,
 ) -> pathlib.Path:
-    compiler = ndk_bin / ("clang++" if termux else "aarch64-linux-android29-clang++")
+    compiler = ndk_tool(ndk_bin, "clang++" if termux else "aarch64-linux-android29-clang++")
     if termux:
         target = subprocess.check_output([str(compiler), "-dumpmachine"], text=True).strip()
         if not target.startswith("aarch64") or "android" not in target:
             raise ValueError("Termux compiler must target Android AArch64")
     if audit_only and audit_output is None:
         raise ValueError("audit-only requires --audit-output")
-    nm = ndk_bin / "llvm-nm"
-    readelf = ndk_bin / "llvm-readelf"
+    nm = ndk_tool(ndk_bin, "llvm-nm")
+    readelf = ndk_tool(ndk_bin, "llvm-readelf")
     for tool in (compiler, nm, readelf):
         if not tool.is_file():
             raise FileNotFoundError(f"Android NDK tool missing: {tool}")
