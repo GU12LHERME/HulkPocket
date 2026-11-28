@@ -390,6 +390,9 @@ void GUEST(name)(X86Context& ctx,uint8_t* base){ \
 #if HAS_D3DDevice_SetMaterial
 LIGHT_OBSERVER(D3DDevice_SetMaterial,kLightingMaterialTrace)
 #endif
+#if HAS_D3DDevice_SetBackMaterial
+LIGHT_OBSERVER(D3DDevice_SetBackMaterial,kLightingBackMaterialTrace)
+#endif
 #if HAS_D3DDevice_SetLight
 LIGHT_OBSERVER(D3DDevice_SetLight,kLightingLightTrace)
 #endif

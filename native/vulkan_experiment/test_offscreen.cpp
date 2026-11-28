@@ -382,6 +382,55 @@ int main(int argc,char** argv){
             }
         }
         guest_state.rs[kRsFogEnable]=0;guest_state.rs[kRsFogTableMode]=0;
+        {
+            // Two-sided fixed lighting (RP6 first-phase draw, cull none).
+            // Front faces: directional light -> red. Back faces: reversed
+            // normal (unlit) plus back material emissive green.
+            using namespace hulkpocket;
+            guest_state.rs[kRsTwoSidedLighting]=1;
+            bool rejected=false;
+            try{gpu::DrawConstants probe{};vkexp::BackMaterialConstants(guest_state,probe);}
+            catch(const std::logic_error&){rejected=true;}
+            if(!rejected)throw std::runtime_error("Two-sided lighting accepted without back material");
+            // Lit alpha is the diffuse material alpha (back[3]); emissive green, power 4.
+            std::array<float,17> back{};back[3]=1;back[13]=1;back[15]=1;back[16]=4;
+            if(!StoreBackMaterial(guest_state,back))throw std::runtime_error("Back material rejected");
+            gpu::DrawConstants packed_back{};vkexp::BackMaterialConstants(guest_state,packed_back);
+            if(packed_back.pc[3][1]!=1||packed_back.pc[4][0]!=4)throw std::runtime_error("Back material constants");
+            // Fixed pixel shaders must not read pc[] (it carries the back material).
+            gpu::TexInfo none[4]{};
+            {
+                auto text=gpu::PixelHlsl(gpu::MakePixelKey(guest_state,none));
+                const std::string decl="float4 pc[18];";
+                const auto at=text.find(decl);
+                if(at==std::string::npos)throw std::runtime_error("Combiner constant declaration changed");
+                text.erase(at,decl.size());
+                if(text.find("pc[")!=std::string::npos)throw std::runtime_error("Fixed pixel shader reads combiner constants");
+            }
+            std::array<uint8_t,4> seen[2];
+            const uint32_t faces[2]={0x900,0x901};
+            for(unsigned i=0;i<2;++i){
+                guest_state.rs[kRsFrontFace]=faces[i];
+                f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+                seen[i]=f.Pixel(32,32);
+            }
+            const std::array<uint8_t,4> red{255,0,0,255},green{0,255,0,255};
+            if(!((seen[0]==red&&seen[1]==green)||(seen[0]==green&&seen[1]==red))){
+                std::fprintf(stderr,"two-sided got %d,%d,%d / %d,%d,%d\n",seen[0][0],seen[0][1],seen[0][2],seen[1][0],seen[1][1],seen[1][2]);
+                throw std::runtime_error("two-sided front/back colours");
+            }
+            // gl_FrontFacing must agree with D3D culling: culling the back
+            // winding keeps the red (front) triangle and removes the green one.
+            for(unsigned i=0;i<2;++i){
+                guest_state.rs[kRsFrontFace]=faces[i];
+                guest_state.rs[kRsCullMode]=faces[i]==0x900?0x901:0x900;
+                f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+                const std::array<int,4> want=seen[i]==red?std::array<int,4>{255,0,0,255}:std::array<int,4>{0,0,0,255};
+                Expect(seen[i]==red?"cull keeps D3D front face":"cull removes D3D back face",f.Pixel(32,32),want);
+            }
+            guest_state.rs[kRsTwoSidedLighting]=0;guest_state.rs[kRsFrontFace]=0;guest_state.rs[kRsCullMode]=0;
+            guest_state.transforms[kBackMaterialPowerSlot].fill(0);guest_state.transforms[kBackMaterialColorSlot].fill(0);
+        }
         light[18]=std::bit_cast<uint32_t>(1.f);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("guest reversed light",f.Pixel(32,32),{0,0,0,255});

@@ -3,6 +3,7 @@
 #include "gpu/shaders.h"
 #include "gpu/vertex.h"
 #include "android/vertex_hlsl.h"
+#include "fixed_two_sided.h"
 #include <map>
 #include <thread>
 namespace hulkpocket::vkexp {
@@ -45,8 +46,12 @@ public:
             }
             return Get(EShLangVertex,gpu::VulkanVertexHlsl(gpu::VertexProgramHlsl(prog,a.regs,a.decode),true,false,false));
         }
+        const auto key=gpu::MakeFixedKey(s);
+        if(hulkpocket::vkexp::TwoSidedLit(s))
+            return Get(EShLangVertex,gpu::VulkanVertexHlsl(
+                hulkpocket::vkexp::TwoSidedFixedVertexHlsl(a.regs,a.pretransformed,a.decode,key),false,false,false));
         return Get(EShLangVertex,gpu::VulkanVertexHlsl(
-            gpu::FixedVertexHlsl(a.regs,a.pretransformed,a.decode,gpu::MakeFixedKey(s)),false,false,false));
+            gpu::FixedVertexHlsl(a.regs,a.pretransformed,a.decode,key),false,false,false));
     }
     std::vector<uint32_t> Pixel(const gpu::State& s,const gpu::TexInfo (&tex)[4]){
         for(unsigned i=0;i<4;++i)

@@ -103,7 +103,7 @@ def main():
                          "crt_sin", "crt_cos", "crt_tan", "crt_asin", "crt_acos",
                          "crt_atan", "crt_sqrt", "crt_log", "crt_log10", "crt_pow",
                          "_CIacos", "_CIasin",
-                         "D3DDevice_SetMaterial", "D3DDevice_SetLight", "D3DDevice_LightEnable",
+                         "D3DDevice_SetMaterial", "D3DDevice_SetBackMaterial", "D3DDevice_SetLight", "D3DDevice_LightEnable",
                          "D3DDevice_SetRenderState_Simple",
                          "D3DDevice_SetRenderStateNotInline",
                          "D3DDevice_SetTextureStageStateNotInline",

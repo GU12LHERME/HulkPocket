@@ -909,6 +909,7 @@ struct VulkanCore{
                 hulkpocket::vkexp::FixedLighting(*state,dc);
             }
             hulkpocket::vkexp::CombinerConstants(*state,dc);
+            if(!program)hulkpocket::vkexp::BackMaterialConstants(*state,dc);
             if(state->simple[gpu::kMAlphaTestEnable/4]){
                 auto fn=state->simple[gpu::kMAlphaFunc/4];
                 if(fn<0x200||fn>0x207)throw std::invalid_argument("Invalid Xbox alpha function");

@@ -5,6 +5,7 @@
 #include "gpu/backend.h"
 #include "xbe_nv2a_push.h"
 #include "xbe_nv2a_texture.h"
+#include "hulk_state_ext.h"
 #include "gpu/guest_memory.h"
 #include "gpu/texture.h"
 #include "gpu/vertex.h"
@@ -324,6 +325,15 @@ public:
         std::memcpy(value.data(),gpu::CheckedGuestRange(p,68),68);
         if(!std::all_of(value.begin(),value.end(),[](float f){return std::isfinite(f);})||value[16]<0)return false;
         state_.material=value;material_captured_=true;return true;
+    }
+    // D3DDevice_SetBackMaterial: same D3DMATERIAL8 record, used for back
+    // faces when two-sided lighting is enabled.
+    bool ObserveBackMaterial(uint32_t p){
+        std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
+        if(!p||!mem_.IsCommitted(p,68))return false;
+        std::array<float,17> value{};
+        std::memcpy(value.data(),gpu::CheckedGuestRange(p,68),68);
+        return StoreBackMaterial(state_,value);
     }
     bool ObserveLight(uint32_t index,uint32_t p){
         std::lock_guard guard(lock_);gpu::ScopedGuestMemory scope(mem_);
@@ -914,16 +924,32 @@ public:
         const bool general_fvf=allow_fixed&&!state_.vs&&SupportedVulkanFixedFvf(fvf);
         const bool normal=packed?state_.vs->inputs[2].stream>=0:general_fvf&&(fvf&0x10);
         const bool lighting=state_.rs[gpu::kRsLighting]!=0;
-        if(!initialized_||(!state_.ps&&!program&&!fixed)||
-           (!program&&!packed&&!general_fvf&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw&&!multi_uv)))||
-           count>262144||!CapturedPrimitive(prim,count)||
-           state_.scissor_count>1||(!program&&(state_.ss_offset_x||state_.ss_offset_y))||
-           (lighting&&(!fixed||!normal||!material_captured_||!light_enable_seen_||(state_.light_enable&~light_defined_)))||
-           state_.rs[gpu::kRsFogEnable]>1||(fixed&&state_.rs[gpu::kRsRangeFogEnable])||
-           // Lit fixed draws may use table fog (RP6 first-phase draw, mode 3);
-           // range fog stays unsupported via the clause above.
-           state_.rs[gpu::kRsVertexBlend]||state_.rs[gpu::kRsTwoSidedLighting])
-            throw std::logic_error("Unsupported captured shader replay profile");
+        const auto two_sided=state_.rs[gpu::kRsTwoSidedLighting];
+        // Ordered checks; the failing clause is named in the report so a
+        // device run identifies the exact missing feature.
+        const char* reason=nullptr;
+        if(!initialized_)reason="device not initialized";
+        else if(!state_.ps&&!program&&!fixed)reason="no pixel shader and fixed path not selected";
+        else if(!program&&!packed&&!general_fvf&&(state_.vs||(state_.vs_handle!=0x142&&state_.vs_handle!=0x42&&!rhw&&!multi_uv)))
+            reason="vertex declaration/FVF outside supported fixed set";
+        else if(count>262144)reason="vertex count exceeds bound";
+        else if(!CapturedPrimitive(prim,count))reason="primitive type/count unsupported";
+        else if(state_.scissor_count>1)reason="multiple scissor rectangles";
+        else if(!program&&(state_.ss_offset_x||state_.ss_offset_y))reason="fixed path with supersample offset";
+        else if(lighting&&!fixed)reason="lighting without fixed pixel path";
+        else if(lighting&&!normal)reason="lighting without vertex normal";
+        else if(lighting&&!material_captured_)reason="lighting without observed material";
+        else if(lighting&&(!light_enable_seen_||(state_.light_enable&~light_defined_)))reason="enabled light not observed";
+        else if(state_.rs[gpu::kRsFogEnable]>1)reason="invalid fog enable";
+        else if(fixed&&state_.rs[gpu::kRsRangeFogEnable])reason="range fog";
+        else if(state_.rs[gpu::kRsVertexBlend])reason="fixed-function vertex blending";
+        else if(two_sided>1)reason="invalid two-sided lighting value";
+        else if(two_sided&&program)reason="two-sided lighting with vertex program";
+        // Lit fixed two-sided draws light back faces with the back material
+        // (vkexp::TwoSidedFixedVertexHlsl); unlit draws keep front=back.
+        else if(two_sided&&lighting&&!HasBackMaterial(state_))reason="two-sided lighting without observed back material";
+        // Lit fixed draws may use table fog (RP6 first-phase draw, mode 3).
+        if(reason)throw std::logic_error(std::string("Unsupported captured shader replay profile: ")+reason);
         gpu::TextureDesc desc{};
         if(!gpu::DescribeSurface(state_.rt,desc)||!state_.viewport.w||!state_.viewport.h||
            uint64_t(state_.viewport.x)+state_.viewport.w>desc.width||uint64_t(state_.viewport.y)+state_.viewport.h>desc.height)
@@ -998,9 +1024,13 @@ public:
             constexpr uint32_t swap[]={0,4,2,6,1,5,3,7};
             replay.rs[gpu::kRsShadowFunc]=0x200+swap[push_constants_.shadow_compare];
         }
+        // Front-face winding drives gl_FrontFacing (two-sided colour choice)
+        // and the cull mapping; it never changes which winding is culled.
+        replay.rs[gpu::kRsFrontFace]=state_.rs[gpu::kRsFrontFace];
         if(fixed&&lighting)for(auto r:{gpu::kRsLighting,gpu::kRsLocalViewer,gpu::kRsColorVertex,
             gpu::kRsNormalizeNormals,gpu::kRsDiffuseMaterialSource,gpu::kRsSpecularMaterialSource,
-            gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient})
+            gpu::kRsAmbientMaterialSource,gpu::kRsEmissiveMaterialSource,gpu::kRsAmbient,
+            gpu::kRsTwoSidedLighting})
             replay.rs[r]=state_.rs[r];
         for(auto m:{gpu::kMAlphaTestEnable,gpu::kMAlphaFunc,gpu::kMAlphaRef,gpu::kMBlendEnable,gpu::kMSrcBlend,
                     gpu::kMDestBlend,gpu::kMBlendOp,gpu::kMBlendColor,gpu::kMZFunc,gpu::kMZWriteEnable,gpu::kMColorWriteEnable,

@@ -64,9 +64,18 @@ inline VkPipelineRasterizationStateCreateInfo TranslateWinding(const gpu::State&
         throw std::invalid_argument("Unsupported non-solid Xbox polygon mode");
     if(cull!=0&&cull!=0x900&&cull!=0x901)
         throw std::invalid_argument("Unknown Xbox culling mode");
+    // Guest winding maps to the same Vulkan winding (established by the
+    // device-validated cull mapping: D3DCULL_CW discards Vulkan CW). Set
+    // frontFace from D3DRS_FRONTFACE (default CW) so gl_FrontFacing matches
+    // D3D front faces for two-sided lighting, and pick FRONT/BACK culling so
+    // the discarded winding is unchanged.
+    const auto front=s.rs[gpu::kRsFrontFace];
+    if(front!=0&&front!=0x900&&front!=0x901)
+        throw std::invalid_argument("Unknown Xbox front face");
+    r.frontFace=front==0x901?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
     if(triangles&&cull){
-        r.cullMode=VK_CULL_MODE_BACK_BIT;
-        r.frontFace=cull==0x900?VK_FRONT_FACE_COUNTER_CLOCKWISE:VK_FRONT_FACE_CLOCKWISE;
+        const auto culled=cull==0x900?VK_FRONT_FACE_CLOCKWISE:VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        r.cullMode=culled==r.frontFace?VK_CULL_MODE_FRONT_BIT:VK_CULL_MODE_BACK_BIT;
     }
     auto offset=s.simple[gpu::kMSolidOffsetEnable/4];
     if(offset>1)throw std::invalid_argument("Invalid Xbox polygon offset enable");
