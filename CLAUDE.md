@@ -51,6 +51,7 @@ Gradle on Windows can fail with `Unable to establish loopback connection` (JDK A
 
 ## Script portability
 
+- **Do not edit `tools/build_xbe_android.py` casually**: its exact bytes are part of the private object-cache key (`tools/link_hulk_cached.py`). Any byte change forces the user to recompile the whole game on the RP6. Change it only when the compile recipe really changes, and say so.
 - NDK tool lookups go through `tools/ndk_tools.py` (`tool()` adds `.exe`/`.cmd` on Windows; `NDK_HOSTS` includes `windows-x86_64`). Use it for any new NDK/LLVM invocation.
 - POSIX/Termux-only by design: `tools/install_hulk_diagnostic.py` (`O_NOFOLLOW`/`dir_fd` hardening), `tools/run_hulk_next.sh`, `tools/run_hulk_diagnostic.sh`, `native/vulkan_experiment/run_android_probe.sh` (run on the RP6 in Termux). Test them in WSL, not Windows.
 - New tool scripts should provide `--self-test` and/or a `test_*.py`, and be wired into the relevant workflow.
