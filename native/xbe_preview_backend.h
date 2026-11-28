@@ -45,8 +45,14 @@ public:
     void ReadbackColor(const gpu::Surface& s){if(vk_)vk_->ReadbackColor(s);else gl_->ReadbackColor(s);}
     void BeginRotatedFrame(const gpu::Surface& s){if(vk_)vk_->BeginRotatedFrame(s);else gl_->BeginRotatedFrame(s);}
     void RestoreRotatedColor(const gpu::Surface& s){if(vk_)vk_->RestoreRotatedColor(s);else gl_->RestoreRotatedColor(s);}
+    std::string PerfCounters()const{return vk_?vk_->PerfCounters():std::string();}
 };
+inline std::string PreviewPerfCounters(const XbePreviewBackend& b){return b.PerfCounters();}
 }
 #else
-namespace hulkpocket {using XbePreviewBackend=XbeGlesBackend;}
+#include <string>
+namespace hulkpocket {
+using XbePreviewBackend=XbeGlesBackend;
+inline std::string PreviewPerfCounters(const XbeGlesBackend&){return {};}
+}
 #endif

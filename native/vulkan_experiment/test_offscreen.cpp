@@ -355,6 +355,31 @@ int main(int argc,char** argv){
         f.UploadGuestTexture(tex);
         f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
         Expect("lower mip mutation invalidates raw cache",f.Pixel(32,32),{0,0,255,255});
+        {
+            // Content texture cache: alternating guest contents A/B/A decode
+            // A once, rebind B and A without decode, upload or GPU submit, and
+            // still sample the exact content.
+            const auto mips_b=mips;auto mips_a=mips;std::fill(mips_a.begin(),mips_a.end(),0xff00ff00u);
+            auto bind=[&](const decltype(mips)& m){memory.Write(0x80200000,m.data(),m.size()*4);f.UploadGuestTexture(tex);};
+            const auto decodes=f.texture_decodes,uploads=f.texture_uploads,hits=f.texture_cache_hits;
+            bind(mips_a);f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+            Expect("texture cache miss decodes new content",f.Pixel(32,32),{0,255,0,255});
+            const auto submits=f.queue_submissions;
+            bind(mips_b);
+            if(f.queue_submissions!=submits)throw std::runtime_error("Texture cache hit submitted GPU work");
+            f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+            Expect("texture cache hit restores earlier content",f.Pixel(32,32),{0,0,255,255});
+            bind(mips_a);f.Draw(argv[1],false,false,false,false,&guest_state,false,&assembled,true);
+            Expect("texture cache hit alternates content",f.Pixel(32,32),{0,255,0,255});
+            if(f.texture_decodes-decodes!=1||f.texture_uploads-uploads!=1||f.texture_cache_hits-hits!=2)
+                throw std::runtime_error("Texture cache counts");
+            bind(mips_b); // leave the stage as the following tests expect
+            // Sampler cache: returning to a known key reuses the sampler.
+            const auto creates=f.sampler_creates;
+            stage[kTssMinFilter]=1;f.SetSampler(0,guest_state);
+            stage[kTssMinFilter]=2;f.SetSampler(0,guest_state);
+            if(f.sampler_creates-creates>1||!f.sampler_cache_hits)throw std::runtime_error("Sampler cache reuse");
+        }
         // Fixed-function packed Xbox normal declaration, actual guest material and light.
         guest_state.textures[0]=0;stage[kTssColorOp]=stage[kTssAlphaOp]=1;
         guest_state.vs_handle=1;guest_state.vs=std::make_shared<gpu::VertexShader>();
@@ -527,8 +552,12 @@ int main(int argc,char** argv){
         cache_state.rs[kRsStencilEnable]=1;cache_state.rs[kRsStencilFail]=0x1e00;
         cache_state.simple[kMStencilFunc/4]=0x207;cache_state.simple[kMStencilPass/4]=0x1e00;
         cache_state.simple[kMStencilZFail/4]=0x1e00;
+        // Reference and compare mask are 8-bit each; combine them so the loop
+        // yields PipelineLimit+2 distinct pipelines for any limit <= 65534.
+        static_assert(VulkanCore::PipelineLimit+2<=65536);
         for(unsigned i=0;i<VulkanCore::PipelineLimit+2;++i){
-            cache_state.simple[kMStencilRef/4]=i;
+            cache_state.simple[kMStencilRef/4]=i&255;
+            cache_state.simple[kMStencilMask/4]=255-(i>>8);
             f.Draw(argv[1],false,false,false,false,&cache_state);
         }
         if(f.pipelines.size()!=VulkanCore::PipelineLimit)throw std::runtime_error("Vulkan pipeline cache not bounded");

@@ -167,11 +167,11 @@ private:
                 const double n=perf_frames;
                 const auto hooks=perf_readback_us+perf_window_us+perf_diag_us+perf_draw_us+perf_wait_us+perf_vblank_us;
                 std::fprintf(stderr,"D3D PERF frames=%u elapsed_ms=%.3f fps=%.2f frame_ms=%.3f readback_ms=%.3f window_ms=%.3f post_ms=%.3f"
-                    " draw_ms=%.3f draws=%.1f gpu_wait_ms=%.3f vblank_sleep_ms=%.3f guest_ms=%.3f\n",
+                    " draw_ms=%.3f draws=%.1f gpu_wait_ms=%.3f vblank_sleep_ms=%.3f guest_ms=%.3f%s\n",
                     perf_frames,elapsed/1000.0,elapsed?n*1000000.0/elapsed:0.0,elapsed/1000.0/n,
                     perf_readback_us/1000.0/n,perf_window_us/1000.0/n,perf_diag_us/1000.0/n,
                     perf_draw_us/1000.0/n,perf_draws/n,perf_wait_us/1000.0/n,perf_vblank_us/1000.0/n,
-                    elapsed>hooks?(elapsed-hooks)/1000.0/n:0.0);
+                    elapsed>hooks?(elapsed-hooks)/1000.0/n:0.0,PreviewPerfCounters(backend).c_str());
                 perf_start=end;perf_frames=0;perf_readback_us=perf_window_us=perf_diag_us=0;
                 perf_draw_us=perf_wait_us=perf_vblank_us=0;perf_draws=0;
             }

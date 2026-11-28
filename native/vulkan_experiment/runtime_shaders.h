@@ -4,6 +4,7 @@
 #include "gpu/vertex.h"
 #include "android/vertex_hlsl.h"
 #include "fixed_two_sided.h"
+#include <algorithm>
 #include <map>
 #include <thread>
 namespace hulkpocket::vkexp {
@@ -11,19 +12,28 @@ namespace hulkpocket::vkexp {
 // cache. Failed compilation never inserts a fallback shader.
 class RuntimeShaders {
     std::thread::id owner_=std::this_thread::get_id();
-    std::map<std::pair<int,std::string>,std::vector<uint32_t>> cache_;
-    size_t compiled_=0,hits_=0;
+    // A glslang compile costs milliseconds on the RP6; a scene can use far
+    // more than a hundred variants. Keep a large cache with true LRU eviction
+    // (the previous erase(begin()) dropped the lexicographically smallest
+    // source and could recompile active shaders every frame).
+    static constexpr size_t CacheLimit=1024;
+    struct Entry {std::vector<uint32_t> code;uint64_t used=0;};
+    std::map<std::pair<int,std::string>,Entry> cache_;
+    size_t compiled_=0,hits_=0,evicted_=0;uint64_t tick_=0;
     std::vector<uint32_t> Get(EShLanguage stage,std::string source){
         if(owner_!=std::this_thread::get_id())throw std::logic_error("Shader compiler owner mismatch");
         if(source.empty()||source.size()>1024*1024)throw std::invalid_argument("Invalid generated shader source");
         auto key=std::make_pair(int(stage),std::move(source));
         auto it=cache_.find(key);
-        if(it!=cache_.end()){++hits_;return it->second;}
+        if(it!=cache_.end()){++hits_;it->second.used=++tick_;return it->second.code;}
         auto code=Compile(key.second,stage);
         if(code.size()>262144)throw std::runtime_error("Generated shader exceeds size bound");
-        if(cache_.size()>=128)cache_.erase(cache_.begin());
+        if(cache_.size()>=CacheLimit){
+            cache_.erase(std::min_element(cache_.begin(),cache_.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;}));
+            ++evicted_;
+        }
         ++compiled_;
-        return cache_.emplace(std::move(key),std::move(code)).first->second;
+        return cache_.emplace(std::move(key),Entry{std::move(code),++tick_}).first->second.code;
     }
 public:
     RuntimeShaders(){if(!glslang::InitializeProcess())throw std::runtime_error("glslang initialization failed");}
@@ -32,6 +42,7 @@ public:
     RuntimeShaders& operator=(const RuntimeShaders&)=delete;
     size_t Compiled()const{return compiled_;}
     size_t Hits()const{return hits_;}
+    size_t Evicted()const{return evicted_;}
     std::vector<uint32_t> Vertex(const gpu::State& s,const gpu::Assembled& a){
         if(!(a.regs&1))throw std::invalid_argument("Missing position register");
         if((s.vs_handle&1)&&!s.vs)throw std::invalid_argument("Missing vertex declaration");

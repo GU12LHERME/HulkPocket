@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <algorithm>
 #include <map>
 #include <stdexcept>
 #include <vector>
@@ -92,8 +93,32 @@ struct VulkanCore{
     };
     std::array<RawTexture,4> raw_textures{};
     uint64_t texture_decodes=0,raw_texture_hits=0,texture_uploads=0;
-    std::array<VkSampler,4> stage_samplers{};
+    std::array<VkSampler,4> stage_samplers{};   // non-owning; owned by sampler_cache
     std::array<std::array<uint32_t,14>,4> stage_sampler_keys{};
+    // Exact-key sampler cache: switching between known samplers needs only a
+    // descriptor write (per-slot descriptor sets keep pending draws intact).
+    std::map<std::array<uint32_t,14>,VkSampler> sampler_cache;
+    static constexpr size_t SamplerCacheLimit=512;
+    uint64_t sampler_creates=0,sampler_cache_hits=0;
+    // Content-exact texture cache: key plus a full copy of the guest bytes
+    // (and palette) compared on every lookup, so a hit is byte-identical to a
+    // fresh decode. Images stay alive while bound or referenced by pending
+    // draws; eviction flushes first.
+    struct CachedTexture {
+        std::array<uint32_t,10> key{};
+        std::vector<uint8_t> bytes;
+        std::array<uint8_t,1024> palette{};bool has_palette=false;
+        Image image;uint32_t width=0,height=0,levels=1,depth=1;bool cube=false,rect=false;
+        size_t gpu_bytes=0;uint64_t used=0;
+    };
+    std::vector<std::unique_ptr<CachedTexture>> texture_cache;
+    std::array<CachedTexture*,4> stage_cached{};
+    static constexpr size_t TextureCacheLimit=384;
+    static constexpr size_t TextureCacheBytes=192ull*1024*1024;
+    size_t texture_cache_bytes=0;uint64_t texture_cache_tick=0,texture_cache_hits=0,texture_cache_evictions=0;
+    // One descriptor set per batch slot; `set` holds the current bindings and
+    // is copied into the slot's set when a draw is recorded.
+    std::array<VkDescriptorSet,BatchLimit> slot_sets{};
     bool sampler_anisotropy=false;
     VkQueryPool visibility_query{};
     uint32_t visible_pixels=0;
@@ -111,7 +136,8 @@ struct VulkanCore{
     struct CachedPipeline {VkPipeline handle{};uint64_t used=0;};
     std::map<std::vector<uint32_t>,CachedPipeline> pipelines;
     uint64_t pipeline_tick=0,pipeline_creates=0,pipeline_hits=0;
-    static constexpr size_t PipelineLimit=64;
+    // Pipeline creation is expensive on Adreno; 64 churned in the CI scene alone.
+    static constexpr size_t PipelineLimit=512;
     hulkpocket::vkexp::RuntimeShaders shaders;
     ~VulkanCore(){
         if(dev){
@@ -121,8 +147,9 @@ struct VulkanCore{
             if(descriptors)vkDestroyDescriptorPool(dev,descriptors,nullptr);
             if(pipeline_layout)vkDestroyPipelineLayout(dev,pipeline_layout,nullptr);
             if(set_layout)vkDestroyDescriptorSetLayout(dev,set_layout,nullptr);
-            for(auto s:stage_samplers)if(s)vkDestroySampler(dev,s,nullptr);
+            for(const auto& entry:sampler_cache)vkDestroySampler(dev,entry.second,nullptr);
             if(sampler)vkDestroySampler(dev,sampler,nullptr);
+            for(auto& entry:texture_cache)Destroy(entry->image);
             if(pipeline_cache)vkDestroyPipelineCache(dev,pipeline_cache,nullptr);
             if(fb)vkDestroyFramebuffer(dev,fb,nullptr);
             if(load_pass)vkDestroyRenderPass(dev,load_pass,nullptr);
@@ -329,11 +356,16 @@ struct VulkanCore{
         Check(vkCreateDescriptorSetLayout(dev,&dl,nullptr,&set_layout),"descriptor layout");
         VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&set_layout;
         Check(vkCreatePipelineLayout(dev,&pl,nullptr,&pipeline_layout),"pipeline layout");
-        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,2},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,4},{VK_DESCRIPTOR_TYPE_SAMPLER,4}};
-        VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dp.maxSets=1;dp.poolSizeCount=3;dp.pPoolSizes=sizes;
+        constexpr uint32_t set_count=1+BatchLimit;
+        VkDescriptorPoolSize sizes[]={{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,2*set_count},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,4*set_count},{VK_DESCRIPTOR_TYPE_SAMPLER,4*set_count}};
+        VkDescriptorPoolCreateInfo dp{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};dp.maxSets=set_count;dp.poolSizeCount=3;dp.pPoolSizes=sizes;
         Check(vkCreateDescriptorPool(dev,&dp,nullptr,&descriptors),"descriptor pool");
-        VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptors;da.descriptorSetCount=1;da.pSetLayouts=&set_layout;
-        Check(vkAllocateDescriptorSets(dev,&da,&set),"descriptor set");
+        std::array<VkDescriptorSetLayout,set_count> layouts;layouts.fill(set_layout);
+        std::array<VkDescriptorSet,set_count> allocated{};
+        VkDescriptorSetAllocateInfo da{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};da.descriptorPool=descriptors;da.descriptorSetCount=set_count;da.pSetLayouts=layouts.data();
+        Check(vkAllocateDescriptorSets(dev,&da,allocated.data()),"descriptor sets");
+        set=allocated[0];
+        for(unsigned i=0;i<BatchLimit;++i)slot_sets[i]=allocated[1+i];
         VkDescriptorBufferInfo ub[2]={{vertex_constants.b,0,192*16},{uniform.b,0,4096}};
         std::array<VkDescriptorImageInfo,4> im{};
         for(unsigned i=0;i<4;++i)im[i]={VK_NULL_HANDLE,textures[i].view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -441,13 +473,24 @@ struct VulkanCore{
                 default:throw std::invalid_argument("Xbox custom border color requires extension support");
             }
         }
-        FlushBatch();
-        VkSampler next{};Check(vkCreateSampler(dev,&ci,nullptr,&next),"guest sampler");
+        VkSampler next{};
+        if(auto found=sampler_cache.find(key);found!=sampler_cache.end()){next=found->second;++sampler_cache_hits;}
+        else{
+            if(sampler_cache.size()>=SamplerCacheLimit){
+                // Drop unbound samplers only after pending draws completed.
+                FlushBatch();
+                for(auto it=sampler_cache.begin();it!=sampler_cache.end();){
+                    if(std::find(stage_samplers.begin(),stage_samplers.end(),it->second)!=stage_samplers.end()){++it;continue;}
+                    vkDestroySampler(dev,it->second,nullptr);it=sampler_cache.erase(it);
+                }
+            }
+            Check(vkCreateSampler(dev,&ci,nullptr,&next),"guest sampler");
+            sampler_cache.emplace(key,next);++sampler_creates;
+        }
         VkDescriptorImageInfo im{next,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=6+stage;
         wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER;wr.pImageInfo=&im;
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
-        if(stage_samplers[stage])vkDestroySampler(dev,stage_samplers[stage],nullptr);
         stage_samplers[stage]=next;stage_sampler_keys[stage]=key;
     }
     // Snapshot the finished color image into a separate sampled image.
@@ -455,7 +498,7 @@ struct VulkanCore{
     void SnapshotColorTexture(unsigned stage){
         if(stage>=textures.size()||!frame_valid)throw std::invalid_argument("Invalid framebuffer texture snapshot");
         FlushBatch();
-        bool resize=tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1||tex_cube[stage]||tex_depth[stage]!=1||tex_shadow[stage];
+        bool resize=stage_cached[stage]||tex_width[stage]!=W||tex_height[stage]!=H||tex_levels[stage]!=1||tex_cube[stage]||tex_depth[stage]!=1||tex_shadow[stage];
         auto& texture=textures[stage];
         if(resize){
             Destroy(texture);
@@ -464,7 +507,7 @@ struct VulkanCore{
         }
         tex_rect[stage]=true;tex_cube[stage]=false;tex_shadow[stage]=0;tex_depth_snapshot[stage]=false;
         // GPU copies are not represented by the CPU decoded-pixel cache.
-        last_pixels[stage].clear();raw_textures[stage]={};
+        last_pixels[stage].clear();raw_textures[stage]={};stage_cached[stage]=nullptr;
         Begin();
         Transition(texture.image,resize?VK_IMAGE_LAYOUT_UNDEFINED:VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                    resize?0:VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,
@@ -498,7 +541,7 @@ struct VulkanCore{
         }
         tex_width[stage]=W;tex_height[stage]=H;tex_levels[stage]=tex_depth[stage]=1;
         tex_rect[stage]=true;tex_cube[stage]=false;tex_shadow[stage]=1;tex_depth_snapshot[stage]=true;
-        raw_textures[stage]={};last_pixels[stage].clear();
+        raw_textures[stage]={};last_pixels[stage].clear();stage_cached[stage]=nullptr;
         constexpr VkImageAspectFlags aspects=VK_IMAGE_ASPECT_DEPTH_BIT|VK_IMAGE_ASPECT_STENCIL_BIT;
         constexpr VkPipelineStageFlags tests=VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         constexpr VkAccessFlags attachment_access=VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT|VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -569,6 +612,33 @@ struct VulkanCore{
         }
         return packed;
     }
+    void BindCachedTexture(unsigned stage,CachedTexture& e){
+        VkDescriptorImageInfo im{VK_NULL_HANDLE,e.image.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
+        wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
+        vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+        tex_width[stage]=e.width;tex_height[stage]=e.height;tex_levels[stage]=e.levels;tex_cube[stage]=e.cube;
+        tex_depth[stage]=e.depth;tex_rect[stage]=e.rect;tex_shadow[stage]=0;tex_depth_snapshot[stage]=false;
+        // The owned per-stage image is no longer bound; never short-circuit a
+        // later non-cached upload against its stale pixels.
+        last_pixels[stage].clear();
+        stage_cached[stage]=&e;e.used=++texture_cache_tick;
+    }
+    void EvictTexturesFor(size_t incoming){
+        auto over=[&]{return texture_cache.size()>=TextureCacheLimit||texture_cache_bytes+incoming>TextureCacheBytes;};
+        if(!over())return;
+        FlushBatch(); // pending draws may still sample unbound cached images
+        while(over()){
+            auto victim=texture_cache.end();
+            for(auto it=texture_cache.begin();it!=texture_cache.end();++it){
+                if(std::find(stage_cached.begin(),stage_cached.end(),it->get())!=stage_cached.end())continue;
+                if(victim==texture_cache.end()||(*it)->used<(*victim)->used)victim=it;
+            }
+            if(victim==texture_cache.end())break; // everything left is bound
+            texture_cache_bytes-=(*victim)->gpu_bytes;Destroy((*victim)->image);
+            texture_cache.erase(victim);++texture_cache_evictions;
+        }
+    }
     void UploadGuestTexture(uint32_t header,unsigned stage=0,uint32_t palette=0){
         if(stage>=textures.size())throw std::invalid_argument("Invalid Xbox texture stage");
         gpu::TextureDesc desc{};if(!gpu::Describe(header,desc))throw std::invalid_argument("Invalid Xbox texture header");
@@ -627,6 +697,15 @@ struct VulkanCore{
             raw.key=raw_key;raw.bytes.assign(source,source+source_bytes);
             if(colors)std::memcpy(raw.palette.data(),colors,1024);
         };
+        const bool cacheable=source&&!shadow;
+        if(cacheable){
+            for(auto& e:texture_cache){
+                if(e->key==raw_key&&e->bytes.size()==source_bytes&&e->has_palette==bool(colors)&&
+                   !std::memcmp(e->bytes.data(),source,source_bytes)&&(!colors||!std::memcmp(e->palette.data(),colors,1024))){
+                    BindCachedTexture(stage,*e);++texture_cache_hits;remember();return;
+                }
+            }
+        }
         ++texture_decodes;
         std::vector<uint8_t> pixels;std::vector<VkBufferImageCopy> copies;
         for(unsigned face=0;face<faces;++face)for(unsigned level=0;level<desc.levels;++level){
@@ -636,8 +715,34 @@ struct VulkanCore{
             VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={aspect,level,face,1};copy.imageExtent={p.width,p.height,p.depth};
             copies.push_back(copy);pixels.insert(pixels.end(),p.rgba.begin(),p.rgba.end());
         }
+        if(cacheable){
+            EvictTexturesFor(pixels.size());
+            FlushBatch();
+            EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+            std::memcpy(staging.data,pixels.data(),pixels.size());
+            auto entry=std::make_unique<CachedTexture>();
+            entry->key=raw_key;entry->bytes.assign(source,source+source_bytes);
+            if(colors){std::memcpy(entry->palette.data(),colors,1024);entry->has_palette=true;}
+            entry->width=desc.width;entry->height=desc.height;entry->levels=desc.levels;entry->depth=desc.depth;
+            entry->cube=desc.cube;entry->rect=desc.linear;entry->gpu_bytes=pixels.size();
+            CreateImage(entry->image,desc.width,desc.height,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,Format,aspect,desc.levels,desc.cube,desc.depth);
+            try{
+                Begin();
+                Transition(entry->image.image,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,desc.levels,faces,aspect);
+                vkCmdCopyBufferToImage(cmd,staging.b,entry->image.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,uint32_t(copies.size()),copies.data());
+                Transition(entry->image.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,desc.levels,faces,aspect);
+                Submit();
+            }catch(...){Destroy(entry->image);throw;}
+            texture_cache_bytes+=entry->gpu_bytes;
+            texture_cache.push_back(std::move(entry));
+            BindCachedTexture(stage,*texture_cache.back());
+            ++texture_uploads;remember();return;
+        }
         tex_rect[stage]=desc.linear;
-        bool resize=tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube||tex_depth[stage]!=desc.depth||tex_shadow[stage]!=shadow||tex_depth_snapshot[stage];
+        // A stage previously bound to a cache entry must rebind (and size) its
+        // own image even if tex_* happen to match the cached texture.
+        bool resize=stage_cached[stage]||tex_width[stage]!=desc.width||tex_height[stage]!=desc.height||tex_levels[stage]!=desc.levels||tex_cube[stage]!=desc.cube||tex_depth[stage]!=desc.depth||tex_shadow[stage]!=shadow||tex_depth_snapshot[stage];
         if(!resize&&last_pixels[stage]==pixels){remember();return;}
         FlushBatch();
         EnsureBuffer(staging,pixels.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
@@ -659,6 +764,7 @@ struct VulkanCore{
         VkWriteDescriptorSet wr{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};wr.dstSet=set;wr.dstBinding=2+stage;
         wr.descriptorCount=1;wr.descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;wr.pImageInfo=&im;
         vkUpdateDescriptorSets(dev,1,&wr,0,nullptr);
+        stage_cached[stage]=nullptr;
         last_pixels[stage]=std::move(pixels);remember();++texture_uploads;
     }
     std::vector<uint32_t> ShaderWords(const std::filesystem::path& path){
@@ -940,7 +1046,18 @@ struct VulkanCore{
         const float blend_constants[]={float((argb>>16)&255)/255.f,float((argb>>8)&255)/255.f,
                                        float(argb&255)/255.f,float(argb>>24)/255.f};
         vkCmdSetBlendConstants(cmd,blend_constants);
-        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&set,2,offsets);
+        // Snapshot the current bindings into this slot's set. A slot is reused
+        // only after FlushBatch's synchronous submit, so its set is idle here,
+        // and later rebinds of `set` never alter draws already recorded.
+        {
+            std::array<VkCopyDescriptorSet,10> copies{};
+            for(uint32_t i=0;i<10;++i){
+                auto& c=copies[i];c.sType=VK_STRUCTURE_TYPE_COPY_DESCRIPTOR_SET;
+                c.srcSet=set;c.srcBinding=i;c.dstSet=slot_sets[slot];c.dstBinding=i;c.descriptorCount=1;
+            }
+            vkUpdateDescriptorSets(dev,0,nullptr,uint32_t(copies.size()),copies.data());
+        }
+        vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline_layout,0,1,&slot_sets[slot],2,offsets);
         VkDeviceSize offset=0;vkCmdBindVertexBuffers(cmd,0,1,&draw_verts.b,&offset);
         if(guest){
             std::array<VkBuffer,16> buffers{};buffers.fill(draw_verts.b);
