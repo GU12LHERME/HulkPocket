@@ -286,15 +286,17 @@ public:
     }
     // Cumulative cache and submission counters for the compact PERF report.
     std::string PerfCounters()const{
-        char line[320];
+        char line[448];
         std::snprintf(line,sizeof(line),
-            " vk_submits=%llu batches=%llu shaders=%zu/%zu/%zu pipelines=%llu/%llu tex_decodes=%llu tex_cache=%llu/%llu raw_hits=%llu samplers=%llu/%llu",
+            " vk_submits=%llu batches=%llu shaders=%zu/%zu/%zu pipelines=%llu/%llu tex_decodes=%llu tex_cache=%llu/%llu raw_hits=%llu samplers=%llu/%llu"
+            " t_submit_ms=%.1f t_decode_ms=%.1f t_shader_ms=%.1f t_pipeline_ms=%.1f",
             (unsigned long long)core_.queue_submissions,(unsigned long long)core_.draw_batches,
             core_.shaders.Compiled(),core_.shaders.Hits(),core_.shaders.Evicted(),
             (unsigned long long)core_.pipeline_creates,(unsigned long long)core_.pipeline_hits,
             (unsigned long long)core_.texture_decodes,(unsigned long long)core_.texture_cache_hits,
             (unsigned long long)core_.texture_cache_evictions,(unsigned long long)core_.raw_texture_hits,
-            (unsigned long long)core_.sampler_creates,(unsigned long long)core_.sampler_cache_hits);
+            (unsigned long long)core_.sampler_creates,(unsigned long long)core_.sampler_cache_hits,
+            core_.us_submit/1000.0,core_.us_decode/1000.0,core_.us_shader/1000.0,core_.us_pipeline/1000.0);
         return line;
     }
     std::array<uint8_t,4> ReadPixel(uint32_t x,uint32_t y){if(!core_.frame_valid||x>=core_.W||y>=core_.H)throw std::out_of_range("Invalid Vulkan pixel read");return core_.Pixel(x,y);}

@@ -58,7 +58,7 @@ public:
                         if(line.starts_with("HULK INPUT ")){
                             input_events.push_back(line);if(input_events.size()>256)input_events.pop_front();
                         }
-                        if(line.starts_with("HULK RENDERER ")||line.starts_with("Guest stopped:")||
+                        if(line.starts_with("HULK RENDERER ")||line.starts_with("HULK OBSERVERS ")||line.starts_with("Guest stopped:")||
                            line.starts_with("D3D VULKAN DRAW FAILURE")||line.starts_with("D3D LIVE PUSH FAILURE")||
                            line.starts_with("D3D DECLARATION ")||
                            line.starts_with("HULK AAUDIO SUMMARY")||line.starts_with("HULK AUDIO SUMMARY")||

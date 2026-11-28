@@ -53,6 +53,12 @@ PortableXbeImage::KernelEntry PortableXbeImage::ResolveKernelEntry() const {
         throw std::runtime_error("ELF lacks kernel-enabled entry; relink cached module");
     return reinterpret_cast<KernelEntry>(symbol);
 }
+bool PortableXbeImage::HasExport(const char* name) const noexcept {
+    if (!handle_ || !name) return false;
+    dlerror();
+    void* symbol = dlsym(handle_, name);
+    return !dlerror() && symbol;
+}
 PortableXbeImage::~PortableXbeImage() {
     if (handle_) dlclose(handle_);
 }

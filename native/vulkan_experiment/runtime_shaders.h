@@ -5,35 +5,51 @@
 #include "android/vertex_hlsl.h"
 #include "fixed_two_sided.h"
 #include <algorithm>
+#include <cstring>
 #include <map>
+#include <memory>
 #include <thread>
+#include <type_traits>
 namespace hulkpocket::vkexp {
-// Single renderer thread owns glslang process lifetime and exact-source
-// cache. Failed compilation never inserts a fallback shader.
+// Compiled SPIR-V plus a run-unique id. Pipelines key on ids instead of
+// the full SPIR-V words; an evicted and recompiled shader gets a new id.
+struct RuntimeShader {
+    std::shared_ptr<const std::vector<uint32_t>> code;
+    uint64_t id=0;
+};
+// Single renderer thread owns glslang process lifetime. The cache is keyed by
+// the exact inputs the shared generators are pure functions of (fixed/pixel
+// keys without padding, program words, register masks), so a hit skips both
+// HLSL generation and compilation. Failed compilation never inserts a
+// fallback shader.
 class RuntimeShaders {
     std::thread::id owner_=std::this_thread::get_id();
-    // A glslang compile costs milliseconds on the RP6; a scene can use far
-    // more than a hundred variants. Keep a large cache with true LRU eviction
-    // (the previous erase(begin()) dropped the lexicographically smallest
-    // source and could recompile active shaders every frame).
+    // A glslang compile costs milliseconds on the RP6; keep a large cache
+    // with true LRU eviction.
     static constexpr size_t CacheLimit=1024;
-    struct Entry {std::vector<uint32_t> code;uint64_t used=0;};
-    std::map<std::pair<int,std::string>,Entry> cache_;
-    size_t compiled_=0,hits_=0,evicted_=0;uint64_t tick_=0;
-    std::vector<uint32_t> Get(EShLanguage stage,std::string source){
+    struct Entry {RuntimeShader shader;uint64_t used=0;};
+    std::map<std::string,Entry> cache_;
+    size_t compiled_=0,hits_=0,evicted_=0;uint64_t tick_=0,next_id_=0;
+    static_assert(std::has_unique_object_representations_v<gpu::FixedKey>,"FixedKey must have no padding to serve as a cache key");
+    static_assert(std::has_unique_object_representations_v<gpu::PixelKey>,"PixelKey must have no padding to serve as a cache key");
+    template<class T> static void Append(std::string& k,const T& v){k.append(reinterpret_cast<const char*>(&v),sizeof v);}
+    template<class Generate>
+    RuntimeShader Get(EShLanguage stage,std::string key,Generate&& generate){
         if(owner_!=std::this_thread::get_id())throw std::logic_error("Shader compiler owner mismatch");
-        if(source.empty()||source.size()>1024*1024)throw std::invalid_argument("Invalid generated shader source");
-        auto key=std::make_pair(int(stage),std::move(source));
+        key.insert(key.begin(),char(stage));
         auto it=cache_.find(key);
-        if(it!=cache_.end()){++hits_;it->second.used=++tick_;return it->second.code;}
-        auto code=Compile(key.second,stage);
+        if(it!=cache_.end()){++hits_;it->second.used=++tick_;return it->second.shader;}
+        const std::string source=generate();
+        if(source.empty()||source.size()>1024*1024)throw std::invalid_argument("Invalid generated shader source");
+        auto code=Compile(source,stage);
         if(code.size()>262144)throw std::runtime_error("Generated shader exceeds size bound");
         if(cache_.size()>=CacheLimit){
             cache_.erase(std::min_element(cache_.begin(),cache_.end(),[](const auto& a,const auto& b){return a.second.used<b.second.used;}));
             ++evicted_;
         }
         ++compiled_;
-        return cache_.emplace(std::move(key),Entry{std::move(code),++tick_}).first->second.code;
+        RuntimeShader shader{std::make_shared<const std::vector<uint32_t>>(std::move(code)),++next_id_};
+        return cache_.emplace(std::move(key),Entry{shader,++tick_}).first->second.shader;
     }
 public:
     RuntimeShaders(){if(!glslang::InitializeProcess())throw std::runtime_error("glslang initialization failed");}
@@ -43,7 +59,7 @@ public:
     size_t Compiled()const{return compiled_;}
     size_t Hits()const{return hits_;}
     size_t Evicted()const{return evicted_;}
-    std::vector<uint32_t> Vertex(const gpu::State& s,const gpu::Assembled& a){
+    RuntimeShader Vertex(const gpu::State& s,const gpu::Assembled& a){
         if(!(a.regs&1))throw std::invalid_argument("Missing position register");
         if((s.vs_handle&1)&&!s.vs)throw std::invalid_argument("Missing vertex declaration");
         if(s.vs&&!s.vs->program.empty()){
@@ -55,16 +71,19 @@ public:
                 if(mac>13||(n+4<prog.size()&&(out&1))||((out&0xf000)&&!(out&0x800)))
                     throw std::invalid_argument("Unsupported Xbox vertex opcode or constant write");
             }
-            return Get(EShLangVertex,gpu::VulkanVertexHlsl(gpu::VertexProgramHlsl(prog,a.regs,a.decode),true,false,false));
+            std::string k("P");Append(k,a.regs);Append(k,a.decode);
+            k.append(reinterpret_cast<const char*>(prog.data()),prog.size()*sizeof(prog[0]));
+            return Get(EShLangVertex,std::move(k),[&]{return gpu::VulkanVertexHlsl(gpu::VertexProgramHlsl(prog,a.regs,a.decode),true,false,false);});
         }
         const auto key=gpu::MakeFixedKey(s);
-        if(hulkpocket::vkexp::TwoSidedLit(s))
-            return Get(EShLangVertex,gpu::VulkanVertexHlsl(
-                hulkpocket::vkexp::TwoSidedFixedVertexHlsl(a.regs,a.pretransformed,a.decode,key),false,false,false));
-        return Get(EShLangVertex,gpu::VulkanVertexHlsl(
-            gpu::FixedVertexHlsl(a.regs,a.pretransformed,a.decode,key),false,false,false));
+        const bool two_sided=hulkpocket::vkexp::TwoSidedLit(s);
+        std::string k(two_sided?"T":"F");Append(k,a.regs);Append(k,a.decode);Append(k,uint8_t(a.pretransformed));Append(k,key);
+        return Get(EShLangVertex,std::move(k),[&]{
+            return gpu::VulkanVertexHlsl(two_sided?
+                hulkpocket::vkexp::TwoSidedFixedVertexHlsl(a.regs,a.pretransformed,a.decode,key):
+                gpu::FixedVertexHlsl(a.regs,a.pretransformed,a.decode,key),false,false,false);});
     }
-    std::vector<uint32_t> Pixel(const gpu::State& s,const gpu::TexInfo (&tex)[4]){
+    RuntimeShader Pixel(const gpu::State& s,const gpu::TexInfo (&tex)[4]){
         for(unsigned i=0;i<4;++i)
             if(bool(s.textures[i])!=bool(tex[i].kind)||(tex[i].kind!=gpu::kTexNone&&tex[i].kind!=gpu::kTex2D&&tex[i].kind!=gpu::kTex3D&&tex[i].kind!=gpu::kTexCube)||(tex[i].shadow&&(tex[i].shadow>2||tex[i].kind!=gpu::kTex2D))||tex[i].flags)
                 throw std::invalid_argument("Unsupported runtime texture binding");
@@ -95,7 +114,8 @@ public:
                 }
             }
         }
-        return Get(EShLangFragment,gpu::PixelHlsl(key));
+        std::string k("X");Append(k,key);
+        return Get(EShLangFragment,std::move(k),[&]{return gpu::PixelHlsl(key);});
     }
 };
 }

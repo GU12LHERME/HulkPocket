@@ -167,6 +167,11 @@ int main(int argc,char** argv) {
                     guest.Write32(slot,target);
                 }
                 auto entry=native.ResolveKernelEntry();
+                std::fprintf(stderr,"HULK OBSERVERS SetMaterial=%d SetBackMaterial=%d SetLight=%d LightEnable=%d\n",
+                    int(native.HasExport("hulk_observer_D3DDevice_SetMaterial")),
+                    int(native.HasExport("hulk_observer_D3DDevice_SetBackMaterial")),
+                    int(native.HasExport("hulk_observer_D3DDevice_SetLight")),
+                    int(native.HasExport("hulk_observer_D3DDevice_LightEnable")));
                 std::cout << "Starting isolated guest entry diagnostic" << std::endl;
                 std::cerr.flush();
 #ifdef HULK_ANDROID_PREVIEW

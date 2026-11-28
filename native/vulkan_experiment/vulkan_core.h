@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <optional>
+#include <chrono>
 #include <algorithm>
 #include <map>
 #include <stdexcept>
@@ -113,12 +115,20 @@ struct VulkanCore{
     };
     std::vector<std::unique_ptr<CachedTexture>> texture_cache;
     std::array<CachedTexture*,4> stage_cached{};
-    static constexpr size_t TextureCacheLimit=384;
-    static constexpr size_t TextureCacheBytes=192ull*1024*1024;
+    // RP6 run of dc41508 evicted 98 entries at 192 MB (decoded RGBA with mips);
+    // the device has 12-16 GB of shared memory.
+    static constexpr size_t TextureCacheLimit=1024;
+    static constexpr size_t TextureCacheBytes=512ull*1024*1024;
     size_t texture_cache_bytes=0;uint64_t texture_cache_tick=0,texture_cache_hits=0,texture_cache_evictions=0;
     // One descriptor set per batch slot; `set` holds the current bindings and
     // is copied into the slot's set when a draw is recorded.
     std::array<VkDescriptorSet,BatchLimit> slot_sets{};
+    // Cumulative host time per draw sub-phase (microseconds) for PERF lines.
+    uint64_t us_submit=0,us_decode=0,us_shader=0,us_pipeline=0;
+    struct ScopedUs {
+        uint64_t& sink;std::chrono::steady_clock::time_point begin=std::chrono::steady_clock::now();
+        ~ScopedUs(){sink+=uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-begin).count());}
+    };
     bool sampler_anisotropy=false;
     VkQueryPool visibility_query{};
     uint32_t visible_pixels=0;
@@ -227,6 +237,7 @@ struct VulkanCore{
         Check(vkBeginCommandBuffer(cmd,&bi),"begin commands");
     }
     void Submit(){
+        ScopedUs timing{us_submit};
         Check(vkEndCommandBuffer(cmd),"end commands");
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};si.commandBufferCount=1;si.pCommandBuffers=&cmd;
         if(!fence->Submit(queue,0,si)||!fence->Begin(0))throw std::runtime_error("Vulkan submit/wait failed");
@@ -708,6 +719,7 @@ struct VulkanCore{
         }
         ++texture_decodes;
         std::vector<uint8_t> pixels;std::vector<VkBufferImageCopy> copies;
+        std::optional<ScopedUs> decode_timing;decode_timing.emplace(us_decode);
         for(unsigned face=0;face<faces;++face)for(unsigned level=0;level<desc.levels;++level){
             auto p=hulkpocket::vkexp::GuestTexture(header,palette,level,face);
             if(p.rgba.size()!=size_t(p.width)*p.height*p.depth*4||p.rgba.size()>64ull*1024*1024-pixels.size())
@@ -715,6 +727,7 @@ struct VulkanCore{
             VkBufferImageCopy copy{};copy.bufferOffset=pixels.size();copy.imageSubresource={aspect,level,face,1};copy.imageExtent={p.width,p.height,p.depth};
             copies.push_back(copy);pixels.insert(pixels.end(),p.rgba.begin(),p.rgba.end());
         }
+        decode_timing.reset();
         if(cacheable){
             EvictTexturesFor(pixels.size());
             FlushBatch();
@@ -781,16 +794,19 @@ struct VulkanCore{
         VkShaderModule out{};Check(vkCreateShaderModule(dev,&ci,nullptr,&out),"shader module");return out;
     }
     void Pipeline(const std::filesystem::path& root,bool packed,bool textured,bool blend,bool multi,const gpu::State* override_state,const gpu::Assembled* guest,const hulkpocket::vkexp::VertexPlan* plan,bool dynamic,const ViewRegion* region=nullptr){
-        std::vector<uint32_t> vertex,fragment;
+        ScopedUs pipeline_timing{us_pipeline};
+        hulkpocket::vkexp::RuntimeShader vertex,fragment;
         if(dynamic){
+            ScopedUs shader_timing{us_shader};
             if(!override_state||!guest)throw std::invalid_argument("Missing dynamic draw state");
             gpu::TexInfo tex[4]{};
             for(unsigned i=0;i<4;++i)if(override_state->textures[i]){tex[i].kind=tex_cube[i]?gpu::kTexCube:tex_depth[i]>1?gpu::kTex3D:gpu::kTex2D;tex[i].rect=tex_rect[i];tex[i].shadow=tex_shadow[i];}
             vertex=shaders.Vertex(*override_state,*guest);
             fragment=shaders.Pixel(*override_state,tex);
         }else{
-            vertex=ShaderWords(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv"));
-            fragment=ShaderWords(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv"));
+            // Precompiled test shaders carry id 0 and are keyed by content.
+            vertex.code=std::make_shared<const std::vector<uint32_t>>(ShaderWords(root/(packed?"packed-directional.vert.spv":"diffuse-uv.vert.spv")));
+            fragment.code=std::make_shared<const std::vector<uint32_t>>(ShaderWords(root/(multi?"two-stage.frag.spv":textured?"modulate.frag.spv":"untextured.frag.spv")));
         }
         VkVertexInputBindingDescription bind{0,sizeof(Vertex),VK_VERTEX_INPUT_RATE_VERTEX};
         VkVertexInputAttributeDescription attrs[]={{0,0,VK_FORMAT_R32G32B32_SFLOAT,0},{packed?2u:3u,0,packed?VK_FORMAT_R32_UINT:VK_FORMAT_B8G8R8A8_UNORM,12},{9,0,VK_FORMAT_R32G32_SFLOAT,16}};
@@ -817,8 +833,12 @@ struct VulkanCore{
         VkPipelineColorBlendStateCreateInfo bs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};bs.attachmentCount=1;bs.pAttachments=&cb;
         std::vector<uint32_t> key;
         auto add=[&](uint32_t n){key.push_back(n);};
-        add(uint32_t(vertex.size()));key.insert(key.end(),vertex.begin(),vertex.end());
-        add(uint32_t(fragment.size()));key.insert(key.end(),fragment.begin(),fragment.end());
+        // Runtime shaders: unique ids (no SPIR-V copy per draw). Id 0 marks
+        // precompiled shaders, keyed by their words as before.
+        for(const auto* sh:{&vertex,&fragment}){
+            if(sh->id){add(0xffffffffu);add(uint32_t(sh->id));add(uint32_t(sh->id>>32));}
+            else{add(uint32_t(sh->code->size()));key.insert(key.end(),sh->code->begin(),sh->code->end());}
+        }
         add(vi.vertexBindingDescriptionCount);
         for(unsigned i=0;i<vi.vertexBindingDescriptionCount;++i){auto b=vi.pVertexBindingDescriptions[i];add(b.binding);add(b.stride);add(b.inputRate);}
         add(vi.vertexAttributeDescriptionCount);
@@ -838,7 +858,7 @@ struct VulkanCore{
         if(pipelines.size()>=PipelineLimit)FlushBatch();
         VkShaderModule vs{},fs{};VkPipeline created{};
         try{
-            vs=Module(vertex);fs=Module(fragment);
+            vs=Module(*vertex.code);fs=Module(*fragment.code);
             VkPipelineShaderStageCreateInfo stages[2]{};
             stages[0].sType=stages[1].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
             stages[0].stage=VK_SHADER_STAGE_VERTEX_BIT;stages[0].module=vs;stages[0].pName="main";

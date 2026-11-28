@@ -144,7 +144,7 @@ private:
         // translation/submission, GPU completion waits and 60 Hz vblank
         // sleeps. The remainder of a frame is recompiled guest code and
         // other kernel services.
-        uint64_t perf_draw_us=0,perf_wait_us=0,perf_vblank_us=0;
+        uint64_t perf_draw_us=0,perf_wait_us=0,perf_vblank_us=0,perf_geom_us=0;  // geom is part of draw
         unsigned perf_frames=0,perf_draws=0;
         struct PerfScope {
             uint64_t& sink;PerfClock::time_point begin=PerfClock::now();
@@ -156,7 +156,7 @@ private:
             if(perf_start==PerfClock::time_point{}){
                 // Start the first window at this present; startup hook time
                 // before it is not part of any measured frame.
-                perf_start=begin;perf_draw_us=perf_wait_us=perf_vblank_us=0;perf_draws=0;
+                perf_start=begin;perf_draw_us=perf_wait_us=perf_vblank_us=perf_geom_us=0;perf_draws=0;
             }
             auto us=[](auto a,auto b){return uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(b-a).count());};
             perf_readback_us+=us(begin,readback);
@@ -167,13 +167,13 @@ private:
                 const double n=perf_frames;
                 const auto hooks=perf_readback_us+perf_window_us+perf_diag_us+perf_draw_us+perf_wait_us+perf_vblank_us;
                 std::fprintf(stderr,"D3D PERF frames=%u elapsed_ms=%.3f fps=%.2f frame_ms=%.3f readback_ms=%.3f window_ms=%.3f post_ms=%.3f"
-                    " draw_ms=%.3f draws=%.1f gpu_wait_ms=%.3f vblank_sleep_ms=%.3f guest_ms=%.3f%s\n",
+                    " draw_ms=%.3f draws=%.1f geom_ms=%.3f gpu_wait_ms=%.3f vblank_sleep_ms=%.3f guest_ms=%.3f%s\n",
                     perf_frames,elapsed/1000.0,elapsed?n*1000000.0/elapsed:0.0,elapsed/1000.0/n,
                     perf_readback_us/1000.0/n,perf_window_us/1000.0/n,perf_diag_us/1000.0/n,
-                    perf_draw_us/1000.0/n,perf_draws/n,perf_wait_us/1000.0/n,perf_vblank_us/1000.0/n,
+                    perf_draw_us/1000.0/n,perf_draws/n,perf_geom_us/1000.0/n,perf_wait_us/1000.0/n,perf_vblank_us/1000.0/n,
                     elapsed>hooks?(elapsed-hooks)/1000.0/n:0.0,PreviewPerfCounters(backend).c_str());
                 perf_start=end;perf_frames=0;perf_readback_us=perf_window_us=perf_diag_us=0;
-                perf_draw_us=perf_wait_us=perf_vblank_us=0;perf_draws=0;
+                perf_draw_us=perf_wait_us=perf_vblank_us=perf_geom_us=0;perf_draws=0;
             }
         }
         const bool compact_capture=std::getenv("HULK_COMPACT_REPORT")&&
@@ -1316,8 +1316,12 @@ private:
                 // draw. State replay only filters raster/shader constants,
                 // not the validated stream declaration or indices.
                 gpu::Assembled prepared;
-                auto vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
-                    indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0,VulkanPreviewSelected()?&prepared:nullptr);
+                uint32_t vertices=0;
+                {
+                    LiveD3dDevice::PerfScope geom_perf{live.perf_geom_us};
+                    vertices=live.bridge.VerifyGuestGeometry(Arg(cpu,0),indexed?0:Arg(cpu,1),
+                        indexed?Arg(cpu,1):Arg(cpu,2),indexed?Arg(cpu,2):0,VulkanPreviewSelected()?&prepared:nullptr);
+                }
                 if(live.TraceGraphics())std::fprintf(stderr,"D3D ORIGINAL GEOMETRY ASSEMBLED: fvf=%08X vertices=%u (not rendered)\n",fvf,vertices);
                 auto synced=live.bridge.Snapshot();
                 if(full_capture)for(auto slot:{2,3,256}){

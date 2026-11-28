@@ -26,6 +26,8 @@ public:
     using KernelEntry = int (*)(X86Context*, std::uint8_t*, std::uint32_t,
                                 PortableXbeDispatch::KernelCall);
     KernelEntry ResolveKernelEntry() const;
+    // Optional export probe (diagnostic markers); never throws.
+    bool HasExport(const char* name) const noexcept;
 private:
     void* handle_ = nullptr;
     const X86FuncMapping* mappings_ = nullptr;

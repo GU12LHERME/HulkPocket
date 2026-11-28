@@ -378,7 +378,10 @@ COMPLEX_HOOK(D3DDevice_SetRenderState_DoNotCullUncompressed,165)
 #else
 #define ORIGINAL(name) CAT(__imp__sub_,SYM_##name)
 #endif
+// hulk_observer_<name> lets the runtime report which observers the generated
+// image actually provides (a missing symbol means the hook was never built).
 #define LIGHT_OBSERVER(name,id) \
+extern "C" __attribute__((visibility("default"),used)) const unsigned char hulk_observer_##name=1; \
 extern "C" void ORIGINAL(name)(X86Context&,uint8_t*); \
 extern "C" __attribute__((visibility("default"))) \
 void GUEST(name)(X86Context& ctx,uint8_t* base){ \
