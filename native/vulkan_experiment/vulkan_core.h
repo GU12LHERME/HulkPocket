@@ -87,7 +87,12 @@ struct VulkanCore{
     std::array<std::vector<uint8_t>,4> last_pixels{};
     // Exact byte snapshots avoid repeated unswizzling/BC expansion.
     // No guest dirty flag is required: compare all source bytes on every bind.
-    static constexpr size_t RawTextureLimit=4*1024*1024;
+    // Same bound as gpu::DecodeGuestLevel. Larger textures used to skip both
+    // caches and were re-decoded and re-uploaded on every bind: a 1024x1024
+    // A8R8G8B8 chain is 5.6 MB and takes ~5 ms to decode on a desktop host
+    // (RP6 dc41508/6013d48: ~27 ms per decode). A hit costs one memcmp.
+    static constexpr size_t RawTextureLimit=64*1024*1024;
+    static_assert(RawTextureLimit>=5592404,"1024x1024 32-bit mip chains must be cacheable");
     struct RawTexture {
         std::array<uint32_t,10> key{};
         std::vector<uint8_t> bytes;

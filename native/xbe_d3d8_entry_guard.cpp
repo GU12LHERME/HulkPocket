@@ -2,6 +2,10 @@
 // unsupported graphics boundary rather than run the original NV2A MMIO code.
 #include "xbe_graphics_boundary.h"
 #include "image_symbols.h"
+// Symbols verified locally by tools/supplemental_d3d_symbols.py at link time.
+#if __has_include("hulk_verified_d3d_symbols.h")
+#include "hulk_verified_d3d_symbols.h"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cmath>

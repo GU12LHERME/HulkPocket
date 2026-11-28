@@ -15,6 +15,8 @@ jobs:
           python3 tools/check_publish_safety.py --tree
       - name: Test cross-platform NDK tool resolution
         run: python3 -m unittest discover -s tools -p 'test_ndk_tools.py' -v
+      - name: Test supplemental D3D symbol verification
+        run: python3 tools/supplemental_d3d_symbols.py --self-test
       - name: Test XISO extraction
         run: python3 -m unittest discover -s tools -p 'test_xiso.py' -v
       - name: Test native engine packaging gate

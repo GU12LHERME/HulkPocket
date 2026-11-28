@@ -13,6 +13,7 @@ from discover_hulk_viewport_writer import generate_writer
 from discover_hulk_block_on_time import generate_block_on_time
 from discover_hulk_startup_text import generate_startup_text
 from discover_hulk_fibers import generate_fibers
+from supplemental_d3d_symbols import generate as generate_d3d_symbols
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
@@ -53,6 +54,8 @@ def main():
         print(f"Verified local startup text observer: {startup_text}",flush=True)
         fibers=generate_fibers(prepared,work/"hulk_verified_fibers.h")
         print(f"Verified local XDK fiber replacement: {fibers}",flush=True)
+        d3d_symbols=generate_d3d_symbols(prepared,work/"hulk_verified_d3d_symbols.h")
+        print("Verified supplemental D3D symbols: "+(", ".join(d3d_symbols) or "none"),flush=True)
         native_names=["portable_xbe_dispatch","xbe_diagnostic_runtime","xbe_first_entry_probe","xbe_d3d8_entry_guard"]
         if fibers:
             native_names+=["hulk_live_fiber_hooks","xbox_fiber_scheduler","native_fiber"]
@@ -93,7 +96,7 @@ def main():
                     print("Verified guest fiber override:",name,flush=True)
             # Verify strong override, not just a symbol name that could be weak.
             import re
-            header_text = (prepared / "image_symbols.h").read_text()
+            header_text = (prepared / "image_symbols.h").read_text() + (work / "hulk_verified_d3d_symbols.h").read_text()
             named = bool(re.search(r"^#define IMAGE_NAMED 1$", header_text, re.M))
             for hook in ("Direct3D_CreateDevice", "D3DDevice_DrawVertices",
                          "D3DDevice_DrawIndexedVertices", "D3DDevice_Swap", "D3DDevice_Clear",
